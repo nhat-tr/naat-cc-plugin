@@ -4,7 +4,7 @@ description: Create a phased implementation plan for a feature, refactor, or arc
 
 # Plan
 
-Create a comprehensive implementation plan using the **planner** agent.
+Create a comprehensive implementation plan using the **planner** agent. BE BRUTALLY HONEST, NO OPTIMISTIC ASSUMTION, ASK ON AMBIGUITIES, YOU ARE FREE TO PUSH BACK
 
 ## What This Command Does
 

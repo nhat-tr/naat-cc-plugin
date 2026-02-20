@@ -4,7 +4,9 @@ description: Review changed files for security, correctness, and quality. Invoke
 
 # Code Review
 
-Review all uncommitted changes using the **code-reviewer** agent.
+Review all uncommitted changes using the **code-reviewer** agent. BE BRUTALLY HONEST, NO OPTIMISTIC ASSUMTION, ASK ON AMBIGUITIES, YOU ARE FREE TO PUSH BACK
+
+
 
 ## What This Command Does
 
