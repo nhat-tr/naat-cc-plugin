@@ -252,6 +252,8 @@ _logger.LogWarning("Order {OrderId} failed for user {UserId}", orderId, userId);
 - **Parameterized tests** — repeated test logic with different inputs should use `[TestCase]` or `[TestCaseSource]`
 - **Async test assertions** — use `Assert.ThrowsAsync<T>` not `Assert.Throws<T>` for async methods
 - **Constraint model** — prefer `Assert.That(result, Is.EqualTo(expected))` over classic `Assert.AreEqual`
+- **Missing test category** — all tests must have a category attribute: `[UnitTest]`, `[IntegrationTest]`, or `[StagingOnly]`. This enables filtering by environment (`dotnet test --filter "TestCategory=UnitTest"`).
+- **Integration tests without Testcontainers** — flag integration tests that depend on shared/external databases. Use Testcontainers to spin up disposable containers per test run.
 
 ### Modern .NET 10 / C# 14 (MEDIUM)
 
