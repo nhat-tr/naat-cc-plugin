@@ -41,51 +41,302 @@ These MUST be flagged regardless of language:
 
 ## C# / .NET Checks
 
-### Correctness (CRITICAL/HIGH)
-- **async/await misuse** — `async void` (except event handlers), missing `await`, fire-and-forget without explicit intent
-- **IDisposable leaks** — objects implementing `IDisposable` not in `using` statements or blocks
-- **Null reference risks** — dereferencing nullable types without null checks (especially with nullable reference types enabled)
-- **EF Core N+1** — lazy loading in loops, missing `Include()` for related entities accessed after query
-- **EF Core tracking** — using tracked queries for read-only operations (missing `AsNoTracking()`)
-- **Concurrency issues** — shared mutable state without locks, `ConcurrentDictionary` misuse
-- **ConfigureAwait** — missing `ConfigureAwait(false)` in library code (not in ASP.NET controllers)
-
-### Code Quality (HIGH/MEDIUM)
-- **LINQ misuse** — `ToList()` before `Where()`, multiple enumerations of `IEnumerable`, `Count() > 0` instead of `Any()`
-- **Exception swallowing** — empty `catch` blocks, catching `Exception` without logging/rethrowing
-- **String concatenation in hot paths** — use `StringBuilder` or string interpolation
-- **Magic strings** — hardcoded route paths, config keys, claim types (use constants)
-- **Large controllers** — business logic in controllers instead of services
-- **Missing validation** — endpoint parameters/DTOs without FluentValidation or data annotations
-- **DI anti-patterns** — `new`-ing services instead of injecting, captive dependencies (scoped in singleton)
-
-### Testing (MEDIUM)
-- **Missing test coverage** — new public methods without NUnit tests
-- **Test structure** — tests not following Arrange/Act/Assert pattern
-- **Missing assertions** — tests that execute code but don't assert outcomes
-- **Hardcoded test data** — consider `[TestCase]` or `[TestCaseSource]` for parameterized tests
+### Async (CRITICAL)
+- **`async void`** — causes unobservable exceptions. Only valid for event handlers. Everything else must return `Task` or `ValueTask`.
+- **Sync-over-async** — `.Result`, `.Wait()`, `.GetAwaiter().GetResult()` block the thread and risk thread pool starvation. In ASP.NET Core this kills throughput under load.
+- **Missing `await`** — `Task` returned but not awaited. The call fires-and-forgets silently — exceptions vanish, ordering breaks.
+- **Missing `CancellationToken` propagation** — async methods that accept `CancellationToken` but don't pass it to downstream calls (EF Core queries, `HttpClient`, `Stream` operations). Abandoned HTTP requests keep burning server resources.
 
 ```csharp
-// BAD: async void, IDisposable leak, N+1
-async void ProcessOrders(List<int> orderIds)
+// BAD: sync-over-async — blocks thread, starvation risk
+public UserDto GetUser(int id)
 {
-    var context = new AppDbContext();  // IDisposable not in using
-    var orders = context.Orders.ToList();
-    foreach (var order in orders)
-    {
-        var items = order.Items;  // N+1: lazy load in loop
-    }
+    var user = _dbContext.Users.FindAsync(id).Result;  // BLOCKED THREAD
+    return Map(user);
+}
+
+// BAD: CancellationToken accepted but not propagated
+public async Task<List<Order>> GetOrdersAsync(CancellationToken ct)
+{
+    return await _dbContext.Orders.ToListAsync();  // ct not passed
 }
 
 // GOOD
-async Task ProcessOrdersAsync(AppDbContext context, List<int> orderIds)
+public async Task<List<Order>> GetOrdersAsync(CancellationToken ct)
 {
-    var orders = await context.Orders
-        .Include(o => o.Items)
-        .Where(o => orderIds.Contains(o.Id))
-        .AsNoTracking()
-        .ToListAsync();
+    return await _dbContext.Orders.ToListAsync(ct);
 }
+```
+
+### Resource Management (CRITICAL/HIGH)
+- **`IDisposable` / `IAsyncDisposable` leaks** — objects not in `using` / `await using` blocks. EF Core `DbContext`, `HttpClient` (when not from factory), `Stream`, `SqlConnection` all implement this.
+- **`new HttpClient()` per request** — causes socket exhaustion (`SocketException`). Must use `IHttpClientFactory`.
+- **External API calls without client abstraction** — direct `HttpClient` calls to external APIs scattered across services. Must define an `ISomeExternalApiClient` interface + implementation. Register via `IHttpClientFactory` typed client pattern. This isolates external dependencies, makes them mockable in tests, and centralizes base URL / auth / retry configuration.
+
+```csharp
+// BAD: external API called directly from service, no abstraction
+public class OrderService(HttpClient http)
+{
+    public async Task<ShippingRate> GetRateAsync(Address addr, CancellationToken ct)
+    {
+        var response = await http.PostAsJsonAsync("https://api.shipping.com/v1/rates", addr, ct);
+        return await response.Content.ReadFromJsonAsync<ShippingRate>(ct);
+    }
+}
+
+// GOOD: dedicated client interface + implementation
+public interface IShippingApiClient
+{
+    Task<ShippingRate> GetRateAsync(Address addr, CancellationToken ct);
+}
+
+public class ShippingApiClient(HttpClient http) : IShippingApiClient
+{
+    public async Task<ShippingRate> GetRateAsync(Address addr, CancellationToken ct)
+    {
+        var response = await http.PostAsJsonAsync("/v1/rates", addr, ct);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<ShippingRate>(ct)
+            ?? throw new InvalidOperationException("Null response from shipping API");
+    }
+}
+
+// Registered via DI extension method (see DI section)
+```
+
+### EF Core 10 (CRITICAL/HIGH)
+- **N+1 queries** — lazy loading in loops, missing `Include()` for navigation properties accessed after query
+- **Cartesian explosion** — multiple `Include()` on collection navigations creates a cross-join. Use `AsSplitQuery()` when including 2+ collections.
+- **`FromSqlRaw` with string concatenation** — `FromSqlRaw("... WHERE Name = '" + name + "'")` is SQL injection. EF Core 10 ships an analyzer that warns on this. Use `FromSql($"... WHERE Name = {name}")` which auto-parameterizes.
+- **DbContext lifetime** — registered as Singleton or shared across threads. Must be Scoped. `DbContext` is not thread-safe.
+- **Missing `AsNoTracking()`** — tracked queries for read-only operations waste memory and CPU on change detection
+- **Client-side evaluation** — LINQ that can't translate to SQL pulled into memory silently via `AsEnumerable()` or explicit `ToList()` before filtering
+- **Owned entities for JSON/table splitting** — EF Core 10 complex types are the correct choice for JSON columns and table splitting. Owned entity types have identity/reference semantics that cause subtle bugs (can't assign same instance to two properties, comparison by identity not value). Flag owned entities used for JSON mapping — migrate to complex types.
+- **Old LEFT JOIN pattern** — EF Core 10 has first-class `LeftJoin`/`RightJoin` LINQ operators. Flag the old `SelectMany`/`GroupJoin`/`DefaultIfEmpty` workaround.
+- **`ExecuteUpdateAsync` with expression trees** — EF Core 10 now accepts a regular `Action` lambda instead of expression tree. Flag manual `Expression.Lambda`/`Expression.Call` for dynamic updates — use the simple lambda overload instead.
+
+```csharp
+// BAD: SQL injection via FromSqlRaw + concatenation
+var users = _db.Users
+    .FromSqlRaw("SELECT * FROM Users WHERE Name = '" + name + "'")
+    .ToList();
+
+// GOOD: FromSql auto-parameterizes interpolation
+var users = _db.Users
+    .FromSql($"SELECT * FROM Users WHERE Name = {name}")
+    .ToList();
+
+// BAD: cartesian explosion — 2 collection Includes
+var orders = await _db.Orders
+    .Include(o => o.Items)
+    .Include(o => o.Payments)  // cross-join with Items
+    .ToListAsync();
+
+// GOOD: split query avoids cartesian product
+var orders = await _db.Orders
+    .Include(o => o.Items)
+    .Include(o => o.Payments)
+    .AsSplitQuery()
+    .ToListAsync();
+
+// BAD: old verbose LEFT JOIN pattern
+var query = context.Students
+    .GroupJoin(context.Departments,
+        s => s.DepartmentID, d => d.ID,
+        (s, deps) => new { s, deps })
+    .SelectMany(x => x.deps.DefaultIfEmpty(),
+        (x, d) => new { x.s.Name, Dept = d.Name ?? "[NONE]" });
+
+// GOOD: EF Core 10 LeftJoin
+var query = context.Students
+    .LeftJoin(context.Departments,
+        s => s.DepartmentID, d => d.ID,
+        (student, dept) => new { student.Name, Dept = dept.Name ?? "[NONE]" });
+```
+
+### ASP.NET Core 10 (HIGH)
+- **Middleware ordering** — `UseAuthentication()` must come before `UseAuthorization()`. `UseRouting()` before `UseEndpoints()`. Wrong order silently breaks auth with no error.
+- **Missing validation** — ASP.NET Core 10 has built-in Minimal API validation. Flag manual validation boilerplate in minimal API endpoints — use the framework's validation support. For MVC, use FluentValidation or data annotations.
+- **Large controllers** — business logic in controllers instead of services
+- **Missing `[Authorize]`** — new endpoints without explicit auth attribute (or `[AllowAnonymous]` if intentionally public)
+- **Swashbuckle dependency** — ASP.NET Core 10 has built-in OpenAPI 3.1 support. Flag third-party Swashbuckle/NSwag for basic OpenAPI generation — use `Microsoft.AspNetCore.OpenApi` instead.
+
+### Dependency Injection (HIGH)
+- **Primary constructors required** — flag traditional constructor + `private readonly` field pattern. Use primary constructors (C# 12+) for all services. Shorter, less boilerplate, same DI behavior.
+- **`new`-ing services** — bypasses DI container, breaks testability
+- **Captive dependency** — scoped service injected into singleton lives forever with stale state. A `DbContext` (scoped) injected into a singleton service is the classic case — the context never disposes, tracks everything, leaks memory.
+- **Service locator** — resolving services via `IServiceProvider.GetService<T>()` inside constructors instead of injecting directly
+- **DI registration without extension methods** — services registered inline in `Program.cs` / `Startup.cs` without grouping. Each logical domain (external API clients, infrastructure, feature modules) must have its own `IServiceCollection` extension method (e.g., `AddShippingApiClient()`, `AddPaymentServices()`). Flag inline `services.AddHttpClient<>()` / `services.AddScoped<>()` blocks that should be extracted.
+
+```csharp
+// BAD: traditional constructor injection — verbose boilerplate
+public class OrderService
+{
+    private readonly IOrderRepository _repo;
+    private readonly ILogger<OrderService> _logger;
+    private readonly IShippingApiClient _shipping;
+
+    public OrderService(
+        IOrderRepository repo,
+        ILogger<OrderService> logger,
+        IShippingApiClient shipping)
+    {
+        _repo = repo;
+        _logger = logger;
+        _shipping = shipping;
+    }
+}
+
+// GOOD: primary constructor — same behavior, no boilerplate
+public class OrderService(
+    IOrderRepository repo,
+    ILogger<OrderService> logger,
+    IShippingApiClient shipping)
+{
+}
+
+// BAD: captive dependency — DbContext outlives its intended scope
+services.AddSingleton<ICacheService, CacheService>();  // singleton
+
+public class CacheService(AppDbContext db)  // db is scoped — now captive
+{
+    public async Task<User?> GetUser(int id) => await db.Users.FindAsync(id);
+    // This DbContext NEVER disposes. Tracks entities forever. Memory leak.
+}
+
+// BAD: inline DI registration in Program.cs — grows into an unreadable wall
+services.AddHttpClient<IShippingApiClient, ShippingApiClient>(c =>
+    c.BaseAddress = new Uri(config["Shipping:BaseUrl"]!));
+services.AddScoped<IShippingService, ShippingService>();
+services.AddScoped<IShippingValidator, ShippingValidator>();
+
+// GOOD: grouped in extension method
+public static class ShippingServiceCollectionExtensions
+{
+    public static IServiceCollection AddShippingServices(
+        this IServiceCollection services, IConfiguration config)
+    {
+        services.AddHttpClient<IShippingApiClient, ShippingApiClient>(c =>
+            c.BaseAddress = new Uri(config["Shipping:BaseUrl"]!));
+        services.AddScoped<IShippingService, ShippingService>();
+        services.AddScoped<IShippingValidator, ShippingValidator>();
+        return services;
+    }
+}
+
+// Program.cs stays clean
+services.AddShippingServices(builder.Configuration);
+```
+
+### Code Quality (HIGH/MEDIUM)
+- **No dead code** — zero tolerance. Flag: unused `using` directives, unused variables, unused method parameters, commented-out code blocks, unreachable branches, unused private methods/fields. Code is not a museum — delete it, source control remembers.
+- **LINQ misuse** — `ToList()` before `Where()` (loads all rows), multiple enumerations of `IEnumerable`, `Count() > 0` instead of `Any()`
+- **Exception swallowing** — empty `catch` blocks, catching `Exception` without logging or rethrowing
+- **Structured logging violations** — `_logger.LogInformation($"User {userId}")` defeats structured logging and always allocates (even when log level is disabled). Use message templates: `_logger.LogInformation("User {UserId}", userId)`
+- **Magic values** — hardcoded strings (route paths, config keys, claim types, header names, error messages, status values) and magic numbers (timeouts, retry counts, thresholds, HTTP status codes). Must use `static class Constants` or domain-specific constant classes. `nameof()` where applicable.
+- **Null reference risks** — dereferencing nullable types without null checks, especially with NRTs enabled
+
+```csharp
+// BAD: string interpolation in logger — always allocates, no structured data
+_logger.LogWarning($"Order {orderId} failed for user {userId}");
+
+// GOOD: message template — zero allocation when Warning is disabled, structured fields
+_logger.LogWarning("Order {OrderId} failed for user {UserId}", orderId, userId);
+```
+
+### Testing — NUnit (MEDIUM)
+- **Test naming convention** — test methods MUST follow `[Action]_When[Scenario]_Then[Expectation]` pattern. Flag tests that don't. Examples: `CreateOrder_WhenItemOutOfStock_ThenThrowsInventoryException`, `GetUser_WhenIdIsZero_ThenReturnsNull`.
+- **Missing test coverage** — new public methods without NUnit tests
+- **Test structure** — tests not following Arrange/Act/Assert pattern
+- **Missing assertions** — tests that execute code but don't assert outcomes
+- **Parameterized tests** — repeated test logic with different inputs should use `[TestCase]` or `[TestCaseSource]`
+- **Async test assertions** — use `Assert.ThrowsAsync<T>` not `Assert.Throws<T>` for async methods
+- **Constraint model** — prefer `Assert.That(result, Is.EqualTo(expected))` over classic `Assert.AreEqual`
+
+### Modern .NET 10 / C# 14 (MEDIUM)
+
+Flag these when older patterns are used in new or modified code. Don't flag unchanged code.
+
+**C# 14 language features:**
+- **`field` keyword** — flag explicit backing fields when a semi-auto property with `field` would suffice. Applies when you only need custom logic in one accessor.
+- **Null-conditional assignment** — flag `if (x != null) x.Prop = value;` patterns. Use `x?.Prop = value;` (C# 14).
+- **Extension members** — the new `extension` block syntax supports extension properties, static extension members, and operators. Awareness only — don't flag old-style extension methods in existing code.
+
+```csharp
+// BAD: verbose null-check-then-assign
+if (customer != null)
+{
+    customer.LastOrder = GetCurrentOrder();
+}
+
+// GOOD: C# 14 null-conditional assignment
+customer?.LastOrder = GetCurrentOrder();
+
+// BAD: explicit backing field for simple validation
+private string _name = "";
+public string Name
+{
+    get => _name;
+    set => _name = value ?? throw new ArgumentNullException(nameof(value));
+}
+
+// GOOD: C# 14 field keyword
+public string Name
+{
+    get;
+    set => field = value ?? throw new ArgumentNullException(nameof(value));
+}
+```
+
+**Modern .NET APIs (available .NET 8/9/10, expected in .NET 10 codebases):**
+- **`System.Threading.Lock`** — flag `lock (object)` with `private readonly object _lock = new();`. Use the dedicated `Lock` type which is more efficient and intent-clear.
+- **`[GeneratedRegex]`** — flag `new Regex(pattern)` in fields/statics. Use source-generated regex for compile-time validation and zero-allocation matching.
+- **`FrozenDictionary` / `FrozenSet`** — flag `Dictionary` or `HashSet` populated once at startup then only read. `FrozenDictionary.ToFrozenDictionary()` is optimized for read-heavy, write-never lookups.
+- **`TimeProvider`** — flag `DateTime.Now`, `DateTime.UtcNow`, `DateTimeOffset.UtcNow` in business logic / services. Inject `TimeProvider` for testability. Direct clock access is only acceptable at application boundaries.
+- **`HybridCache`** — flag manual `IMemoryCache` + `IDistributedCache` dual-layer patterns. `HybridCache` handles L1/L2, stampede protection, and serialization in one API.
+- **Collection expressions** — flag `new List<int> { 1, 2, 3 }` or `new[] { 1, 2, 3 }` where `[1, 2, 3]` works (C# 12+).
+- **`SearchValues<T>`** — flag `IndexOfAny(char[])` with static char arrays in hot paths. `SearchValues.Create(...)` enables SIMD-accelerated searching.
+
+```csharp
+// BAD: old lock pattern
+private readonly object _lock = new();
+public void DoWork()
+{
+    lock (_lock) { /* ... */ }
+}
+
+// GOOD: .NET 9+ Lock type
+private readonly Lock _lock = new();
+public void DoWork()
+{
+    lock (_lock) { /* ... */ }  // compiler uses Lock.EnterScope()
+}
+
+// BAD: runtime Regex allocation
+private static readonly Regex EmailRegex = new(@"^[\w.-]+@[\w.-]+\.\w+$", RegexOptions.Compiled);
+
+// GOOD: source-generated regex — compile-time validated, no allocation
+[GeneratedRegex(@"^[\w.-]+@[\w.-]+\.\w+$")]
+private static partial Regex EmailRegex();
+
+// BAD: dictionary populated once, only read after
+private static readonly Dictionary<string, int> StatusCodes = new()
+{
+    ["OK"] = 200, ["NotFound"] = 404, ["Error"] = 500
+};
+
+// GOOD: FrozenDictionary — optimized for read-only lookups
+private static readonly FrozenDictionary<string, int> StatusCodes =
+    new Dictionary<string, int>
+    {
+        ["OK"] = 200, ["NotFound"] = 404, ["Error"] = 500
+    }.ToFrozenDictionary();
+
+// BAD: untestable time dependency
+public bool IsExpired() => DateTime.UtcNow > _expiresAt;
+
+// GOOD: injectable TimeProvider
+public bool IsExpired(TimeProvider time) => time.GetUtcNow() > _expiresAt;
 ```
 
 ---
@@ -199,9 +450,7 @@ def read_items(path: str = "/tmp/data", items: list[str] | None = None) -> list[
 ## Best Practices (LOW) — All Languages
 
 - TODO/FIXME without ticket references
-- Magic numbers without named constants
 - Poor naming — single-letter variables in non-trivial contexts
-- Dead code — commented-out code, unused imports, unreachable branches
 
 ---
 
