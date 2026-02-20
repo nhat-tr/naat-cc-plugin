@@ -18,7 +18,10 @@
   ],
   "skills": ["./skills/", "./commands/"],
   "agents": [
+    "./agents/architect.md",
     "./agents/code-reviewer.md",
-    "./agents/planner.md"
+    "./agents/pair-programmer.md",
+    "./agents/planner.md",
+    "./agents/troubleshooter.md"
   ]
 }
