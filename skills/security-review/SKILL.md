@@ -43,19 +43,7 @@ api_key = Environment.GetEnvironmentVariable("API_KEY")
 
 ### C# / .NET
 ```csharp
-// FluentValidation or data annotations for DTOs
-public class CreateOrderRequestValidator : AbstractValidator<CreateOrderRequest>
-{
-    public CreateOrderRequestValidator()
-    {
-        RuleFor(x => x.CustomerId).GreaterThan(0);
-        RuleFor(x => x.Items).NotEmpty();
-        RuleForEach(x => x.Items).ChildRules(item =>
-        {
-            item.RuleFor(i => i.Quantity).GreaterThan(0);
-        });
-    }
-}
+// TODO
 ```
 
 ### TypeScript

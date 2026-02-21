@@ -1,5 +1,5 @@
 ---
-description: Diagnose and fix a bug or issue. Systematically reproduces, isolates, and resolves the root cause. Uses opus for deep reasoning about complex failures.
+description: Diagnose and fix a bug or issue. Systematically reproduces, isolates, and resolves the root cause. Uses sonnet for fast, structured debugging loops.
 ---
 
 # Troubleshoot
@@ -40,7 +40,8 @@ Give the agent as much as you have:
 
 ## What You Get
 
-- Root cause identified with evidence
-- Minimal fix applied
-- Test written to prevent regression
+- Evidence-backed root cause when reproducible
+- Minimal fix or a highest-confidence next fix candidate
+- Regression test when feasible in the current environment
+- Clear next-step plan when blocked by missing context or environment constraints
 - Explanation of why it happened (brief, not a lecture)

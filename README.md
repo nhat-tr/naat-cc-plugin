@@ -24,7 +24,8 @@ The install script symlinks agents and commands to `~/.claude/`, so edits to thi
 | Agent | Model | Command | Purpose |
 |-------|-------|---------|---------|
 | code-reviewer | sonnet | `/review` | Multi-language code review with .NET 10 / C# 14 depth |
-| planner | opus | `/plan` | Phased implementation plans, waits for confirmation |
+| discovery | opus | `/discover` | Use case discovery across repos with evidence + confidence scoring |
+| planner | opus | `/planner` | Phased implementation plans, waits for confirmation |
 | architect | opus | `/architect` | System design, tradeoff analysis, ADRs |
 | pair-programmer | sonnet | `/pair` | Interactive pairing, writes code with you |
 | troubleshooter | opus | `/troubleshoot` | Systematic debugging, root cause analysis |
@@ -34,7 +35,8 @@ The install script symlinks agents and commands to `~/.claude/`, so edits to thi
 | Command | What It Does |
 |---------|-------------|
 | `/review` | Review uncommitted changes — security, correctness, quality |
-| `/plan` | Create phased implementation plan — never writes code until confirmed |
+| `/discover` | Trace a use case end-to-end across repos — evidence-backed, confidence-scored |
+| `/planner` | Create phased implementation plan — never writes code until confirmed |
 | `/architect` | System design session — components, tradeoffs, ADRs |
 | `/pair` | Pair programming — writes code, tests after every change |
 | `/troubleshoot` | Debug an issue — reproduce, isolate, hypothesize, fix |
@@ -82,7 +84,16 @@ This plugin enforces specific .NET conventions in reviews and skills:
 - **No dead code** — unused usings, variables, parameters, commented-out code
 - **Structured logging** — message templates, never string interpolation in `ILogger`
 - **Modern .NET APIs**: `System.Threading.Lock`, `[GeneratedRegex]`, `FrozenDictionary`, `TimeProvider`, `HybridCache`
-- **C# 14**: `field` keyword, null-conditional assignment, collection expressions
+- **Collection expressions** — `[]` over `new List<T>()`, `Array.Empty<T>()`, `.ToList()`, `.ToArray()` (IDE0300–IDE0305)
+- **C# 14**: `field` keyword, null-conditional assignment
+
+## Validation
+
+```bash
+npm run validate
+```
+
+Validates all agents (frontmatter), commands (cross-references), skills (SKILL.md exists), and hooks (schema).
 
 ## Structure
 
@@ -93,13 +104,15 @@ nhat-dev-toolkit/
 ├── agents/
 │   ├── architect.md
 │   ├── code-reviewer.md
+│   ├── discovery.md
 │   ├── pair-programmer.md
 │   ├── planner.md
 │   └── troubleshooter.md
 ├── commands/
 │   ├── architect.md
+│   ├── discover.md
 │   ├── pair.md
-│   ├── plan.md
+│   ├── planner.md
 │   ├── review.md
 │   ├── troubleshoot.md
 │   └── verify.md
@@ -107,6 +120,11 @@ nhat-dev-toolkit/
 │   ├── dev.md
 │   ├── research.md
 │   └── review.md
+├── scripts/ci/
+│   ├── validate-agents.js
+│   ├── validate-commands.js
+│   ├── validate-hooks.js
+│   └── validate-skills.js
 ├── skills/
 │   ├── csharp-dotnet/SKILL.md
 │   ├── python/SKILL.md
@@ -114,5 +132,6 @@ nhat-dev-toolkit/
 │   ├── security-review/SKILL.md
 │   └── typescript/SKILL.md
 ├── install.sh
+├── package.json
 └── README.md
 ```

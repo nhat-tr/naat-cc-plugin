@@ -1,0 +1,4 @@
+interface:
+  display_name: "C# and .NET Patterns"
+  short_description: "Guidance for C#/.NET APIs, EF Core, DI, and NUnit tests"
+  default_prompt: "Use $csharp-dotnet to implement a repository-aligned .NET change with tests."

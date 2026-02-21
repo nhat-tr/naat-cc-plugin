@@ -4,18 +4,19 @@ description: Review changed files for security, correctness, and quality. Invoke
 
 # Code Review
 
-Review all uncommitted changes using the **code-reviewer** agent. BE BRUTALLY HONEST, NO OPTIMISTIC ASSUMTION, ASK ON AMBIGUITIES, YOU ARE FREE TO PUSH BACK
+Review all uncommitted changes using the **code-reviewer** agent. Be direct, evidence-based, and push back on risky changes. Ask when ambiguity affects severity.
 
 
 
 ## What This Command Does
 
 1. **Detect changes** — `git diff --staged` and `git diff` to find all modified files
-2. **Identify languages** — route to language-specific checklists (.cs, .ts, .rs, .py)
-3. **Read full context** — read each changed file completely, not just the diff
-4. **Apply review checklist** — security (CRITICAL), correctness (HIGH), quality (MEDIUM), style (LOW)
-5. **Report findings** — severity-ordered findings with file:line, issue, and fix
-6. **Verdict** — APPROVE, REQUEST CHANGES, or BLOCK
+2. **Stop on empty diff** — if both are empty, return `No uncommitted changes to review.`
+3. **Identify languages** — route to language-specific checklists (.cs, .ts, .rs, .py)
+4. **Read full context** — read each changed file completely, not just the diff
+5. **Apply review checklist** — security (CRITICAL), correctness (HIGH), quality (MEDIUM), style (LOW)
+6. **Report findings** — severity-ordered findings with file:line, issue, and fix
+7. **Verdict** — APPROVE, REQUEST CHANGES, or BLOCK
 
 ## When to Use
 

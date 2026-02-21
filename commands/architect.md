@@ -1,5 +1,5 @@
 ---
-description: Start a system design / architecture session. Analyzes current architecture, proposes changes with tradeoffs, and produces ADRs. Uses opus for deep reasoning.
+description: Start a system design / architecture session. Analyzes current architecture, proposes changes with tradeoffs, and produces ADRs for significant decisions. Uses opus for deep reasoning.
 ---
 
 # Architect
@@ -12,7 +12,7 @@ Invoke the **architect** agent for system design and architectural decisions.
 2. **Clarify requirements** — asks about constraints, scale, non-functional requirements
 3. **Propose architecture** — components, responsibilities, data flow, API contracts
 4. **Analyze tradeoffs** — options considered, pros/cons, recommendation with rationale
-5. **Produce ADR** — Architecture Decision Record for significant decisions
+5. **Capture decision record** — full ADR for significant decisions, concise decision note otherwise
 
 ## When to Use
 
@@ -35,6 +35,6 @@ Invoke the **architect** agent for system design and architectural decisions.
 
 - Component diagram with responsibilities
 - Tradeoff analysis table for each decision
-- ADR for the recommended approach
+- ADR when the decision is significant (otherwise a concise decision note)
 - Anti-patterns identified in current architecture
 - Concrete file/project paths for where changes would go

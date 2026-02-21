@@ -16,10 +16,12 @@
     "rust",
     "python"
   ],
-  "skills": ["./skills/", "./commands/"],
+  "skills": ["./skills/"],
+  "commands": ["./commands/"],
   "agents": [
     "./agents/architect.md",
     "./agents/code-reviewer.md",
+    "./agents/discovery.md",
     "./agents/pair-programmer.md",
     "./agents/planner.md",
     "./agents/troubleshooter.md"

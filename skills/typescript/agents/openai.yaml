@@ -1,0 +1,4 @@
+interface:
+  display_name: "TypeScript Patterns"
+  short_description: "Guidance for TypeScript apps, APIs, and testing workflows"
+  default_prompt: "Use $typescript to implement a repository-aligned TypeScript change with tests."

@@ -24,7 +24,7 @@ Start a pair programming session with the **pair-programmer** agent.
 ## What It's NOT
 
 - Not a code review (use `/review` for that)
-- Not a planning session (use `/plan` for that)
+- Not a planning session (use `/planner` for that)
 - Not deep architecture work (use `/architect` for that)
 
 ## Usage
