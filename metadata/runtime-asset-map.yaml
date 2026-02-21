@@ -1,0 +1,74 @@
+version: 1
+
+claude:
+  commands:
+    - name: review
+      file: commands/review.md
+      agent: code-reviewer
+      agent_file: agents/code-reviewer.md
+      context_file: contexts/review.md
+      codex_skill: skills/review-workflow/SKILL.md
+    - name: pair
+      file: commands/pair.md
+      agent: pair-programmer
+      agent_file: agents/pair-programmer.md
+      codex_skill: skills/pair-workflow/SKILL.md
+    - name: planner
+      file: commands/planner.md
+      agent: planner
+      agent_file: agents/planner.md
+      codex_skill: skills/planner-workflow/SKILL.md
+    - name: architect
+      file: commands/architect.md
+      agent: architect
+      agent_file: agents/architect.md
+      codex_skill: skills/architect-workflow/SKILL.md
+    - name: troubleshoot
+      file: commands/troubleshoot.md
+      agent: troubleshooter
+      agent_file: agents/troubleshooter.md
+      codex_skill: skills/troubleshoot-workflow/SKILL.md
+    - name: discover
+      file: commands/discover.md
+      agent: discovery
+      agent_file: agents/discovery.md
+      codex_skill: skills/discovery-workflow/SKILL.md
+
+codex:
+  workflow_skills:
+    - name: review-workflow
+      file: skills/review-workflow/SKILL.md
+      maps_to_claude_command: commands/review.md
+      maps_to_claude_agent: agents/code-reviewer.md
+    - name: pair-workflow
+      file: skills/pair-workflow/SKILL.md
+      maps_to_claude_command: commands/pair.md
+      maps_to_claude_agent: agents/pair-programmer.md
+    - name: planner-workflow
+      file: skills/planner-workflow/SKILL.md
+      maps_to_claude_command: commands/planner.md
+      maps_to_claude_agent: agents/planner.md
+    - name: architect-workflow
+      file: skills/architect-workflow/SKILL.md
+      maps_to_claude_command: commands/architect.md
+      maps_to_claude_agent: agents/architect.md
+    - name: troubleshoot-workflow
+      file: skills/troubleshoot-workflow/SKILL.md
+      maps_to_claude_command: commands/troubleshoot.md
+      maps_to_claude_agent: agents/troubleshooter.md
+    - name: discovery-workflow
+      file: skills/discovery-workflow/SKILL.md
+      maps_to_claude_command: commands/discover.md
+      maps_to_claude_agent: agents/discovery.md
+
+shared_language_skills:
+  - name: csharp-dotnet
+    file: skills/csharp-dotnet/SKILL.md
+  - name: typescript
+    file: skills/typescript/SKILL.md
+  - name: rust
+    file: skills/rust/SKILL.md
+  - name: python
+    file: skills/python/SKILL.md
+  - name: security-review
+    file: skills/security-review/SKILL.md
