@@ -26,6 +26,16 @@ Use this skill for code-review sessions in Codex.
 4. Report findings by severity, then by file.
 5. End with review summary and verdict.
 
+## Language Routing
+
+- C# / .NET work:
+  - `../csharp-dotnet/SKILL.md`
+  - `../csharp-dotnet/references/testing-nunit.md`
+  - NUnit test method names: `[Action]_When[Scenario]_Then[Expectation]`
+- TypeScript React / Next work:
+  - `../typescript/SKILL.md`
+  - `../typescript/references/react-next.md`
+
 ## Rules
 
 - Prioritize security and correctness over style.

@@ -24,6 +24,16 @@ Use this skill for interactive implementation sessions.
 4. Run relevant verification after each meaningful change.
 5. Iterate quickly and stay in task scope.
 
+## Language Routing
+
+- C# / .NET work:
+  - `../csharp-dotnet/SKILL.md`
+  - `../csharp-dotnet/references/testing-nunit.md`
+  - NUnit test method names: `[Action]_When[Scenario]_Then[Expectation]`
+- TypeScript React / Next work:
+  - `../typescript/SKILL.md`
+  - `../typescript/references/react-next.md`
+
 ## Rules
 
 - Code first, explain briefly after.

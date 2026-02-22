@@ -45,6 +45,9 @@ Uninstall:
 Notes:
 - `install.sh` is Claude-specific and installs to `~/.claude/`.
 - `install-codex.sh` installs skill symlinks to `~/.codex/skills/`.
+- Both installers also maintain a managed language-routing block in global instruction files:
+  - Codex: `~/.codex/AGENTS.md`
+  - Claude Code: `~/.claude/CLAUDE.md`
 - Both installers use symlinks so repo edits are reflected immediately.
 
 ## What's Included
@@ -116,7 +119,7 @@ alias claude-research='claude --system-prompt "$(cat ~/.claude/contexts/research
 npm run validate
 ```
 
-Validates all agents (frontmatter), commands (cross-references), skills (SKILL.md exists), and hooks (schema).
+Validates agents, commands, skills, contexts frontmatter, language-skill routing, global instruction routing (when files exist), and hooks schema.
 
 ## Structure
 

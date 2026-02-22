@@ -1,4 +1,4 @@
---
+---
 name: research
 description: Exploration mode. Read widely before concluding. Don't write code until understanding is clear.
 ---

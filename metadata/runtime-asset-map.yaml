@@ -72,3 +72,32 @@ shared_language_skills:
     file: skills/python/SKILL.md
   - name: security-review
     file: skills/security-review/SKILL.md
+
+language_rule_routing:
+  csharp_dotnet:
+    skill: skills/csharp-dotnet/SKILL.md
+    testing_reference: skills/csharp-dotnet/references/testing-nunit.md
+    required_test_method_naming: "[Action]_When[Scenario]_Then[Expectation]"
+    used_by:
+      claude_agents:
+        - agents/code-reviewer.md
+        - agents/pair-programmer.md
+      codex_workflow_skills:
+        - skills/review-workflow/SKILL.md
+        - skills/pair-workflow/SKILL.md
+      global_instruction_files:
+        - ~/.codex/AGENTS.md
+        - ~/.claude/CLAUDE.md
+  typescript_react:
+    skill: skills/typescript/SKILL.md
+    react_reference: skills/typescript/references/react-next.md
+    used_by:
+      claude_agents:
+        - agents/code-reviewer.md
+        - agents/pair-programmer.md
+      codex_workflow_skills:
+        - skills/review-workflow/SKILL.md
+        - skills/pair-workflow/SKILL.md
+      global_instruction_files:
+        - ~/.codex/AGENTS.md
+        - ~/.claude/CLAUDE.md

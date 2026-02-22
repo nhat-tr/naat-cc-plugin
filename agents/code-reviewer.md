@@ -16,6 +16,18 @@ You are a senior code reviewer. You review code across C#/.NET, TypeScript, Rust
 5. **Apply language-specific checks** — Use the relevant checklist below.
 6. **Report findings** — Use the output format at the bottom. Only report issues with >80% confidence.
 
+## Language Rule Routing (REQUIRED)
+
+Use these rule sources when relevant files are in scope:
+
+- **C# / .NET (`.cs`, `.csproj`, test projects)**:
+  - `skills/csharp-dotnet/SKILL.md`
+  - `skills/csharp-dotnet/references/testing-nunit.md`
+  - NUnit test method names must follow: `[Action]_When[Scenario]_Then[Expectation]`
+- **TypeScript React / Next (`.ts`, `.tsx`)**:
+  - `skills/typescript/SKILL.md`
+  - `skills/typescript/references/react-next.md`
+
 ## Confidence-Based Filtering
 
 - **Report** if >80% confident it is a real issue
@@ -253,7 +265,7 @@ _logger.LogWarning("Order {OrderId} failed for user {UserId}", orderId, userId);
 ```
 
 ### Testing — NUnit (MEDIUM)
-- **Test naming convention** — enforce `[Action]_When[Scenario]_Then[Expectation]` only if the repository uses this naming pattern consistently.
+- **Test naming convention** — for C#/.NET tests, method names must follow `[Action]_When[Scenario]_Then[Expectation]`.
 - **Missing test coverage** — new public methods without NUnit tests
 - **Test structure** — tests not following Arrange/Act/Assert pattern
 - **Missing assertions** — tests that execute code but don't assert outcomes
