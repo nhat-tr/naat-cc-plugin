@@ -33,6 +33,11 @@ claude:
       agent: discovery
       agent_file: agents/discovery.md
       codex_skill: skills/discovery-workflow/SKILL.md
+    - name: sonar
+      file: commands/sonar.md
+      agent: sonar-analyst
+      agent_file: agents/sonar-analyst.md
+      codex_skill: skills/sonar-workflow/SKILL.md
 
 codex:
   workflow_skills:
@@ -60,6 +65,10 @@ codex:
       file: skills/discovery-workflow/SKILL.md
       maps_to_claude_command: commands/discover.md
       maps_to_claude_agent: agents/discovery.md
+    - name: sonar-workflow
+      file: skills/sonar-workflow/SKILL.md
+      maps_to_claude_command: commands/sonar.md
+      maps_to_claude_agent: agents/sonar-analyst.md
 
 shared_language_skills:
   - name: csharp-dotnet
@@ -82,9 +91,11 @@ language_rule_routing:
       claude_agents:
         - agents/code-reviewer.md
         - agents/pair-programmer.md
+        - agents/sonar-analyst.md
       codex_workflow_skills:
         - skills/review-workflow/SKILL.md
         - skills/pair-workflow/SKILL.md
+        - skills/sonar-workflow/SKILL.md
       global_instruction_files:
         - ~/.codex/AGENTS.md
         - ~/.claude/CLAUDE.md
@@ -95,9 +106,11 @@ language_rule_routing:
       claude_agents:
         - agents/code-reviewer.md
         - agents/pair-programmer.md
+        - agents/sonar-analyst.md
       codex_workflow_skills:
         - skills/review-workflow/SKILL.md
         - skills/pair-workflow/SKILL.md
+        - skills/sonar-workflow/SKILL.md
       global_instruction_files:
         - ~/.codex/AGENTS.md
         - ~/.claude/CLAUDE.md

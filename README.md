@@ -62,6 +62,7 @@ Notes:
 | architect | opus | `/architect` | System design, tradeoff analysis, ADRs |
 | pair-programmer | sonnet | `/pair` | Interactive pairing, writes code with you |
 | troubleshooter | sonnet | `/troubleshoot` | Systematic debugging, root cause analysis |
+| sonar-analyst | sonnet | `/sonar` | SonarQube analysis — run scanners, interpret findings, quality gate |
 
 ### Claude Code Commands
 
@@ -74,6 +75,7 @@ Notes:
 | `/pair` | Pair programming — writes code, tests after each meaningful change |
 | `/troubleshoot` | Debug an issue — reproduce, isolate, hypothesize, fix |
 | `/verify` | Cross-language build/lint/test gate — PASS/FAIL report |
+| `/sonar` | SonarQube static analysis — run scanner, fetch results, explain findings |
 
 ### Codex Workflow Skills
 
@@ -85,6 +87,7 @@ Notes:
 | `architect-workflow` | Architecture and tradeoff workflow |
 | `troubleshoot-workflow` | Systematic debugging workflow |
 | `discovery-workflow` | Evidence-first use-case discovery workflow |
+| `sonar-workflow` | SonarQube analysis and quality gate workflow |
 
 ### Shared Language Skills
 
@@ -95,6 +98,27 @@ Notes:
 | `rust` | thiserror/anyhow, ownership patterns, Tokio, clippy, cargo workspaces |
 | `python` | Type hints, Pydantic, FastAPI, httpx, pytest |
 | `security-review` | 10-category cross-language security checklist |
+
+### SonarQube Infrastructure
+
+Local SonarQube instance shared across all projects. Lives in `infra/sonarqube/`.
+
+```bash
+./infra/sonarqube/sonar-manage.sh up       # Start SonarQube (http://localhost:9000)
+./infra/sonarqube/sonar-manage.sh down     # Stop
+./infra/sonarqube/sonar-manage.sh status   # Health check
+./infra/sonarqube/sonar-manage.sh wait     # Block until ready
+```
+
+Scanner scripts (called by `/sonar` command or directly):
+
+```bash
+./infra/sonarqube/scan-dotnet.sh [key]     # .NET scanner (auto-installs dotnet-sonarscanner)
+./infra/sonarqube/scan-frontend.sh [key]   # JS/TS scanner (uses sonar-scanner or npx)
+./infra/sonarqube/fetch-results.sh <key>   # Fetch quality gate + issues from API
+```
+
+Project config templates in `infra/sonarqube/templates/` — copy to your project root as `sonar-project.properties`.
 
 ### Claude Contexts (Optional)
 
@@ -130,6 +154,14 @@ nhat-dev-toolkit/
 ├── agents/
 ├── commands/
 ├── contexts/
+├── infra/sonarqube/
+│   ├── docker-compose.yml
+│   ├── sonar-manage.sh
+│   ├── scan-dotnet.sh
+│   ├── scan-frontend.sh
+│   ├── fetch-results.sh
+│   └── templates/
+├── metadata/
 ├── scripts/ci/
 ├── skills/
 ├── install.sh

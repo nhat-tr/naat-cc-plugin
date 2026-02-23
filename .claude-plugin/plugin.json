@@ -24,6 +24,7 @@
     "./agents/discovery.md",
     "./agents/pair-programmer.md",
     "./agents/planner.md",
-    "./agents/troubleshooter.md"
+    "./agents/troubleshooter.md",
+    "./agents/sonar-analyst.md"
   ]
 }
