@@ -1,0 +1,32 @@
+---
+name: pair-plan-workflow
+description: Draft or update `.pair/plan.md` for the agentic pair-programming protocol. Use when starting a task and you want Claude Code to write a stream-based plan with review boundaries, acceptance criteria, and risks for Codex to challenge and implement.
+---
+
+# Pair Plan Workflow
+
+Use this skill for planning the `.pair/plan.md` artifact in the pair protocol.
+
+## Metadata
+
+- Runtime: `codex`
+- Claude command: `commands/pair-plan.md`
+- Claude agent: `agents/pair-planner.md`
+- Command alias in Claude: `/pair-plan`
+
+## Workflow
+
+1. Load source docs:
+   - `../../commands/pair-plan.md`
+   - `../../agents/pair-planner.md`
+2. Read repository context and existing `.pair/plan.md` (if present).
+3. Read `ARCHITECTURE.md` or `CLAUDE.md` if present.
+4. Draft or update `.pair/plan.md` with streams, tasks, and review boundaries.
+5. Ask only necessary clarifying questions; otherwise proceed with explicit assumptions.
+
+## Rules
+
+- Plan only. Do not implement code.
+- Write the plan to `.pair/plan.md` (not chat-only output).
+- Prefer concrete tasks with file paths and review boundaries.
+- Highlight risks, dependencies, and unknowns explicitly.
