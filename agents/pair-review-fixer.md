@@ -40,6 +40,7 @@ If a finding appears unclear or incorrect, verify against the code and explain t
    - deferred findings (with reason)
    - verification run (or not run)
    - remaining blockers/questions
+5. Signal readiness for re-review: `bash ~/.dotfiles/scripts/pair-signal.sh review`
 
 ## Guardrails
 

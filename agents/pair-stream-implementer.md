@@ -32,6 +32,7 @@ Before implementing:
    - key decisions/tradeoffs
    - verification run (or not run)
    - blockers/questions (if any)
+6. Signal readiness for review: `bash ~/.dotfiles/scripts/pair-signal.sh review`
 
 ## Guardrails
 
