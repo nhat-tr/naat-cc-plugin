@@ -10,9 +10,9 @@ Create or update `.pair/plan.md` using the **pair-planner** agent.
 
 1. **Restates the task** — clarifies scope and assumptions
 2. **Analyzes the codebase** — finds relevant files, patterns, and constraints
-3. **Designs streams** — independent workstreams with explicit review boundaries
-4. **Writes `.pair/plan.md`** — in the pair protocol format
-5. **Reports back briefly** — summarizes streams and open questions
+3. **Designs streams** — independent workstreams with explicit review boundaries, maximizing parallelism
+4. **Writes `.pair/plan.md`** — in the pair protocol format with a stream dependency graph
+5. **Reports back briefly** — summarizes streams, parallelism, and open questions
 
 ## When to Use
 
@@ -35,8 +35,9 @@ The plan should use this structure:
 
 - `# Task: ...`
 - `## Context`
+- `## Stream Graph` — which streams can run in parallel vs sequential
 - `## Streams`
-- `### Stream N: ...`
+- `### Stream N: ...` with `**Depends on:** none | Stream X` header
 - task checkboxes with likely file paths
 - `**Review boundary**` for each stream
 - `## Acceptance Criteria`

@@ -29,4 +29,7 @@ Use this skill for planning the `.pair/plan.md` artifact in the pair protocol.
 - Plan only. Do not implement code.
 - Write the plan to `.pair/plan.md` (not chat-only output).
 - Prefer concrete tasks with file paths and review boundaries.
+- Maximize parallelism: design streams that can be implemented concurrently by separate agents. Only create sequential dependencies when streams truly share state or files.
+- Include a `## Stream Graph` showing which streams are parallel vs sequential.
+- Each stream must declare `**Depends on:** none | Stream N`.
 - Highlight risks, dependencies, and unknowns explicitly.

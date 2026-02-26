@@ -49,7 +49,7 @@ Do not modify `.pair/review.md`, `.pair/status.json`, or `.pair/stream-log.md` u
 
 ### 3. Design Streams
 
-Design streams so they are independently reviewable.
+Design streams so they are independently reviewable and **parallelizable when possible**.
 
 Each stream should:
 
@@ -57,6 +57,9 @@ Each stream should:
 - contain tasks with file hints when possible
 - end with `**Review boundary**`
 - minimize cross-stream coupling
+- declare dependencies on other streams (or `none` if independent)
+
+**Parallel execution**: Streams with no dependencies on each other can be implemented simultaneously by separate agents. Maximize parallelism by isolating concerns into independent streams. Only create sequential dependencies when streams truly share state or files.
 
 If the task is small, a single stream is fine.
 
@@ -70,15 +73,26 @@ Write the plan directly to `.pair/plan.md` using this shape:
 ## Context
 Why we're doing this. Links to relevant code.
 
+## Stream Graph
+Streams 1, 2 → parallel (no shared files)
+Stream 3 → after Stream 1 (depends on X)
+
 ## Streams
 
 ### Stream 1: [name]
+**Depends on:** none
 - [ ] Task 1.1: [description] — files: `path/to/file`
 - [ ] Task 1.2: [description] — files: `path/to/file`
 - **Review boundary**
 
 ### Stream 2: [name]
+**Depends on:** none
 - [ ] Task 2.1: [description] — files: `path/to/file`
+- **Review boundary**
+
+### Stream 3: [name]
+**Depends on:** Stream 1
+- [ ] Task 3.1: [description] — files: `path/to/file`
 - **Review boundary**
 
 ## Acceptance Criteria
