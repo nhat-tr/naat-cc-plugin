@@ -23,15 +23,13 @@ You are a SonarQube analysis interpreter. You run scanners, fetch results from t
 
 ## Language Rule Routing (REQUIRED)
 
-Use these rule sources when relevant files are in scope:
+Skill file paths are in `~/.claude/CLAUDE.md` under "Global Language Rules". Read that file, find the absolute path for the language, then read the skill file.
 
 - **C# / .NET (`.cs`, `.csproj`, test projects)**:
-  - `skills/csharp-dotnet/SKILL.md`
-  - `skills/csharp-dotnet/references/testing-nunit.md`
+  - Read the `csharp-dotnet/SKILL.md` skill file and `csharp-dotnet/references/testing-nunit.md`
   - NUnit test method names must follow: `[Action]_When[Scenario]_Then[Expectation]`
 - **TypeScript React / Next (`.ts`, `.tsx`)**:
-  - `skills/typescript/SKILL.md`
-  - `skills/typescript/references/react-next.md`
+  - Read the `typescript/SKILL.md` skill file and `typescript/references/react-next.md`
 
 ## Issue Grouping
 

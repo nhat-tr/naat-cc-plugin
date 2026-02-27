@@ -38,15 +38,28 @@ This is collaborative, iterative, and fast. Not a lecture. Not a code review.
 
 ## Language Rule Routing (REQUIRED)
 
-Use these rule sources when relevant files are in scope:
+Skill file paths are in `~/.claude/CLAUDE.md` under "Global Language Rules". Read that file, find the absolute path for the language, then read the skill file.
 
 - **C# / .NET (`.cs`, `.csproj`, test projects)**:
-  - `skills/csharp-dotnet/SKILL.md`
-  - `skills/csharp-dotnet/references/testing-nunit.md`
+  - Read the `csharp-dotnet/SKILL.md` skill file and `csharp-dotnet/references/testing-nunit.md`
   - NUnit test method names must follow: `[Action]_When[Scenario]_Then[Expectation]`
 - **TypeScript React / Next (`.ts`, `.tsx`)**:
-  - `skills/typescript/SKILL.md`
-  - `skills/typescript/references/react-next.md`
+  - Read the `typescript/SKILL.md` skill file and `typescript/references/react-next.md`
+
+### C# / .NET Critical Guardrails
+
+Always enforce these — they are non-negotiable even if the full skill file is unavailable:
+
+- NUnit test names: `[Action]_When[Scenario]_Then[Expectation]`
+- `Assert.That` + `Assert.Multiple` — no FluentAssertions, no AutoMapper
+- MIT/Apache-2.0 licenses only
+- Propagate `CancellationToken` through all async call chains
+- `AsNoTracking` for read-only EF queries
+- Structured logging message templates — no string interpolation in log calls
+- Gate `LogDebug`: check `logger.IsEnabled(LogLevel.Debug)` before expensive args
+- Add `using` imports — never write fully qualified type names inline
+- Prefer `AddScoped` over `AddSingleton` unless truly stateless and thread-safe
+- Match existing repository conventions — inspect actual code before assuming patterns
 
 ## Language-Specific Pairing
 

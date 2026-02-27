@@ -10,39 +10,48 @@ const ROOT_DIR = process.env.ROOT_DIR || path.join(__dirname, '../..');
 
 const checks = [
   {
+    file: 'agents/pair-implementer.md',
+    mustInclude: [
+      'csharp-dotnet/SKILL.md',
+      'typescript/SKILL.md',
+      '[Action]_When[Scenario]_Then[Expectation]',
+      '~/.claude/CLAUDE.md',
+    ],
+  },
+  {
+    file: 'agents/pair-reviewer.md',
+    mustInclude: [
+      'csharp-dotnet/SKILL.md',
+      'typescript/SKILL.md',
+      '~/.claude/CLAUDE.md',
+    ],
+  },
+  {
+    file: 'agents/sonar-analyst.md',
+    mustInclude: [
+      'csharp-dotnet/SKILL.md',
+      'typescript/SKILL.md',
+      '~/.claude/CLAUDE.md',
+    ],
+  },
+  {
     file: 'agents/code-reviewer.md',
     mustInclude: [
-      'skills/csharp-dotnet/SKILL.md',
-      'skills/typescript/SKILL.md',
+      'csharp-dotnet/SKILL.md',
+      'typescript/SKILL.md',
       '[Action]_When[Scenario]_Then[Expectation]',
-      'skills/typescript/references/react-next.md',
+      'typescript/references/react-next.md',
+      '~/.claude/CLAUDE.md',
     ],
   },
   {
     file: 'agents/pair-programmer.md',
     mustInclude: [
-      'skills/csharp-dotnet/SKILL.md',
-      'skills/typescript/SKILL.md',
+      'csharp-dotnet/SKILL.md',
+      'typescript/SKILL.md',
       '[Action]_When[Scenario]_Then[Expectation]',
-      'skills/typescript/references/react-next.md',
-    ],
-  },
-  {
-    file: 'skills/review-workflow/SKILL.md',
-    mustInclude: [
-      '../csharp-dotnet/SKILL.md',
-      '../typescript/SKILL.md',
-      '[Action]_When[Scenario]_Then[Expectation]',
-      '../typescript/references/react-next.md',
-    ],
-  },
-  {
-    file: 'skills/pair-workflow/SKILL.md',
-    mustInclude: [
-      '../csharp-dotnet/SKILL.md',
-      '../typescript/SKILL.md',
-      '[Action]_When[Scenario]_Then[Expectation]',
-      '../typescript/references/react-next.md',
+      'typescript/references/react-next.md',
+      '~/.claude/CLAUDE.md',
     ],
   },
   {
