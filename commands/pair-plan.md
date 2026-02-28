@@ -8,11 +8,16 @@ Create or update `.pair/plan.md` using the **pair-planner** agent.
 
 ## What This Command Does
 
-1. **Restates the task** — clarifies scope and assumptions
-2. **Analyzes the codebase** — finds relevant files, patterns, and constraints
-3. **Designs streams** — independent workstreams with explicit review boundaries, maximizing parallelism
-4. **Writes `.pair/plan.md`** — in the pair protocol format with a stream dependency graph
-5. **Reports back briefly** — summarizes streams, parallelism, and open questions
+Checks `.pair/status.json` `waiting_for` to determine mode:
+
+**Initial plan** (`waiting_for` ≠ `plan-update`):
+1. Analyzes the codebase and drafts `.pair/plan.md` with parallel streams
+2. Does **not** signal — human reviews first, then triggers challenge with `<leader>pc`
+
+**Plan update** (`waiting_for = plan-update`):
+1. Reads `.pair/review.md` (challenger findings)
+2. Revises `.pair/plan.md` to address BLOCKER and IMPORTANT findings
+3. Runs `bash ~/.dotfiles/scripts/pair-signal.sh plan-review` to auto-chain back to the challenger
 
 ## When to Use
 

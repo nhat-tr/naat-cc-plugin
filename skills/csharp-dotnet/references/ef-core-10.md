@@ -10,9 +10,73 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Order> Orders => Set<Order>();
     public DbSet<Customer> Customers => Set<Customer>();
 
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    // Only override OnModelCreating when fluent config is needed.
+    // If all entities use data annotations, this override is unnecessary.
+}
+```
+
+## Prefer Data Annotations Over Fluent Configuration
+
+Use EF Core attributes for entity configuration — they're simpler, co-located with the entity, and cover most cases:
+
+```csharp
+[Table("orders")]
+[Index(nameof(CustomerId), nameof(CreatedAt))]
+public class Order
+{
+    [Key]
+    public int Id { get; set; }
+
+    [Required, MaxLength(200)]
+    public string Description { get; set; } = "";
+
+    [Column("customer_id")]
+    public int CustomerId { get; set; }
+
+    [ForeignKey(nameof(CustomerId))]
+    public Customer Customer { get; set; } = null!;
+
+    public DateTimeOffset CreatedAt { get; set; }
+}
+```
+
+For value conversions, prefer a reusable converter attribute over fluent `HasConversion`:
+
+```csharp
+[AttributeUsage(AttributeTargets.Property)]
+public class EnumToStringAttribute : Attribute;
+
+// Register in DbContext via convention
+protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
+{
+    // Or use a custom convention to auto-detect [EnumToString] attributes
+}
+
+// Or use the built-in generic converter attribute (EF Core 8+):
+[Column("status")]
+[BackingField(nameof(_status))]
+public OrderStatus Status { get; set; }
+```
+
+Only use `IEntityTypeConfiguration` / fluent API for things attributes **cannot** express:
+
+- Composite keys, composite indexes with `IsUnique`/`IsDescending`
+- Owned types / complex properties / table splitting
+- Query filters (`HasQueryFilter`)
+- Many-to-many with join entity payload
+- TPH/TPT/TPC discriminator configuration
+- Precision/scale on decimal columns (`HasPrecision`)
+- Sequences, computed columns, default values from SQL
+
+```csharp
+// Only when needed — not the default approach
+public class OrderConfiguration : IEntityTypeConfiguration<Order>
+{
+    public void Configure(EntityTypeBuilder<Order> builder)
     {
-        modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
+        builder.OwnsOne(o => o.ShippingAddress, sa => sa.ToJson());
+        builder.HasQueryFilter(o => !o.IsDeleted);
+        builder.Property(o => o.Total).HasPrecision(18, 2);
     }
 }
 ```

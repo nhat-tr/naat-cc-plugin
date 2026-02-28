@@ -33,7 +33,13 @@ If the repository is not on .NET 10 or C# 14, preserve compatibility and avoid f
 - Propagate `CancellationToken` through async call chains.
 - Use `AsNoTracking` for read-only EF queries.
 - Use structured logging message templates instead of string interpolation.
-- Remove dead code and unused usings while touching files.
+- Gate `LogDebug` calls: check `logger.IsEnabled(LogLevel.Debug)` before expensive log arguments.
+- Remove dead code and unused `using` directives while touching files.
+- Add `using` imports rather than writing fully qualified type names inline (e.g. `new AuthenticationHeaderValue(...)` not `new System.Net.Http.Headers.AuthenticationHeaderValue(...)`).
+- Prefer EF Core data annotations (`[Key]`, `[MaxLength]`, `[Required]`, `[Column]`, `[Table]`, `[ForeignKey]`, `[Index]`) over `IEntityTypeConfiguration` classes. Only use fluent configuration for things attributes can't express (composite keys, owned types, query filters, table splitting, many-to-many with payload, `HasPrecision`). For value conversions, prefer a reusable converter attribute over fluent `HasConversion`.
+- Prefer injecting `DbContext` directly over generic repository wrappers unless the repository adds meaningful, reusable logic.
+- Prefer `AddScoped` over `AddSingleton`; use `Singleton` only when the type is truly stateless and thread-safe — think carefully.
+- Prefer `JsonSerializerOptions` / naming policies over `[JsonPropertyName]` attribute decoration.
 - Avoid broad refactors unless explicitly requested.
 
 ## Reference Map

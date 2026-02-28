@@ -34,7 +34,64 @@ Do not suppress dependency warnings without a specific reason.
 
 ## Client Data Fetching
 
-Prefer TanStack Query or repository-standard query abstractions for client cache/state behavior.
+Prefer TanStack Query for client-side data fetching. Configure it once at the app level:
+
+```ts
+// Standard query pattern with loading/error states
+const { data, isLoading, error } = useQuery({
+  queryKey: ['orders', userId],
+  queryFn: () => api.getOrders(userId),
+});
+
+if (isLoading) return <Skeleton />;
+if (error) return <ErrorMessage error={error} />;
+```
+
+Always handle loading and error states explicitly. Use `suspense: true` only with React Suspense boundaries.
+
+## Form Handling
+
+Use react-hook-form with zod for type-safe form validation:
+
+```ts
+const schema = z.object({
+  name: z.string().min(1, 'Name is required'),
+  email: z.string().email('Invalid email'),
+});
+
+type FormData = z.infer<typeof schema>;
+
+const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
+  resolver: zodResolver(schema),
+});
+```
+
+Co-locate schema definitions with the form that uses them. Share schemas between client validation and API route validation when possible.
+
+## Component Organization
+
+- **Co-locate** — keep components, hooks, types, and tests together by feature, not by type.
+- **When to split** — extract a component when it has its own state, is reused, or the parent exceeds ~150 lines.
+- **Barrel exports** — use `index.ts` re-exports for feature folders exposed to other features. Avoid barrel files inside a feature (causes circular imports).
+
+```
+features/
+  orders/
+    OrderList.tsx
+    OrderCard.tsx
+    useOrders.ts
+    orders.types.ts
+    index.ts          # re-exports public API
+```
+
+## State Management
+
+Choose the simplest tool that fits:
+
+- **React Context** — sufficient for theme, auth, locale, and other low-frequency global state. Avoid for state that changes often (causes full subtree re-renders).
+- **Zustand** — for client state that changes frequently or needs to be accessed outside React (e.g., websocket handlers). Lightweight, no boilerplate.
+- **Redux Toolkit (RTK)** — when the project already uses it. Don't introduce it into a new project without strong reason.
+- **TanStack Query** — for all server state. Don't duplicate server data into Zustand/Redux.
 
 ## Error Boundaries
 

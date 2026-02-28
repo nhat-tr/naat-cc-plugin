@@ -132,6 +132,7 @@ public class ShippingApiClient(HttpClient http) : IShippingApiClient
 - **Owned entities for JSON/table splitting** — EF Core 10 complex types are the correct choice for JSON columns and table splitting. Owned entity types have identity/reference semantics that cause subtle bugs (can't assign same instance to two properties, comparison by identity not value). Flag owned entities used for JSON mapping — migrate to complex types.
 - **Old LEFT JOIN pattern** — EF Core 10 has first-class `LeftJoin`/`RightJoin` LINQ operators. Flag the old `SelectMany`/`GroupJoin`/`DefaultIfEmpty` workaround.
 - **`ExecuteUpdateAsync` with expression trees** — EF Core 10 now accepts a regular `Action` lambda instead of expression tree. Flag manual `Expression.Lambda`/`Expression.Call` for dynamic updates — use the simple lambda overload instead.
+- **Unnecessary `IEntityTypeConfiguration`** — flag fluent configuration classes that only set things data annotations can handle (`[Key]`, `[MaxLength]`, `[Required]`, `[Column]`, `[Table]`, `[ForeignKey]`, `[Index]`). Only use fluent API for what attributes can't express (owned types, query filters, composite keys, table splitting, many-to-many with payload, `HasPrecision`). For value conversions, prefer a reusable converter attribute over fluent `HasConversion`.
 
 ```csharp
 // BAD: SQL injection via FromSqlRaw + concatenation

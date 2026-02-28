@@ -54,18 +54,19 @@ Set `TargetFramework` only when the repository intentionally centralizes it.
 
 ## Use Primary Constructors Carefully
 
-Prefer primary constructors in repositories that already use modern C# patterns:
+Prefer primary constructors in Services that already use modern C# patterns:
 
 ```csharp
 public class OrderService(
-    IOrderRepository repo,
+    IOrderDbContext dbContext,
     IShippingApiClient shipping,
     ILogger<OrderService> logger)
 {
     public async Task<Order> CreateAsync(CreateOrderRequest request, CancellationToken ct)
     {
         logger.LogInformation("Creating order for {CustomerId}", request.CustomerId);
-        return await repo.CreateAsync(request, ct);
+        
+        // TODO ...
     }
 }
 ```
@@ -90,6 +91,31 @@ Keep constants near domain boundaries or protocol boundaries (headers, cache key
 - Remove unused `using` directives.
 - Remove unused private members and parameters.
 - Do not keep commented-out code blocks.
+- Never write fully qualified type names inline; add a `using` import instead:
+
+```csharp
+// Bad
+var header = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+
+// Good
+using System.Net.Http.Headers;
+...
+var header = new AuthenticationHeaderValue("Bearer", token);
+```
+
+## Gate Verbose Logging
+
+Wrap `LogDebug` (and other low-level calls) with an `IsEnabled` check when the arguments involve any allocation or computation:
+
+```csharp
+if (logger.IsEnabled(LogLevel.Debug))
+{
+    logger.LogDebug("Processing order {OrderId} with {ItemCount} items",
+        order.Id, order.Items.Count);
+}
+```
+
+Always use `LogInformation` / `LogWarning` / `LogError` directly (no guard needed) because these levels are expected to be infrequent and cheap to format.
 
 ## Apply Async Patterns
 
