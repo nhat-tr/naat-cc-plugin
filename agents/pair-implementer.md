@@ -61,7 +61,10 @@ Read `.pair/status.json` field `waiting_for`:
    ```
    ## Stream N: [stream name]
    ```
-   Then implement its tasks up to the `**Review boundary**`. Mark each completed task `- [x]` in `plan.md` as you finish it.
+   Then implement its tasks up to the `**Review boundary**`. Mark each completed task done as you finish it — use the helper to avoid rewriting the line:
+   ```bash
+   bash ~/.dotfiles/scripts/pair-check.sh "10.1"
+   ```
 3. In **fix** mode: parse `.pair/review.md` findings into fix actions. Apply BLOCKER and IMPORTANT fixes.
 4. Keep changes scoped to the current stream; log required scope exceptions.
 5. Run targeted verification using the right command for the language:

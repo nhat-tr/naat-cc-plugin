@@ -20,8 +20,14 @@ Review only. NEVER implement code. NEVER run builds or tests. Your deliverable i
    - Current stream diff: `git diff` against the relevant base
 2. **Review** — current stream only; do not flag unrelated repo issues. Prioritize: correctness bugs, missing error handling, API/contract mismatches, unsafe assumptions, missing tests, plan drift.
 3. **Write `.pair/review.md`** using the format below
-4. **Update `.pair/stream-log.md`** — append `### YYYY-MM-DD HH:MM UTC — Review: <stream>` with: stream reviewed, BLOCKER/IMPORTANT/NIT counts, files inspected, verdict
-5. **Signal**: if any BLOCKER found run `bash ~/.dotfiles/scripts/pair-signal.sh fix`. If no blockers, do NOT signal (orchestrator handles auto-progression).
+4. **Update `.pair/stream-log.md`** — append a heading `### YYYY-MM-DD HH:MM UTC — Review: <stream>` with:
+   - **Agent:** `codex / <model>`
+   - stream reviewed, BLOCKER/IMPORTANT/NIT counts, files inspected, verdict
+5. **Signal readiness**: write the current `dispatch_id` to `.pair/.ready`:
+   ```bash
+   jq -r '.dispatch_id' .pair/status.json > .pair/.ready
+   ```
+   The orchestrator reads `review.md` for BLOCKERs and handles all signaling. Do not call `pair-signal.sh`.
 6. **Reply briefly** — blocker count, important count, verdict, confidence gaps
 
 ## Confidence Gate
@@ -41,6 +47,9 @@ Review only. NEVER implement code. NEVER run builds or tests. Your deliverable i
 
 ```markdown
 # Review: [Stream label]
+
+**Reviewer:** `codex / <model>`
+**Date:** `YYYY-MM-DD HH:MM UTC`
 
 ## Summary
 [2-3 sentences on overall quality]
