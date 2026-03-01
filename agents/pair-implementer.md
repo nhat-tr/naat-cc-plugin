@@ -78,9 +78,11 @@ Read `.pair/status.json` field `waiting_for`:
    - key decisions/tradeoffs
    - verification run and result (or why skipped)
    - blockers/questions (if any)
-8. Signal readiness for review: `bash ~/.dotfiles/scripts/pair-signal.sh review`
+8. **Signal** (always required — dev agent always signals regardless of auto_mode):
+   - If there are remaining unchecked tasks in `.pair/plan.md`: `bash ~/.dotfiles/scripts/pair-signal.sh review`
+   - If all plan tasks are complete: `bash ~/.dotfiles/scripts/pair-signal.sh done`
 
-**Do not signal review without updating the stream log first.**
+**Do not signal without updating the stream log first.**
 
 ## When Verification Fails
 

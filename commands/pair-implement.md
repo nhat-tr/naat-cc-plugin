@@ -14,7 +14,7 @@ Implement code or fix review findings using the **pair-implementer** agent.
 4. Runs targeted checks when feasible
 5. **Updates `.pair/stream-log.md`** — append what changed, files touched, verification result, decisions made
 6. **Simplify**: run `/simplify` to review changed code for quality and clean up any issues found
-7. **Signal**: update the stream log first, then:
+7. **Signal** (always required — dev agent always signals, auto_mode does not apply here): update the stream log first, then:
    - If there are remaining unchecked tasks in `.pair/plan.md`: run `bash ~/.dotfiles/scripts/pair-signal.sh review`
    - If all plan tasks are complete (every stream's tasks are checked off): run `bash ~/.dotfiles/scripts/pair-signal.sh done`
 
