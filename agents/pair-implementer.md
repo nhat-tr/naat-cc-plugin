@@ -57,7 +57,11 @@ Read `.pair/status.json` field `waiting_for`:
 ## Workflow
 
 1. Read `.pair/status.json` to determine mode (implement or fix).
-2. In **implement** mode: identify the **first stream whose tasks are not yet all checked off** in `.pair/plan.md`. Implement its tasks up to the `**Review boundary**`. Mark each completed task `- [x]` in `plan.md` as you finish it.
+2. In **implement** mode: identify the **first stream whose tasks are not yet all checked off** in `.pair/plan.md`. Before doing any work, output a single header line so the stream is visible in context:
+   ```
+   ## Stream N: [stream name]
+   ```
+   Then implement its tasks up to the `**Review boundary**`. Mark each completed task `- [x]` in `plan.md` as you finish it.
 3. In **fix** mode: parse `.pair/review.md` findings into fix actions. Apply BLOCKER and IMPORTANT fixes.
 4. Keep changes scoped to the current stream; log required scope exceptions.
 5. Run targeted verification using the right command for the language:
@@ -66,14 +70,15 @@ Read `.pair/status.json` field `waiting_for`:
    - **Rust**: `cargo check` (fast), `cargo test`, `cargo clippy`
    - **Python**: `pytest <path>`, `mypy` or `pyright` if configured
    If unable to run, state the reason explicitly in the stream log.
-6. **REQUIRED — Update `.pair/stream-log.md`** before signaling. Append a concise entry:
+6. **REQUIRED - Simplify** Run `/simplify` once you done editing 
+7. **REQUIRED — Update `.pair/stream-log.md`** before signaling. Append a concise entry with a heading that includes the current date **and time** in `YYYY-MM-DD HH:MM UTC` format (e.g. `### 2026-02-28 14:32 UTC — Stream 1: implement`):
    - stream/task identifier
    - what changed (or findings addressed/deferred)
    - files touched
    - key decisions/tradeoffs
    - verification run and result (or why skipped)
    - blockers/questions (if any)
-7. Signal readiness for review: `bash ~/.dotfiles/scripts/pair-signal.sh review`
+8. Signal readiness for review: `bash ~/.dotfiles/scripts/pair-signal.sh review`
 
 **Do not signal review without updating the stream log first.**
 

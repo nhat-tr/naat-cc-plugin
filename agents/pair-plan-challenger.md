@@ -95,7 +95,7 @@ Write using this structure:
 
 ## Stream Log Update (REQUIRED)
 
-Before signaling or finishing, append to `.pair/stream-log.md`:
+Before signaling or finishing, append to `.pair/stream-log.md` with a heading that includes the current date **and time** in `YYYY-MM-DD HH:MM UTC` format (e.g. `### 2026-02-28 14:32 UTC — Plan Challenge`):
 
 - what was challenged and why
 - blocker/important/nit counts
