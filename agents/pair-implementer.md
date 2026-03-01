@@ -72,17 +72,20 @@ Read `.pair/status.json` field `waiting_for`:
    If unable to run, state the reason explicitly in the stream log.
 6. **REQUIRED - Simplify** Run `/simplify` once you done editing 
 7. **REQUIRED — Update `.pair/stream-log.md`** before signaling. Append a concise entry with a heading that includes the current date **and time** in `YYYY-MM-DD HH:MM UTC` format (e.g. `### 2026-02-28 14:32 UTC — Stream 1: implement`):
+   - **Agent:** `<tool> / <model>` (e.g. `codex / o4-mini`, `claude / claude-sonnet-4-6`) — read `dev_tool` from `.pair/status.json` for the tool name
    - stream/task identifier
    - what changed (or findings addressed/deferred)
    - files touched
    - key decisions/tradeoffs
    - verification run and result (or why skipped)
    - blockers/questions (if any)
-8. **Signal** (always required — dev agent always signals regardless of auto_mode):
-   - If there are remaining unchecked tasks in `.pair/plan.md`: `bash ~/.dotfiles/scripts/pair-signal.sh review`
-   - If all plan tasks are complete: `bash ~/.dotfiles/scripts/pair-signal.sh done`
+8. **Signal readiness** — read `dispatch_id` from `.pair/status.json`, then write it to `.pair/.ready`:
+   ```bash
+   jq -r '.dispatch_id' .pair/status.json > .pair/.ready
+   ```
+   The orchestrator watches for this file and handles all signaling. Do not call `pair-signal.sh`.
 
-**Do not signal without updating the stream log first.**
+**Do not write `.ready` before updating the stream log.**
 
 ## When Verification Fails
 
@@ -94,6 +97,7 @@ Read `.pair/status.json` field `waiting_for`:
 
 ## Guardrails
 
+- **Do not write `.pair/status.json` directly.** Only `pair-signal.sh` may update it. Writing it directly corrupts `auto_mode` and breaks the orchestrator.
 - Do not write reviewer findings to `.pair/review.md`.
 - Do not rewrite `.pair/review.md` unless explicitly asked.
 - If the plan is ambiguous or infeasible, stop and report the gap clearly.

@@ -170,10 +170,17 @@ Before signaling or finishing, append to `.pair/stream-log.md` with a heading th
 - open questions and their resolution status
 - key decisions made
 
-## Signaling
+## Signal Readiness
 
-- **`plan-update` mode**: after updating the stream log and revising the plan, run `bash ~/.dotfiles/scripts/pair-signal.sh plan-review` to auto-chain back to the challenger.
-- **Initial plan / all other modes**: update the stream log, then stop. Do NOT signal. Human reviews first.
+After updating the stream log:
+
+- **`plan-update` mode**: write the current `dispatch_id` to `.pair/.ready` so the orchestrator chains back to the challenger:
+  ```bash
+  jq -r '.dispatch_id' .pair/status.json > .pair/.ready
+  ```
+- **Initial plan / all other modes**: do NOT write `.ready`. Stop here — the human reviews the plan first.
+
+Do not call `pair-signal.sh` directly.
 
 ## Response Style
 

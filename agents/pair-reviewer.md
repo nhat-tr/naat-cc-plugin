@@ -98,6 +98,9 @@ Write using this structure:
 ```markdown
 # Review: [Stream label]
 
+**Reviewer:** `<tool> / <model>` (e.g. `claude / claude-sonnet-4-6`)
+**Date:** `YYYY-MM-DD HH:MM UTC`
+
 ## Summary
 [2-3 sentences on overall quality and approach]
 
@@ -132,17 +135,21 @@ If there are no findings:
 
 Before signaling or finishing, append to `.pair/stream-log.md` with a heading that includes the current date **and time** in `YYYY-MM-DD HH:MM UTC` format (e.g. `### 2026-02-28 14:32 UTC — Review: Stream 1`):
 
+- **Agent:** `<tool> / <model>` (e.g. `claude / claude-sonnet-4-6`, `codex / o4-mini`) — read `reviewer_tool` from `.pair/status.json` for the tool name
 - stream reviewed
 - blocker/important/nit counts
 - files inspected and what was verified
 - verdict summary
 
-## Signal Next Agent
+## Signal Readiness
 
-After updating the stream log and writing `.pair/review.md`:
+After updating the stream log and writing `.pair/review.md`, write the current `dispatch_id` to `.pair/.ready`:
 
-- **If any BLOCKER found:** `bash ~/.dotfiles/scripts/pair-signal.sh fix`
-- **If no blockers (clean review):** Do NOT signal. The human decides when to start the next stream.
+```bash
+jq -r '.dispatch_id' .pair/status.json > .pair/.ready
+```
+
+The orchestrator reads `review.md` for BLOCKERs and handles all signaling. Do not call `pair-signal.sh`.
 
 ## Response After Writing the File
 

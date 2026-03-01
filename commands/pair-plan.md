@@ -11,7 +11,11 @@ description: Draft or update .pair/plan.md for the agentic pair-programming work
 1. Read `.pair/review.md` — identify every BLOCKER and IMPORTANT finding
 2. Read `.pair/plan.md` — understand the current plan
 3. Revise `.pair/plan.md` to address all BLOCKER and IMPORTANT findings; preserve LGTM sections
-4. Signal: run `bash ~/.dotfiles/scripts/pair-signal.sh plan-review`
+4. Signal readiness: write the current `dispatch_id` to `.pair/.ready`:
+   ```bash
+   jq -r '.dispatch_id' .pair/status.json > .pair/.ready
+   ```
+   The orchestrator chains back to the challenger. Do not call `pair-signal.sh`.
 
 ## If `waiting_for` is anything else — draft new plan
 

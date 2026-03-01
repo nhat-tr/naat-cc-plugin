@@ -69,6 +69,9 @@ Write using this structure:
 ```markdown
 # Review: Plan Challenge
 
+**Reviewer:** `<tool> / <model>` (e.g. `codex / o4-mini`, `claude / claude-sonnet-4-6`)
+**Date:** `YYYY-MM-DD HH:MM UTC`
+
 ## Summary
 [Short summary of plan quality and main concerns]
 
@@ -97,17 +100,21 @@ Write using this structure:
 
 Before signaling or finishing, append to `.pair/stream-log.md` with a heading that includes the current date **and time** in `YYYY-MM-DD HH:MM UTC` format (e.g. `### 2026-02-28 14:32 UTC — Plan Challenge`):
 
+- **Agent:** `<tool> / <model>` — read `reviewer_tool` from `.pair/status.json` for the tool name
 - what was challenged and why
 - blocker/important/nit counts
 - files spot-checked to verify plan assumptions
 - verdict summary
 
-## Signal Next Agent
+## Signal Readiness
 
-After updating the stream log and writing `.pair/review.md`:
+After updating the stream log and writing `.pair/review.md`, write the current `dispatch_id` to `.pair/.ready`:
 
-- **If any BLOCKER found:** `bash ~/.dotfiles/scripts/pair-signal.sh plan-update` — auto-chains back to the planner to revise the plan.
-- **If no blockers:** Do NOT signal. The human decides when to start implementation.
+```bash
+jq -r '.dispatch_id' .pair/status.json > .pair/.ready
+```
+
+The orchestrator reads `review.md` for BLOCKERs and handles all signaling. Do not call `pair-signal.sh`.
 
 ## Response After Writing the File
 
