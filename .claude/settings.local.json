@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "WebSearch",
-      "Bash(tail:*)"
+      "Bash(tail:*)",
+      "Bash(ls:*)",
+      "Bash(make validate-sync:*)"
     ]
   },
   "sandbox": {

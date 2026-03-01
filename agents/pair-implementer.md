@@ -57,7 +57,12 @@ Read `.pair/status.json` field `waiting_for`:
 ## Workflow
 
 1. Read `.pair/status.json` to determine mode (implement or fix).
-2. In **implement** mode: identify the **first stream whose tasks are not yet all checked off** in `.pair/plan.md`. Before doing any work, output a single header line so the stream is visible in context:
+2. **Early exit check (implement mode only):** Before reading any skill files or doing any work, run:
+   ```bash
+   awk '/^## Acceptance Criteria/{exit} /^\s*- \[ \]/{found=1; exit} END{if(found) exit 0; else exit 1}' .pair/plan.md
+   ```
+   If exit code is **1** (no unchecked stream tasks), all work is done. Skip to step 7: write a one-line stream log entry ("all tasks already complete"), then write `.pair/.ready`. Do not read language skill files or run verification.
+3. In **implement** mode: identify the **first stream whose tasks are not yet all checked off** in `.pair/plan.md`. Before doing any work, output a single header line so the stream is visible in context:
    ```
    ## Stream N: [stream name]
    ```
@@ -65,16 +70,16 @@ Read `.pair/status.json` field `waiting_for`:
    ```bash
    bash ~/.dotfiles/scripts/pair-check.sh "10.1"
    ```
-3. In **fix** mode: parse `.pair/review.md` findings into fix actions. Apply BLOCKER and IMPORTANT fixes.
-4. Keep changes scoped to the current stream; log required scope exceptions.
-5. Run targeted verification using the right command for the language:
+4. In **fix** mode: parse `.pair/review.md` findings into fix actions. Apply BLOCKER and IMPORTANT fixes.
+5. Keep changes scoped to the current stream; log required scope exceptions.
+6. Run targeted verification using the right command for the language:
    - **C#**: `dotnet build`, then `dotnet test --filter <relevant filter>`
    - **TypeScript**: `tsc --noEmit`, then detect test runner from config (jest/vitest/playwright)
    - **Rust**: `cargo check` (fast), `cargo test`, `cargo clippy`
    - **Python**: `pytest <path>`, `mypy` or `pyright` if configured
    If unable to run, state the reason explicitly in the stream log.
-6. **REQUIRED - Simplify** Run `/simplify` once you done editing 
-7. **REQUIRED — Update `.pair/stream-log.md`** before signaling. Append a concise entry with a heading that includes the current date **and time** in `YYYY-MM-DD HH:MM UTC` format (e.g. `### 2026-02-28 14:32 UTC — Stream 1: implement`):
+7. **REQUIRED - Simplify** Run `/simplify` once you done editing
+8. **REQUIRED — Update `.pair/stream-log.md`** before signaling. Append a concise entry with a heading that includes the current date **and time** in `YYYY-MM-DD HH:MM UTC` format (e.g. `### 2026-02-28 14:32 UTC — Stream 1: implement`):
    - **Agent:** `<tool> / <model>` (e.g. `codex / o4-mini`, `claude / claude-sonnet-4-6`) — read `dev_tool` from `.pair/status.json` for the tool name
    - stream/task identifier
    - what changed (or findings addressed/deferred)
@@ -82,7 +87,7 @@ Read `.pair/status.json` field `waiting_for`:
    - key decisions/tradeoffs
    - verification run and result (or why skipped)
    - blockers/questions (if any)
-8. **Signal readiness** — read `dispatch_id` from `.pair/status.json`, then write it to `.pair/.ready`:
+9. **Signal readiness** — read `dispatch_id` from `.pair/status.json`, then write it to `.pair/.ready`:
    ```bash
    jq -r '.dispatch_id' .pair/status.json > .pair/.ready
    ```
