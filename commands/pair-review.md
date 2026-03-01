@@ -4,31 +4,67 @@ description: Review the current pair-protocol stream implementation and write `.
 
 # Pair Review
 
-Review the current stream and write `.pair/review.md` using the **pair-reviewer** agent.
+Review only. NEVER implement code. NEVER run builds or tests. Your deliverable is `.pair/review.md`.
 
-## What This Command Does
+**Constraints:** No `dotnet build`, `npm run`, `cargo`, `pytest`, or any compilation/test command. Build and test verification is the dev agent's responsibility. Bash is only for signaling and `git diff`.
 
-1. **Loads pair context** — reads `.pair/plan.md`, `.pair/stream-log.md`, and current state
-2. **Reviews the stream diff** — focuses on the current stream boundary, not the entire repo
-3. **Finds risks and regressions** — correctness, missing handling, contract mismatches, test gaps
-4. **Writes `.pair/review.md`** — structured findings and verdict
-5. **Signal next agent**: if any BLOCKER found, run `bash ~/.dotfiles/scripts/pair-signal.sh fix` to auto-chain to implementer. If no blockers, do NOT signal (human decides next step).
-6. **Responds briefly** — summarizes blockers and next action
+## Steps
+
+0. **Clear context** — run `/clear` to start fresh
+1. **Read required inputs** in order:
+   - `CLAUDE.md` in the project root (conventions, test patterns)
+   - `.pair/plan.md` (stream boundaries and acceptance criteria)
+   - `.pair/stream-log.md` (decisions and progress)
+   - `.pair/review.md` if present — in a fix cycle, verify each previous BLOCKER was addressed before closing it
+   - Current stream diff: `git diff` against the relevant base
+2. **Review** — current stream only; do not flag unrelated repo issues. Prioritize: correctness bugs, missing error handling, API/contract mismatches, unsafe assumptions, missing tests, plan drift.
+3. **Write `.pair/review.md`** using the format below
+4. **Update `.pair/stream-log.md`** — append `### YYYY-MM-DD HH:MM UTC — Review: <stream>` with: stream reviewed, BLOCKER/IMPORTANT/NIT counts, files inspected, verdict
+5. **Signal**: read `auto_mode` from `.pair/status.json`. If `auto_mode=true`, do NOT signal — the orchestrator handles all signaling. If `auto_mode=false` and any BLOCKER found, run `bash ~/.dotfiles/scripts/pair-signal.sh fix`.
+6. **Reply briefly** — blocker count, important count, verdict, confidence gaps
+
+## Confidence Gate
+
+- Only flag issues you are >80% confident are real.
+- Infer conventions from existing code before flagging style.
+- Consolidate similar issues — "3 methods missing null checks" not 3 separate findings.
+- State what you verified and what you couldn't check.
+
+## Severity
+
+- `BLOCKER` — must fix before proceeding: security, data loss, `async void`, captive DI, `IDisposable` leaks, N+1 EF queries, sync-over-async (`.Result`/`.Wait()`)
+- `IMPORTANT` — should fix in this stream: missing tests, dead code, missing `AsNoTracking` on read queries
+- `NIT` — optional / later: style, naming, optional modernization
+
+## `.pair/review.md` Format
+
+```markdown
+# Review: [Stream label]
+
+## Summary
+[2-3 sentences on overall quality]
+
+## Findings
+
+### BLOCKER: [short title]
+- **File:** `path/to/file:line`
+- **Issue:** [what is wrong]
+- **Suggested fix:** [specific direction]
+
+### IMPORTANT: [short title]
+- **File:** `path/to/file:line`
+- **Issue:** ...
+- **Suggested fix:** ...
+
+### NIT: [short title]
+- **Issue:** ...
+
+## Verdict
+[e.g. "No blockers. OK to continue." / "1 blocker must be fixed before proceeding."]
+```
+
+If no findings: keep `## Findings`, state explicitly none were found, note residual risk or untested paths.
 
 ## When to Use
 
 - `.pair/status.json` says `waiting_for = "review"`
-- The implementer reaches a stream `**Review boundary**`
-
-## Usage
-
-```text
-/pair-review
-/pair-review Review the current stream diff against the plan
-```
-
-## Important
-
-- Do **not** implement code.
-- Focus on the current stream, not unrelated repo issues.
-- If there are no findings, say so explicitly and note residual risk/testing gaps.

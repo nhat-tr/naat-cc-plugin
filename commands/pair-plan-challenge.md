@@ -4,30 +4,58 @@ description: Challenge `.pair/plan.md` before implementation and write `.pair/re
 
 # Pair Plan Challenge
 
-Review `.pair/plan.md` and write `.pair/review.md` using the **pair-plan-challenger** agent.
+Challenge the plan only. NEVER implement code. Your deliverable is `.pair/review.md`.
 
-## What This Command Does
+**Constraints:** Only edit files under `.pair/`. No builds or tests. Bash only for signaling.
 
-1. Reads `.pair/plan.md` and relevant context docs
-2. Challenges stream boundaries, sequencing, coupling, and acceptance criteria
-3. Writes structured findings to `.pair/review.md`
-4. **Signal next agent**: if any BLOCKER found, run `bash ~/.dotfiles/scripts/pair-signal.sh plan-update` to auto-chain the planner to revise. If no blockers, do NOT signal (human decides to implement).
-5. Responds briefly with verdict and top changes
+## Steps
+
+0. **Clear context** — run `/clear` to start fresh
+1. **Read required inputs** in order:
+   - `.pair/plan.md` (required)
+   - `CLAUDE.md` or `ARCHITECTURE.md` if present
+   - Verify all file paths mentioned in the plan exist; spot-check at least one code path per stream
+   - Existing `.pair/review.md` if present
+2. **Challenge** — stress-test for: stream boundaries not independently reviewable, sequencing ignores dependencies, hidden coupling, vague tasks missing file targets, incomplete/untestable acceptance criteria, missing S/M/L/XL sizing per task and stream total, optimistic assumptions not verified against actual code, unanswered open questions that block implementation
+3. **Write `.pair/review.md`** using the format below
+4. **Update `.pair/stream-log.md`** — append `### YYYY-MM-DD HH:MM UTC — Plan Challenge` with: what was challenged, BLOCKER/IMPORTANT/NIT counts, files spot-checked, verdict
+5. **Signal**: read `auto_mode` from `.pair/status.json`. If `auto_mode=true`, do NOT signal — the orchestrator handles all signaling. If `auto_mode=false` and any BLOCKER found, run `bash ~/.dotfiles/scripts/pair-signal.sh plan-update`.
+6. **Reply briefly** — whether plan is implementable as-is, blocker/important counts, top changes needed
+
+## Severity
+
+- `BLOCKER` — will cause churn or a failed review: bad sequencing, missing dependency, unverified assumption, missing sizing
+- `IMPORTANT` — should fix before starting: vague task, weak acceptance criteria
+- `NIT` — optional clarity improvement
+
+## `.pair/review.md` Format
+
+```markdown
+# Review: Plan Challenge
+
+## Summary
+[Short summary of plan quality and main concerns]
+
+## Findings
+
+### BLOCKER: [short title]
+- **Section:** `Stream 1` / `Acceptance Criteria` / etc.
+- **Issue:** [why this will fail or cause churn]
+- **Suggested fix:** [concrete change to the plan]
+
+### IMPORTANT: [short title]
+- **Section:** ...
+- **Issue:** ...
+- **Suggested fix:** ...
+
+### NIT: [short title]
+- **Issue:** ...
+
+## Verdict
+[e.g. "No blockers. Plan is implementable." / "Blockers present; revise before implementation."]
+```
 
 ## When to Use
 
-- After the initial plan draft
-- Before `waiting_for = "implement"`
+- After the initial plan draft, before `waiting_for = "implement"`
 - When a plan changed and needs a fresh challenge pass
-
-## Usage
-
-```text
-/pair-plan-challenge
-/pair-plan-challenge Review .pair/plan.md for stream boundaries and sequencing risk
-```
-
-## Important
-
-- Do **not** implement code.
-- Focus on execution risk and plan quality, not code style.

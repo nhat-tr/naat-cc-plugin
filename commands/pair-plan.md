@@ -4,39 +4,22 @@ description: Draft or update .pair/plan.md for the agentic pair-programming work
 
 # Pair Plan
 
-Create or update `.pair/plan.md` using the **pair-planner** agent.
+**Before doing anything else, read `.pair/status.json` now and check `waiting_for`.**
 
-## What This Command Does
+## If `waiting_for = "plan-update"` — revise existing plan
 
-Checks `.pair/status.json` `waiting_for` to determine mode:
+1. Read `.pair/review.md` — identify every BLOCKER and IMPORTANT finding
+2. Read `.pair/plan.md` — understand the current plan
+3. Revise `.pair/plan.md` to address all BLOCKER and IMPORTANT findings; preserve LGTM sections
+4. Signal: run `bash ~/.dotfiles/scripts/pair-signal.sh plan-review`
 
-**Initial plan** (`waiting_for` ≠ `plan-update`):
-1. Analyzes the codebase and drafts `.pair/plan.md` with parallel streams
-2. Does **not** signal — human reviews first, then triggers challenge with `<leader>pc`
+## If `waiting_for` is anything else — draft new plan
 
-**Plan update** (`waiting_for = plan-update`):
-1. Reads `.pair/review.md` (challenger findings)
-2. Revises `.pair/plan.md` to address BLOCKER and IMPORTANT findings
-3. Runs `bash ~/.dotfiles/scripts/pair-signal.sh plan-review` to auto-chain back to the challenger
-
-## When to Use
-
-- Starting work in the pair protocol and you need `.pair/plan.md`
-- Re-planning after scope changes
-- Breaking a vague request into implementable streams for Codex
-- Creating a reviewable plan before implementation begins
-
-## Usage
-
-```text
-/pair-plan Add clearer login error handling
-/pair-plan Refactor invoice export flow with stream boundaries
-/pair-plan Rework search indexing pipeline for background jobs
-```
+1. Ask the user for the task description if not already provided in the command arguments
+2. Analyze the codebase and draft `.pair/plan.md` with parallel streams
+3. Do **not** signal — orchestrator handles auto-progression in auto mode; human triggers challenge otherwise
 
 ## Output Contract (`.pair/plan.md`)
-
-The plan should use this structure:
 
 - `# Task: ...`
 - `## Context`
