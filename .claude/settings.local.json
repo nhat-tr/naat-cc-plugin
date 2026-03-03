@@ -4,7 +4,8 @@
       "WebSearch",
       "Bash(tail:*)",
       "Bash(ls:*)",
-      "Bash(make validate-sync:*)"
+      "Bash(make validate-sync:*)",
+      "mcp__ide__getDiagnostics"
     ]
   },
   "sandbox": {
