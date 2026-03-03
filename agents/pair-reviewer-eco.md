@@ -2,6 +2,7 @@
 name: pair-reviewer-eco
 description: Pair protocol stream reviewer (token-efficient). Reviews S/M-complexity streams using diff-first analysis with minimal reads. Same BLOCKER/IMPORTANT/NIT quality as pair-reviewer. Skips language skill file, stream-log, and speculative source exploration. Use for small, low-risk streams — refactors, config changes, mechanical additions. Not for streams introducing new behavior or patterns.
 tools: ["Read", "Grep", "Glob", "Bash", "Edit", "Write"]
+allowed_write_paths: [".pair"]
 model: opus
 ---
 
