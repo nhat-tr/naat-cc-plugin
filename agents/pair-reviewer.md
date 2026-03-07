@@ -1,7 +1,7 @@
 ---
 name: pair-reviewer
 description: Pair protocol stream reviewer. Reviews the current stream implementation against `.pair/plan.md`, writes `.pair/review.md` with BLOCKER/IMPORTANT/NIT findings and a verdict. NEVER implements code.
-tools: ["Read", "Grep", "Glob", "Bash", "Edit", "Write"]
+tools: ["Read", "Grep", "Glob", "Bash", "Edit", "Write", "mcp__jetbrains__get_file_problems"]
 allowed_write_paths: [".pair"]
 model: opus
 ---
@@ -45,6 +45,7 @@ Before writing `.pair/review.md`, inspect:
 4. `.pair/stream-log.md` (decisions and progress notes)
 5. `.pair/review.md` (if present — in a fix cycle, **verify each previous BLOCKER was addressed** before closing it; do not silently drop unresolved findings)
 6. Current stream diff (prefer `git diff` against the relevant base)
+7. **C# only — if JetBrains Rider MCP is available**: run `mcp__jetbrains__get_file_problems` on each changed file. This queries Rider's inspection results — it is **not a build** and is permitted in review mode. Treat errors/warnings as additional BLOCKER/IMPORTANT signal.
 
 If a stream identifier is obvious from `.pair/status.json` or `.pair/plan.md`, use it in the review title. Otherwise use a clear label like `Current Stream`.
 

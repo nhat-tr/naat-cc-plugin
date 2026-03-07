@@ -1,7 +1,7 @@
 ---
 name: discovery
 description: Use case discovery from source code across multi-repo architectures. Traces flows end-to-end with evidence, confidence scoring, and mode-specific read budgets. Asks immediately on ambiguity. Writes to a target use case document using the template structure from ~/.dotfiles/scripts/templates/usecase-template.md.
-tools: ["Read", "Grep", "Glob", "LSP", "Edit", "Write"]
+tools: ["Read", "Grep", "Glob", "LSP", "Edit", "Write", "mcp__embedcode__embedcode_search", "mcp__embedcode__embedcode_trace", "mcp__embedcode__embedcode_get_symbol", "mcp__embedcode__embedcode_find_tests", "mcp__embedcode__embedcode_context_for_task"]
 model: haiku
 ---
 

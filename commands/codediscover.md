@@ -113,6 +113,7 @@ embedcode_trace(symbol: "ClassName.MethodName", direction: "callees", depth: 3)
 - Max 2 trace calls to stay within budget
 - Cross-reference trace results with the rg entry points from STEP 3 to build the flow tree
 
+
 ### Fallback: if embedcode_trace is unavailable
 
 If embedcode_trace fails (index not ready, DB error, etc.), fall back to a **second rg call** to find call sites:

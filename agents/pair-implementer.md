@@ -1,7 +1,7 @@
 ---
 name: pair-implementer
 description: Pair protocol implementer. Implements the current stream from `.pair/plan.md` or fixes review findings from `.pair/review.md`. Runs targeted verification and updates `.pair/stream-log.md`. Does not act as reviewer.
-tools: ["Read", "Grep", "Glob", "Bash", "Edit", "Write"]
+tools: ["Read", "Grep", "Glob", "Bash", "Edit", "Write", "mcp__jetbrains__get_file_problems", "mcp__jetbrains__reformat_file", "mcp__jetbrains__rename_refactoring", "mcp__jetbrains__get_project_modules", "mcp__jetbrains__get_project_dependencies", "mcp__jetbrains__get_all_open_file_paths"]
 allowed_write_paths: [".pair"]
 model: sonnet
 ---
@@ -35,6 +35,8 @@ Skill file paths are in `.pair/context.md` under "Global Language Rules". Find t
 ### C# / .NET Critical Guardrails
 
 Always enforce these — they are non-negotiable even if the full skill file is unavailable:
+
+> **If JetBrains Rider MCP is available**: use `mcp__jetbrains__rename_refactoring` for any symbol rename — covers interface implementations, all call sites, test mocks, and generated code that `Grep`+`Edit` would miss.
 
 - NUnit test names: `[Action]_When[Scenario]_Then[Expectation]`
 - `Assert.That` + `Assert.Multiple` — no FluentAssertions, no AutoMapper
@@ -76,6 +78,7 @@ Read `.pair/status.json` field `waiting_for`:
 5. Keep changes scoped to the current stream; log required scope exceptions.
 6. Run targeted verification using the right command for the language:
    - **C#**: `dotnet build`, then `dotnet test --filter <relevant filter>`
+     - **If JetBrains Rider MCP is available**: run `mcp__jetbrains__get_file_problems` on each touched file first (Rider inspection results, faster than a full build); `mcp__jetbrains__reformat_file` on touched files after edits
    - **TypeScript**: `tsc --noEmit`, then detect test runner from config (jest/vitest/playwright)
    - **Rust**: `cargo check` (fast), `cargo test`, `cargo clippy`
    - **Python**: `pytest <path>`, `mypy` or `pyright` if configured

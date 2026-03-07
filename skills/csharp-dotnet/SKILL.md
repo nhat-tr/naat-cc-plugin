@@ -24,6 +24,10 @@ Run these checks before choosing patterns:
 - `rg -n 'NUnit|xunit|MSTest|FluentAssertions|NSubstitute|Moq|Testcontainers' -g '*.csproj'`
 - `rg -n 'AddDbContext|UseSqlServer|UseNpgsql|UseSqlite|MapGroup|AddControllers' src tests`
 
+**If JetBrains Rider MCP is available** (`mcp__jetbrains__*` tools present in your tool list), use these instead:
+- `mcp__jetbrains__get_project_modules` — lists all projects with paths (replaces `rg --files -g '*.csproj'`)
+- `mcp__jetbrains__get_project_dependencies <module>` — NuGet packages per project (replaces rg on `.csproj`)
+
 If the repository is not on .NET 10 or C# 14, preserve compatibility and avoid forcing upgrades.
 
 ## Apply Guardrails
@@ -53,6 +57,17 @@ Read only what is relevant:
 - `references/testing-nunit.md`: unit and integration testing patterns with NUnit and Testcontainers.
 - `references/modern-csharp-and-dotnet.md`: modern C# and .NET APIs and language features.
 
+### Debugging failing tests
+
+When an HTTP assertion fails without a clear reason (e.g. unexpected 400/404/500), always read the response body before asserting to see the actual error detail:
+
+```csharp
+var response = await HttpClient.PostAsJsonAsync(...);
+Console.WriteLine(await response.Content.ReadAsStringAsync()); // add this to see the error
+Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+```
+
+
 ## Deliverable Expectations
 
 When implementing changes:
@@ -60,3 +75,8 @@ When implementing changes:
 - Explain compatibility decisions (for example, why a .NET 10 feature was used or skipped).
 - Add or update tests when behavior changes.
 - Provide exact validation commands run, or clearly state what could not be run.
+
+**If JetBrains Rider MCP is available**, enhance verification with:
+- `mcp__jetbrains__get_file_problems <file>` on each touched file — Rider inspection results; catches issues before running `dotnet build`
+- `mcp__jetbrains__reformat_file <file>` — apply IDE formatting after significant edits
+- `mcp__jetbrains__rename_refactoring` — project-wide semantic rename (covers interface impls, mocks, generated code) instead of manual find+replace

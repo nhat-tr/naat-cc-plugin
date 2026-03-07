@@ -1,6 +1,6 @@
 ---
 name: pair-plan
-description: Draft or update `.pair/plan.md` for the agentic pair-programming protocol. Use when starting a task and you want a coding agent to write a stream-based plan with review boundaries, acceptance criteria, and risks before implementation begins.
+description: V1.2 Draft or update `.pair/plan.md` for the agentic pair-programming protocol. Two-phase: Phase 1 writes a high-level draft and stops for human review; Phase 2 expands to full stream detail after confirmation.
 ---
 
 # Pair Plan
@@ -19,7 +19,8 @@ Plan only. NEVER implement code. Your primary deliverable is `.pair/plan.md`.
 Read `.pair/status.json` field `waiting_for`:
 
 - **`plan-update`**: Challenger found blockers. Read `.pair/review.md`, address all BLOCKER and IMPORTANT findings in `.pair/plan.md`, then signal.
-- **anything else / initial**: Draft the plan from scratch or update it based on user input. Do NOT signal after writing — the human reviews the plan first.
+- **`plan-detail`**: Human approved the high-level draft. Expand existing `.pair/plan.md` into full detail (Phase 2). Do NOT signal.
+- **anything else / initial**: Phase 1 — write high-level draft only (approach, rough stream names, risks). Set `waiting_for = "plan-detail"` in status.json and stop. Do NOT signal.
 
 ## Required Inputs
 
@@ -35,14 +36,50 @@ Read `.pair/status.json` field `waiting_for`:
 
 **If you have must-know questions, STOP. Do not write the plan. Ask and wait for answers.**
 
-1. Read the codebase: project structure, existing patterns, relevant files.
-2. Identify likely files/modules to change; find existing patterns to follow.
-3. Design streams so they are independently reviewable and parallelizable where possible.
-4. Write `.pair/plan.md` using the format below.
-5. Update `.pair/stream-log.md` (see below).
-6. Signal only in `plan-update` mode (see below).
+**Phase 1 (initial mode):**
+1. Read the codebase enough to form a confident approach.
+2. Write `.pair/plan.md` with high-level content only: Task, Context, Proposed Approach (prose), Rough Stream Breakdown (names + one-liner, no file paths), Key Risks, Open Questions.
+3. Update `.pair/stream-log.md`.
+4. Set `waiting_for = "plan-detail"` in `.pair/status.json` via direct jq write (no pair-signal.sh). Stop.
 
-## Plan Format (`.pair/plan.md`)
+**Phase 2 (`plan-detail` mode):**
+1. Read existing high-level `.pair/plan.md`.
+2. Expand in-place: Implementation Context, Stream Graph, per-stream task checkboxes with file paths, complexity estimates, Review Boundaries, Acceptance Criteria.
+3. Update `.pair/stream-log.md`. Stop (no signal).
+
+**`plan-update` mode:**
+1. Read `.pair/review.md` and `.pair/plan.md`.
+2. Address all BLOCKER and IMPORTANT findings.
+3. Update `.pair/stream-log.md`.
+4. Signal (see below).
+
+## Plan Format
+
+**Phase 1 — High-level draft:**
+
+```markdown
+# Task: [title]
+
+## Context
+Why we're doing this — 2-3 sentences.
+
+## Proposed Approach
+Prose description of the solution strategy. No file paths.
+
+## Rough Stream Breakdown
+- Stream 1: [name] — [one-line description]
+- Stream 2: [name] — [one-line description]
+
+## Key Risks & Decisions Needed
+- [risk or open question]
+
+## Open Questions
+- [must-know questions if any remain]
+```
+
+---
+
+**Phase 2 / `plan-update` — Full detail:**
 
 ```markdown
 # Task: [title]
@@ -52,7 +89,7 @@ Why we're doing this. Links to relevant code.
 
 ## Implementation Context
 <!-- REQUIRED — implementer runs as a sub-agent with no conversation history. -->
-- **Language / Framework:** [e.g. C# .NET 9 / xUnit]
+- **Language / Framework:** [e.g. C# .NET 10 / NUnit]
 - **Key decisions from planning:** [decisions made in conversation not obvious from code]
 - **Patterns to follow:** [e.g. "primary constructors — see UserService.cs"]
 - **Patterns to avoid:** [e.g. "no AutoMapper, no FluentAssertions"]
@@ -91,7 +128,7 @@ Stream 3 → after Stream 1 (depends on X)
 
 ## Stream Log Update (REQUIRED)
 
-Append to `.pair/stream-log.md` with heading `### YYYY-MM-DD HH:MM UTC — Plan: initial` (or `plan-update`):
+Append to `.pair/stream-log.md` with heading `### YYYY-MM-DD HH:MM UTC — Plan: initial` (or `plan-detail` / `plan-update`):
 
 - **Agent:** `codex / <model>`
 - mode (initial plan / plan-update)
@@ -106,13 +143,19 @@ Append to `.pair/stream-log.md` with heading `### YYYY-MM-DD HH:MM UTC — Plan:
   jq -r '.dispatch_id' .pair/status.json > .pair/.ready
   ```
   The orchestrator chains back to the challenger. Do not call `pair-signal.sh`.
-- **Initial plan**: do NOT write `.ready`. Stop — the human reviews first.
+- **Phase 1 (initial)**: set `waiting_for = "plan-detail"` in status.json **without** incrementing dispatch_id:
+  ```bash
+  tmp="$(mktemp)" && jq '.waiting_for = "plan-detail"' .pair/status.json > "$tmp" && mv "$tmp" .pair/status.json
+  ```
+  Do NOT write `.ready`. Stop.
+- **Phase 2 (`plan-detail`)**: do NOT write `.ready`. Stop — human reviews full plan then triggers challenge.
 
 ## Response After Writing
 
-- Mode used (initial or plan-update)
-- Streams created/updated
+- Mode used (Phase 1 high-level / Phase 2 detailed / plan-update)
+- Proposed approach (Phase 1) or streams created/updated (Phase 2 / plan-update)
 - Key changes made (if plan-update)
 - Key risks/unknowns
+- Next step: "Run `/pair-plan` to expand" (Phase 1) or "Review and run `/pair-plan-challenge`" (Phase 2)
 
 Do not paste the entire plan unless asked.
