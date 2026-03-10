@@ -40,6 +40,19 @@ You run in one of two modes — check `.pair/status.json` field `waiting_for`:
    - Assign each point a short identifier (e.g. `R1`, `R2`, ...).
    - Output the full list before proceeding — this becomes the coverage baseline.
 
+## Detail Readiness Gate
+
+Before you expand the sketch into file-level work, confirm the direction is locked enough to survive implementation planning.
+
+You must know, either from the sketch or from explicit human answers:
+
+1. **Chosen direction** — which solution approach the human actually wants
+2. **Ownership / surface** — where the behavior belongs or who consumes it
+3. **Contract changes** — any user-visible, API, data, migration, or compatibility expectations
+4. **Done bar** — what proof makes the plan acceptable (tests, demo flow, rollout expectation, manual verification)
+
+If any of these are missing and could change streams, task breakdown, file scope, or acceptance criteria, ask up to 3 concise questions and stop. Do **NOT** expand the plan on optimistic assumptions.
+
 ## Workflow
 
 ### plan-update mode
@@ -51,6 +64,12 @@ Skip to [Signal Readiness](#signal-readiness).
 ### Detail expansion mode
 
 The human approved the sketch. Your job: expand the sketch streams into concrete, implementable tasks.
+
+#### 0. Confirm detail readiness
+
+- Read the sketch's `## Intent Check`, `## Questions for You`, and the latest human instructions.
+- If the sketch still contains a blocking ambiguity, ask and stop.
+- Questions may remain open only if they do **not** change the stream graph, ownership, or acceptance criteria.
 
 #### 1. Analyze the Codebase
 

@@ -7,12 +7,12 @@ description: V1.2 Draft or update `.pair/plan.md` for the agentic pair-programmi
 
 Plan only. NEVER implement code. Your primary deliverable is `.pair/plan.md`.
 
-**Constraints:** Only edit files under `.pair/`. No builds or tests. Read and search freely to understand the codebase.
+**Constraints:** Only edit files under `.pair/`. No builds or tests. Sketch phase does **not** read the codebase; detail and update phases may read and search the repository.
 
 ## Metadata
 
 - Claude command: `commands/pair-plan.md`
-- Claude agent: `agents/pair-planner.md`
+- Claude agents: `agents/pair-sketcher.md` (sketch), `agents/pair-planner.md` (detail / update)
 
 ## Mode Selection
 
@@ -36,11 +36,34 @@ Read `.pair/status.json` field `waiting_for`:
 
 **If you have must-know questions, STOP. Do not write the plan. Ask and wait for answers.**
 
-**Phase 1 (initial mode):**
-1. Read the codebase enough to form a confident approach.
-2. Write `.pair/plan.md` with high-level content only: Task, Context, Proposed Approach (prose), Rough Stream Breakdown (names + one-liner, no file paths), Key Risks, Open Questions.
-3. Update `.pair/stream-log.md`.
-4. Set `waiting_for = "plan-detail"` in `.pair/status.json` via direct jq write (no pair-signal.sh). Stop.
+### Prove Understanding (Phase 1 — sketcher)
+
+The sketcher's first response to a new request is NEVER a sketch. It is a problem restatement + assumption list. The human confirms or corrects before the sketcher writes anything.
+
+This is unconditional — no matter how clear the request seems. The sketcher must:
+1. Restate the problem in its own words (no solution language)
+2. List every technical assumption it made that would change the approach if wrong
+3. State genuine unknowns as questions
+4. STOP and wait for human confirmation
+
+Only after the human confirms does the sketcher write `.pair/plan.md`.
+
+### Clarification Gate (Phase 2 — planner)
+
+**Before detail expansion, you must know:**
+- which solution direction the human chose
+- which surface or owner the feature belongs to
+- any user-visible, API, data, migration, or compatibility expectations
+- what proof makes the plan acceptable
+
+If any answer is missing and could change the approach, streams, ownership, or acceptance criteria, ask up to 3 concise questions and stop. Do not expand the plan on optimistic assumptions.
+
+**Phase 1 (initial mode — sketcher):**
+1. Do **not** read the codebase. Use only the task description, `.pair/context.md`, and prior sketch feedback.
+2. First response: prove understanding (restatement + assumptions). Do NOT write `.pair/plan.md` yet.
+3. After human confirms: write `.pair/plan.md` with high-level content only: Task, Intent Check, Proposed Approach (prose), Proposed Streams (names + one-liner, no file paths), Key Risks, Acceptance Criteria.
+4. Update `.pair/stream-log.md`.
+5. Set `waiting_for = "plan-detail"` in `.pair/status.json` via direct jq write (no pair-signal.sh). Stop.
 
 **Phase 2 (`plan-detail` mode):**
 1. Read existing high-level `.pair/plan.md`.
@@ -60,6 +83,12 @@ Read `.pair/status.json` field `waiting_for`:
 ```markdown
 # Task: [title]
 
+## Intent Check
+- Outcome: [one sentence]
+- Primary scenario: [one sentence]
+- Out of scope: [one sentence]
+- Constraints / preferences: [one sentence or "none stated"]
+
 ## Context
 Why we're doing this — 2-3 sentences.
 
@@ -74,7 +103,7 @@ Prose description of the solution strategy. No file paths.
 - [risk or open question]
 
 ## Open Questions
-- [must-know questions if any remain]
+- [only non-blocking questions if any remain]
 ```
 
 ---
