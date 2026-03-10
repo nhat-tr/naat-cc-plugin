@@ -2,34 +2,6 @@
 
 Use this reference for API endpoint design, composition, and logging.
 
-## Prefer Cohesive Endpoint Modules
-
-Group endpoints by route area:
-
-```csharp
-public static class OrderEndpoints
-{
-    public static void MapOrderEndpoints(this WebApplication app)
-    {
-        var group = app.MapGroup("/api/orders").RequireAuthorization();
-
-        group.MapGet("/{id:int}", GetOrderAsync);
-        group.MapPost("/", CreateOrderAsync);
-    }
-
-    private static async Task<Results<Ok<OrderDto>, NotFound>> GetOrderAsync(
-        int id,
-        IOrderService service,
-        CancellationToken ct)
-    {
-        var order = await service.GetAsync(id, ct);
-        return order is not null ? TypedResults.Ok(order) : TypedResults.NotFound();
-    }
-}
-```
-
-Use controllers when a repository already follows controller conventions.
-
 ## Keep Composition Root Clean
 
 Use extension methods for domain registration and call them from `Program.cs`.
@@ -44,29 +16,6 @@ logger.LogWarning("Payment {PaymentId} failed with status {Status}", paymentId, 
 ```
 
 Avoid interpolated strings in logs to preserve structured fields.
-
-## Middleware Ordering
-
-Order matters — wrong order silently breaks auth with no error:
-
-```csharp
-app.UseAuthentication();   // must come before UseAuthorization
-app.UseAuthorization();
-```
-
-For minimal APIs, `UseRouting()` is implicit but `UseAuthentication` / `UseAuthorization` must still be called before `MapGroup` / `MapGet` etc.
-
-## Problem Details (RFC 7807)
-
-Return structured error responses using `TypedResults.Problem()`:
-
-```csharp
-return TypedResults.Problem(
-    detail: "Order not found",
-    statusCode: StatusCodes.Status404NotFound);
-```
-
-For validation errors use `TypedResults.ValidationProblem(errors)`. ASP.NET Core 10 produces RFC 7807 responses automatically for exceptions when `app.UseExceptionHandler()` is configured.
 
 ## Validation
 

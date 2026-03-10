@@ -2,44 +2,6 @@
 
 Use this reference when registering services or integrating external HTTP APIs.
 
-## Isolate External APIs Behind Interfaces
-
-Define API interfaces in application-facing layers:
-
-```csharp
-public interface IPaymentGatewayClient
-{
-    Task<PaymentResult> ChargeAsync(ChargeRequest request, CancellationToken ct);
-    Task<RefundResult> RefundAsync(string paymentId, decimal amount, CancellationToken ct);
-}
-```
-
-Implement clients in infrastructure with typed `HttpClient`:
-
-```csharp
-public class PaymentGatewayClient(HttpClient http, ILogger<PaymentGatewayClient> logger)
-    : IPaymentGatewayClient
-{
-    public async Task<PaymentResult> ChargeAsync(ChargeRequest request, CancellationToken ct)
-    {
-        var response = await http.PostAsJsonAsync("/v1/charges", request, ct);
-        response.EnsureSuccessStatusCode();
-
-        return await response.Content.ReadFromJsonAsync<PaymentResult>(ct)
-            ?? throw new InvalidOperationException("Null response from payment gateway");
-    }
-
-    public async Task<RefundResult> RefundAsync(string paymentId, decimal amount, CancellationToken ct)
-    {
-        var response = await http.PostAsJsonAsync("/v1/refunds", new { paymentId, amount }, ct);
-        response.EnsureSuccessStatusCode();
-
-        return await response.Content.ReadFromJsonAsync<RefundResult>(ct)
-            ?? throw new InvalidOperationException("Null response from payment gateway");
-    }
-}
-```
-
 ## Register Services by Module
 
 Group related registrations in extension methods:
@@ -66,7 +28,7 @@ builder.Services.AddOrderServices();
 builder.Services.AddPaymentServices(builder.Configuration);
 ```
 
-## Prefer DbContext Over Repository Wrappers
+## Prefer DbContext Over Repository Pattern
 
 Inject `DbContext` directly into services unless the repository class encapsulates genuinely reusable, complex query logic or a multi-step operation that would otherwise be duplicated:
 

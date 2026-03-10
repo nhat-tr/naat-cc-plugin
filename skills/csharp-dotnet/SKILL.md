@@ -37,7 +37,6 @@ If the repository is not on .NET 10 or C# 14, preserve compatibility and avoid f
 - Propagate `CancellationToken` through async call chains.
 - Use `AsNoTracking` for read-only EF queries.
 - Use structured logging message templates instead of string interpolation.
-- Gate `LogDebug` calls: check `logger.IsEnabled(LogLevel.Debug)` before expensive log arguments.
 - Remove dead code and unused `using` directives while touching files.
 - Add `using` imports rather than writing fully qualified type names inline (e.g. `new AuthenticationHeaderValue(...)` not `new System.Net.Http.Headers.AuthenticationHeaderValue(...)`).
 - Prefer EF Core data annotations (`[Key]`, `[MaxLength]`, `[Required]`, `[Column]`, `[Table]`, `[ForeignKey]`, `[Index]`) over `IEntityTypeConfiguration` classes. Only use fluent configuration for things attributes can't express (composite keys, owned types, query filters, table splitting, many-to-many with payload, `HasPrecision`). For value conversions, prefer a reusable converter attribute over fluent `HasConversion`.
@@ -45,6 +44,18 @@ If the repository is not on .NET 10 or C# 14, preserve compatibility and avoid f
 - Prefer `AddScoped` over `AddSingleton`; use `Singleton` only when the type is truly stateless and thread-safe — think carefully.
 - Prefer `JsonSerializerOptions` / naming policies over `[JsonPropertyName]` attribute decoration.
 - Avoid broad refactors unless explicitly requested.
+- Use `System.Threading.Lock` for explicit lock objects:
+- Use source-generated regex for hot paths:
+- Use `field` keyword in property accessors when normalization or validation is needed:
+
+```csharp
+public string Email
+{
+    get;
+    set => field = value?.Trim().ToLowerInvariant()
+        ?? throw new ArgumentNullException(nameof(value));
+}
+```
 
 ## Reference Map
 
@@ -52,10 +63,8 @@ Read only what is relevant:
 
 - `references/project-and-style.md`: solution layout, naming, constants, async, and general coding conventions.
 - `references/di-and-api-clients.md`: DI module registration and external API client patterns.
-- `references/ef-core-10.md`: EF Core guidance, including .NET 10-era features with compatibility notes.
 - `references/aspnet-core-10.md`: Minimal API and API-layer patterns.
 - `references/testing-nunit.md`: unit and integration testing patterns with NUnit and Testcontainers.
-- `references/modern-csharp-and-dotnet.md`: modern C# and .NET APIs and language features.
 
 ### Debugging failing tests
 
