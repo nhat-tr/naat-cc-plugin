@@ -1,56 +1,40 @@
 ---
-description: V1.2 Draft or update .pair/plan.md for the agentic pair-programming workflow. Two-phase: Phase 1 writes a high-level draft for human review; Phase 2 expands to full stream detail after confirmation.
+description: Draft or update .pair/plan.md for the agentic pair-programming workflow. Routes to the sketcher (direction) or planner (detail) based on current phase.
 ---
 
 # Pair Plan
 
-**Before doing anything else, read `.pair/status.json` now and check `waiting_for`.**
+**Read `.pair/status.json` and check `waiting_for` and `.pair/plan.md` before doing anything.**
 
-## If `waiting_for = "plan-update"` — revise existing plan
+## Routing
 
-1. Read `.pair/review.md` — identify every BLOCKER and IMPORTANT finding
-2. Read `.pair/plan.md` — understand the current plan
-3. Revise `.pair/plan.md` to address all BLOCKER and IMPORTANT findings; preserve LGTM sections
-4. Signal readiness: write the current `dispatch_id` to `.pair/.ready`:
-   ```bash
-   jq -r '.dispatch_id' .pair/status.json > .pair/.ready
-   ```
-   The orchestrator chains back to the challenger. Do not call `pair-signal.sh`.
+### `waiting_for = "plan-update"` → use `pair-planner`
 
-## If `waiting_for = "plan-detail"` — Phase 2: expand to full detail
+The challenger found blockers. Invoke the `pair-planner` agent to revise the plan.
 
-1. Read the existing high-level `.pair/plan.md`
-2. Expand in-place to full detail: Implementation Context, Stream Graph, per-stream task checkboxes with file paths, complexity estimates, Review Boundary, Acceptance Criteria
-3. Update `.pair/stream-log.md`
-4. Do **not** write `.ready` — stop here; human reviews the full plan then triggers `/pair-plan-challenge`
+### `.pair/plan.md` missing or has no `<!-- plan-phase: sketch -->` marker → use `pair-sketcher`
 
-## If `waiting_for` is anything else — Phase 1: high-level draft
+No sketch exists yet. Invoke the `pair-sketcher` agent to write the initial sketch.
 
-1. Ask the user for the task description if not already provided in the command arguments
-2. Read the codebase enough to form a confident approach — stop and ask must-know questions if needed
-3. Write `.pair/plan.md` with **high-level content only**: Task, Context, proposed approach (prose), rough stream list (names + one-liner, no file paths), Key Risks & Open Questions
-4. Set `waiting_for = "plan-detail"` in `.pair/status.json` **without** incrementing `dispatch_id` (direct jq write, not pair-signal.sh):
-   ```bash
-   tmp="$(mktemp)" && jq '.waiting_for = "plan-detail"' .pair/status.json > "$tmp" && mv "$tmp" .pair/status.json
-   ```
-5. Stop — orchestrator will notify human; human re-runs `/pair-plan` to trigger Phase 2
+The sketcher will:
+1. Read `.pair/context.md` and the task description
+2. Write a short sketch (approach + stream names + questions) to `.pair/plan.md`
+3. Stop — the human iterates in conversation
 
-## Output Contract (`.pair/plan.md`)
+**Sketch phase is multi-turn.** The human asks questions and gives feedback; the sketcher updates `.pair/plan.md` and stops again. This repeats until the human explicitly says to expand.
 
-- `# Task: ...`
-- `## Context`
+### `.pair/plan.md` has `<!-- plan-phase: sketch -->` + explicit expand signal → use `pair-planner`
 
-- `## Implementation Context`
-- `## Stream Graph` — which streams can run in parallel vs sequential
-- `## Streams`
-- `### Stream N: ...` with `**Depends on:** none | Stream X` header
-- task checkboxes with likely file paths
-- `**Review boundary**` for each stream
-- `## Acceptance Criteria`
-- `## Risks & Decisions Needed`
+Expand signals: "expand", "go to detail", "looks good", "proceed", "done".
+
+Invoke the `pair-planner` agent to read the codebase, fill in tasks + file hints + complexity estimates, and write the full detailed plan.
+
+### `.pair/plan.md` has `<!-- plan-phase: sketch -->`, no expand signal → continue sketch iteration
+
+The human is still in sketch phase. Update the sketch based on their feedback. Do NOT invoke `pair-planner`. Do NOT expand to detail.
 
 ## Important
 
 - Do **not** implement code.
-- If `.pair/plan.md` already exists, update it carefully instead of blindly overwriting useful details.
-- Prefer explicit assumptions over vague wording.
+- The sketcher does NOT read the codebase. The planner does.
+- Sketch phase ends only when the human says so.

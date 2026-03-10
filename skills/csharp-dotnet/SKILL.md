@@ -25,6 +25,7 @@ Run these checks before choosing patterns:
 - `rg -n 'AddDbContext|UseSqlServer|UseNpgsql|UseSqlite|MapGroup|AddControllers' src tests`
 
 **If JetBrains Rider MCP is available** (`mcp__jetbrains__*` tools present in your tool list), use these instead:
+
 - `mcp__jetbrains__get_project_modules` — lists all projects with paths (replaces `rg --files -g '*.csproj'`)
 - `mcp__jetbrains__get_project_dependencies <module>` — NuGet packages per project (replaces rg on `.csproj`)
 
@@ -37,10 +38,15 @@ If the repository is not on .NET 10 or C# 14, preserve compatibility and avoid f
 - Propagate `CancellationToken` through async call chains.
 - Use `AsNoTracking` for read-only EF queries.
 - Use structured logging message templates instead of string interpolation.
+- Always wrap `LogDebug` calls in an `if (logger.IsEnabled(LogLevel.Debug))` guard — no exceptions, regardless of argument cost.
 - Remove dead code and unused `using` directives while touching files.
 - Add `using` imports rather than writing fully qualified type names inline (e.g. `new AuthenticationHeaderValue(...)` not `new System.Net.Http.Headers.AuthenticationHeaderValue(...)`).
 - Prefer EF Core data annotations (`[Key]`, `[MaxLength]`, `[Required]`, `[Column]`, `[Table]`, `[ForeignKey]`, `[Index]`) over `IEntityTypeConfiguration` classes. Only use fluent configuration for things attributes can't express (composite keys, owned types, query filters, table splitting, many-to-many with payload, `HasPrecision`). For value conversions, prefer a reusable converter attribute over fluent `HasConversion`.
-- Prefer injecting `DbContext` directly over generic repository wrappers unless the repository adds meaningful, reusable logic.
+- **Prefer `DbContext` directly over the Repository pattern with EF Core.** EF Core's `DbSet<T>` and LINQ already provide a queryable, unit-of-work abstraction — wrapping it in a generic `IRepository<T>` adds indirection with no benefit. Only introduce a dedicated repository class when it encapsulates non-trivial, reusable query logic that would otherwise be duplicated across multiple services; in that case, make it a concrete, named class (e.g. `OrderQueryService`), not a generic `IRepository<T>` interface.
+- **Never edit generated EF migration files directly** (the `*.cs` file or its `*.Designer.cs`). Always use `dotnet ef` commands to create, update, or remove migrations:
+  - Add migration: `dotnet ef migrations add <MigrationName> [--project <proj>] [--startup-project <proj>]`
+  - Update existing model snapshot: remove the migration and re-add it — `dotnet ef migrations remove` then `dotnet ef migrations add <MigrationName>`
+  - If a migration needs a custom SQL step (e.g. seed data, rename), add it via `migrationBuilder.Sql(...)` _only_ inside a freshly generated migration — never hand-edit the `Up`/`Down` scaffold of an existing one.
 - Prefer `AddScoped` over `AddSingleton`; use `Singleton` only when the type is truly stateless and thread-safe — think carefully.
 - Prefer `JsonSerializerOptions` / naming policies over `[JsonPropertyName]` attribute decoration.
 - Avoid broad refactors unless explicitly requested.
@@ -56,6 +62,18 @@ public string Email
         ?? throw new ArgumentNullException(nameof(value));
 }
 ```
+
+- **Controllers are thin**: a controller method must only validate the request, delegate to a service, and map the result to a response. Business rules, orchestration logic, and data access must not live in a controller — extract them to a service or handler.
+- **One type per file**: every `class`, `record`, `interface`, `enum`, and `struct` lives in its own file named after the type. Do not append new types to an existing file — create a new file. The only exception is private nested types that are tightly coupled to their enclosing type and not used elsewhere.
+- **Member ordering within a type** (top → bottom):
+  1. `public` / `internal` constants and static fields
+  2. `public` / `internal` instance fields and auto-properties
+  3. Constructor(s)
+  4. `public` / `internal` methods and properties
+  5. `protected` fields, properties, and methods
+  6. `private` fields and properties
+  7. `private` methods
+     Never interleave private members with public ones — all private fields/methods stay at the bottom.
 
 ## Reference Map
 
@@ -76,7 +94,6 @@ Console.WriteLine(await response.Content.ReadAsStringAsync()); // add this to se
 Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
 ```
 
-
 ## Deliverable Expectations
 
 When implementing changes:
@@ -86,6 +103,7 @@ When implementing changes:
 - Provide exact validation commands run, or clearly state what could not be run.
 
 **If JetBrains Rider MCP is available**, enhance verification with:
+
 - `mcp__jetbrains__get_file_problems <file>` on each touched file — Rider inspection results; catches issues before running `dotnet build`
 - `mcp__jetbrains__reformat_file <file>` — apply IDE formatting after significant edits
 - `mcp__jetbrains__rename_refactoring` — project-wide semantic rename (covers interface impls, mocks, generated code) instead of manual find+replace
