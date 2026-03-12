@@ -71,6 +71,11 @@ if [ ! -f "sonar-project.properties" ]; then
   )
 fi
 
+# Pick up extra args from caller (e.g. sonar.inclusions for diff mode)
+if [ -n "${SONAR_EXTRA_ARGS:-}" ]; then
+  SCANNER_ARGS+=($SONAR_EXTRA_ARGS)
+fi
+
 echo "═══════════════════════════════════════"
 echo "SonarQube Frontend Scanner"
 echo "═══════════════════════════════════════"

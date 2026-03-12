@@ -5,7 +5,11 @@
       "Bash(tail:*)",
       "Bash(ls:*)",
       "Bash(make validate-sync:*)",
-      "mcp__ide__getDiagnostics"
+      "mcp__ide__getDiagnostics",
+      "Bash(chmod +x /Users/nhat.tran/.local/share/my-claude-code/infra/sonarqube/check-health.sh)",
+      "Bash(chmod +x /Users/nhat.tran/.local/share/my-claude-code/infra/sonarqube/check-token.sh)",
+      "Bash(chmod +x /Users/nhat.tran/.local/share/my-claude-code/infra/sonarqube/sonar-scan.sh)",
+      "Bash(python3 -c \"\nimport json\nwith open\\('/Users/nhat.tran/Work/worktrees/Regrinding/AI/workAi/.sonar/results.json'\\) as f:\n    d = json.load\\(f\\)\nprint\\('total:', d.get\\('total'\\)\\)\nprint\\('keys in issue[0]:', list\\(d['issues'][0].keys\\(\\)\\)\\)\nprint\\(\\)\nprint\\('sample issue:'\\)\nprint\\(json.dumps\\(d['issues'][0], indent=2\\)\\)\n\")"
     ]
   },
   "sandbox": {

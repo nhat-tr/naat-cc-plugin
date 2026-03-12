@@ -17,7 +17,7 @@ Use this skill to implement production-safe .NET changes with repository-first c
 
 ## Inspect Constraints First
 
-Run these checks before choosing patterns:
+Run these checks before choosing patterns
 
 - `rg --files -g '*.csproj'`
 - `rg -n '<TargetFramework|<TargetFrameworks|<LangVersion|<Nullable|<TreatWarningsAsErrors' -g '*.csproj'`

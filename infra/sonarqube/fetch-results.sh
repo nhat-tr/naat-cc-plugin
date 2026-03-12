@@ -149,4 +149,91 @@ fetch_issues
 gate_exit=0
 fetch_quality_gate || gate_exit=$?
 
+# Fetch all issues and write formatted report to .sonar/
+mkdir -p .sonar
+RAW_FILE=".sonar/raw.json"
+REPORT_FILE=".sonar/issues.md"
+
+curl -sf $AUTH_HEADER \
+  "$SONAR_URL/api/issues/search?projectKeys=$PROJECT_KEY&resolved=false&ps=500" \
+  -o "$RAW_FILE" 2>/dev/null || echo '{"issues":[],"total":0}' > "$RAW_FILE"
+
+python3 - "$RAW_FILE" "$REPORT_FILE" "$PROJECT_KEY" << 'PYEOF'
+import json, sys
+from datetime import datetime, timezone
+from collections import defaultdict
+
+raw_file, report_file, project_key = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(raw_file) as f:
+    data = json.load(f)
+
+# Traditional severity → normalised level (BLOCKER/CRITICAL=HIGH, MAJOR=MEDIUM, MINOR/INFO=LOW)
+TRAD_MAP = {"BLOCKER": "HIGH", "CRITICAL": "HIGH", "MAJOR": "MEDIUM", "MINOR": "LOW", "INFO": "LOW"}
+SEV_ORDER  = {"HIGH": 0, "MEDIUM": 1}   # LOW filtered out
+QUAL_ORDER = {"SECURITY": 0, "RELIABILITY": 1, "MAINTAINABILITY": 2}
+
+def resolve_severity(issue):
+    """Return (normalised_severity, quality) or None if LOW/filtered."""
+    # Modern: use highest-severity impact
+    best_sev, best_qual = None, None
+    for imp in issue.get("impacts", []):
+        s = imp["severity"]
+        if s not in SEV_ORDER: continue
+        if best_sev is None or SEV_ORDER[s] < SEV_ORDER[best_sev]:
+            best_sev, best_qual = s, imp["softwareQuality"]
+    if best_sev:
+        return best_sev, best_qual
+
+    # Fallback: traditional severity field
+    trad = TRAD_MAP.get(issue.get("severity", ""), "LOW")
+    if trad not in SEV_ORDER:
+        return None
+    qual = issue.get("type", "CODE_SMELL").replace("_", " ").title()
+    return trad, qual
+
+def strip_component(c):
+    return c.split(":", 1)[-1] if ":" in c else c
+
+groups = defaultdict(lambda: defaultdict(list))
+for issue in data.get("issues", []):
+    resolved = resolve_severity(issue)
+    if resolved:
+        groups[resolved[0]][resolved[1]].append(issue)
+
+total = data.get("total", 0)
+counts = {s: sum(len(v) for v in groups[s].values()) for s in SEV_ORDER}
+actionable = sum(counts.values())
+project_name = project_key.split("_", 1)[-1] if "_" in project_key else project_key
+
+out = []
+out.append(f"# Sonar Report · {project_name}")
+out.append(f"_{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} · "
+           f"{actionable} actionable of {total} total "
+           f"({counts.get('HIGH',0)} high · {counts.get('MEDIUM',0)} medium)_\n")
+
+if actionable == 0:
+    out.append("✅ No actionable issues (all LOW/INFO).")
+else:
+    for sev in ["HIGH", "MEDIUM"]:
+        if sev not in groups: continue
+        out.append(f"## {sev} ({counts[sev]})\n")
+        for qual in sorted(groups[sev], key=lambda q: QUAL_ORDER.get(q, 99)):
+            issues = sorted(groups[sev][qual], key=lambda i: strip_component(i["component"]))
+            out.append(f"### {qual} ({len(issues)})\n")
+            for i in issues:
+                path = strip_component(i["component"])
+                line = i.get("line") or i.get("textRange", {}).get("startLine", "?")
+                rule = i.get("rule", "").split(":")[-1]
+                out.append(f"- **{path}:{line}** `{rule}`  \n  {i['message']}")
+            out.append("")
+
+with open(report_file, "w") as f:
+    f.write("\n".join(out) + "\n")
+
+print(f"  {actionable} actionable ({counts.get('HIGH',0)} high · {counts.get('MEDIUM',0)} medium) of {total} total")
+PYEOF
+
+echo ""
+echo "Report: $(pwd)/$REPORT_FILE"
+
 exit $gate_exit
