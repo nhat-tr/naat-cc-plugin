@@ -125,6 +125,19 @@ if [[ "${1:-}" == "--uninstall" ]]; then
         fi
     done
 
+    # Remove symlinked skills
+    for d in "$PLUGIN_DIR"/skills/*/; do
+        skill_name="$(basename "$d")"
+        name="$skill_name.md"
+        target="$COMMANDS_DIR/$name"
+        [[ -f "$PLUGIN_DIR/commands/$name" ]] && continue
+        if [[ -L "$target" ]]; then
+            rm "$target"
+            info "Removed skill: $name"
+            ((removed++))
+        fi
+    done
+
     # Remove copied contexts
     for f in "$PLUGIN_DIR"/contexts/*.md; do
         name="$(basename "$f")"
@@ -218,6 +231,47 @@ for f in "$PLUGIN_DIR"/commands/*.md; do
     ((installed++))
 done
 
+# --- Skills (symlink SKILL.md as <skill-name>.md in commands) ---
+echo ""
+echo -e "${BOLD}Skills${NC}"
+for d in "$PLUGIN_DIR"/skills/*/; do
+    skill_name="$(basename "$d")"
+    f="$d/SKILL.md"
+    name="$skill_name.md"
+    target="$COMMANDS_DIR/$name"
+
+    if [[ ! -f "$f" ]]; then
+        warn "  $skill_name/ (no SKILL.md, skipping)"
+        continue
+    fi
+
+    # Don't overwrite a command wrapper that already covers this name
+    if [[ -f "$PLUGIN_DIR/commands/$name" ]]; then
+        warn "  $name (shadowed by commands/$name, skipping)"
+        ((skipped++))
+        continue
+    fi
+
+    if [[ -L "$target" ]]; then
+        existing="$(readlink "$target")"
+        if [[ "$existing" == "$f" ]]; then
+            warn "  $name (already linked)"
+            ((skipped++))
+            continue
+        else
+            warn "  $name exists -> $existing (overwriting)"
+            rm "$target"
+        fi
+    elif [[ -f "$target" ]]; then
+        warn "  $name exists (regular file, backing up to $target.bak)"
+        mv "$target" "$target.bak"
+    fi
+
+    ln -s "$f" "$target"
+    info "  $name"
+    ((installed++))
+done
+
 # --- Contexts (copy — small files, no symlink needed) ---
 echo ""
 echo -e "${BOLD}Contexts${NC}"
@@ -264,7 +318,7 @@ echo "  Agents:   $AGENTS_DIR/"
 echo "  Commands: $COMMANDS_DIR/"
 echo "  Contexts: $CONTEXTS_DIR/"
 echo ""
-echo "Skills are loaded automatically from plugin.json."
+echo "  Skills:   $COMMANDS_DIR/<skill-name>.md (symlinked from skills/)"
 echo ""
 
 # --- Shell aliases for contexts ---

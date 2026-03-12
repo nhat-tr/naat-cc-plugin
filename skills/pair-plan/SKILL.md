@@ -1,6 +1,6 @@
 ---
 name: pair-plan
-description: V1.2 Draft or update `.pair/plan.md` for the agentic pair-programming protocol. Two-phase: Phase 1 writes a high-level draft and stops for human review; Phase 2 expands to full stream detail after confirmation.
+description: V1.2 Draft or update `.pair/plan.md` for the agentic pair-programming protocol. Two-phase Phase 1 writes a high-level draft and stops for human review; Phase 2 expands to full stream detail after confirmation.
 ---
 
 # Pair Plan
@@ -41,6 +41,7 @@ Read `.pair/status.json` field `waiting_for`:
 The sketcher's first response to a new request is NEVER a sketch. It is a problem restatement + assumption list. The human confirms or corrects before the sketcher writes anything.
 
 This is unconditional — no matter how clear the request seems. The sketcher must:
+
 1. Restate the problem in its own words (no solution language)
 2. List every technical assumption it made that would change the approach if wrong
 3. State genuine unknowns as questions
@@ -51,6 +52,7 @@ Only after the human confirms does the sketcher write `.pair/plan.md`.
 ### Clarification Gate (Phase 2 — planner)
 
 **Before detail expansion, you must know:**
+
 - which solution direction the human chose
 - which surface or owner the feature belongs to
 - any user-visible, API, data, migration, or compatibility expectations
@@ -59,6 +61,7 @@ Only after the human confirms does the sketcher write `.pair/plan.md`.
 If any answer is missing and could change the approach, streams, ownership, or acceptance criteria, ask up to 3 concise questions and stop. Do not expand the plan on optimistic assumptions.
 
 **Phase 1 (initial mode — sketcher):**
+
 1. Do **not** read the codebase. Use only the task description, `.pair/context.md`, and prior sketch feedback.
 2. First response: prove understanding (restatement + assumptions). Do NOT write `.pair/plan.md` yet.
 3. After human confirms: write `.pair/plan.md` with high-level content only: Task, Intent Check, Proposed Approach (prose), Proposed Streams (names + one-liner, no file paths), Key Risks, Acceptance Criteria.
@@ -66,11 +69,14 @@ If any answer is missing and could change the approach, streams, ownership, or a
 5. Set `waiting_for = "plan-detail"` in `.pair/status.json` via direct jq write (no pair-signal.sh). Stop.
 
 **Phase 2 (`plan-detail` mode):**
+
 1. Read existing high-level `.pair/plan.md`.
 2. Expand in-place: Implementation Context, Stream Graph, per-stream task checkboxes with file paths, complexity estimates, Review Boundaries, Acceptance Criteria.
-3. Update `.pair/stream-log.md`. Stop (no signal).
+3. For each stream, list concrete test names under a **Tests:** section. Use real method names in the project's naming convention (e.g. `Action_WhenScenario_ThenExpectation` for NUnit). Every test name must reflect a real behaviour being verified — no placeholder names.
+4. Update `.pair/stream-log.md`. Stop (no signal).
 
 **`plan-update` mode:**
+
 1. Read `.pair/review.md` and `.pair/plan.md`.
 2. Address all BLOCKER and IMPORTANT findings.
 3. Update `.pair/stream-log.md`.
@@ -84,25 +90,31 @@ If any answer is missing and could change the approach, streams, ownership, or a
 # Task: [title]
 
 ## Intent Check
+
 - Outcome: [one sentence]
 - Primary scenario: [one sentence]
 - Out of scope: [one sentence]
 - Constraints / preferences: [one sentence or "none stated"]
 
 ## Context
+
 Why we're doing this — 2-3 sentences.
 
 ## Proposed Approach
+
 Prose description of the solution strategy. No file paths.
 
 ## Rough Stream Breakdown
+
 - Stream 1: [name] — [one-line description]
 - Stream 2: [name] — [one-line description]
 
 ## Key Risks & Decisions Needed
+
 - [risk or open question]
 
 ## Open Questions
+
 - [only non-blocking questions if any remain]
 ```
 
@@ -114,10 +126,13 @@ Prose description of the solution strategy. No file paths.
 # Task: [title]
 
 ## Context
+
 Why we're doing this. Links to relevant code.
 
 ## Implementation Context
+
 <!-- REQUIRED — implementer runs as a sub-agent with no conversation history. -->
+
 - **Language / Framework:** [e.g. C# .NET 10 / NUnit]
 - **Key decisions from planning:** [decisions made in conversation not obvious from code]
 - **Patterns to follow:** [e.g. "primary constructors — see UserService.cs"]
@@ -125,31 +140,44 @@ Why we're doing this. Links to relevant code.
 - **Non-obvious constraints:** [e.g. "MIT/Apache-2 licenses only"]
 
 ## Stream Graph
+
 Streams 1, 2 → parallel (no shared files)
 Stream 3 → after Stream 1 (depends on X)
 
 ## Streams
 
 ### Stream 1: [name] — complexity: M
+
 **Depends on:** none
+
 - [ ] Task 1.1: [description] — files: `path/to/file` — **S**
 - [ ] Task 1.2: [description] — files: `path/to/file` — **M**
+- **Tests:**
+  - `MethodName_WhenScenario_ThenExpectation`
+  - `MethodName_WhenScenario_ThenExpectation`
 - **Review boundary**
 
 ### Stream 2: [name] — complexity: S
+
 **Depends on:** none
+
 - [ ] Task 2.1: [description] — files: `path/to/file` — **S**
+- **Tests:**
+  - `MethodName_WhenScenario_ThenExpectation`
 - **Review boundary**
 
 ## Open Questions
+
 - [question] — impact: [which stream/task]
 
 ## Acceptance Criteria
+
 - [ ] Tests pass (relevant scope)
 - [ ] No new lint errors
 - [ ] [domain-specific criterion]
 
 ## Risks & Decisions Needed
+
 - Risk: [risk] -> mitigation: [mitigation]
 ```
 
