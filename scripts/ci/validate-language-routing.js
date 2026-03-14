@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 /**
- * Validate C#/.NET + TypeScript React routing references remain wired for Claude and Codex.
+ * Validate language routing references remain wired for Claude and Codex.
+ *
+ * Agents must reference a routing source (~/.claude/CLAUDE.md or .pair/context.md)
+ * that contains absolute paths to skill files. They don't need to name skill files
+ * directly — the routing source is the indirection layer.
+ *
+ * Infrastructure files (install scripts, runtime-asset-map) must still reference
+ * skill file paths directly since they ARE the routing source.
  */
 
 const fs = require('fs');
@@ -9,51 +16,43 @@ const path = require('path');
 const ROOT_DIR = process.env.ROOT_DIR || path.join(__dirname, '../..');
 
 const checks = [
+  // Agents: must reference a routing source (CLAUDE.md or .pair/context.md)
+  // and mention "Language Rule Routing" or "Global Language Rules"
   {
     file: 'agents/pair-implementer.md',
-    mustInclude: [
-      'csharp-dotnet/SKILL.md',
-      'typescript/SKILL.md',
-      '[Action]_When[Scenario]_Then[Expectation]',
-      '~/.claude/CLAUDE.md',
-    ],
+    mustInclude: ['.pair/context.md', 'Language Rule Routing'],
   },
   {
     file: 'agents/pair-reviewer.md',
-    mustInclude: [
-      'csharp-dotnet/SKILL.md',
-      'typescript/SKILL.md',
-      '~/.claude/CLAUDE.md',
-    ],
-  },
-  {
-    file: 'agents/sonar-analyst.md',
-    mustInclude: [
-      'csharp-dotnet/SKILL.md',
-      'typescript/SKILL.md',
-      '~/.claude/CLAUDE.md',
-    ],
+    mustInclude: ['.pair/context.md', 'Language Rule Routing'],
   },
   {
     file: 'agents/code-reviewer.md',
-    mustInclude: [
-      'csharp-dotnet/SKILL.md',
-      'typescript/SKILL.md',
-      '[Action]_When[Scenario]_Then[Expectation]',
-      'typescript/references/react-next.md',
-      '~/.claude/CLAUDE.md',
-    ],
+    mustInclude: ['~/.claude/CLAUDE.md', 'Language Rule Routing'],
   },
   {
     file: 'agents/pair-programmer.md',
+    mustInclude: ['~/.claude/CLAUDE.md', 'Language Rule Routing'],
+  },
+
+  // SKILL.md: must be the single source of truth with key rules
+  {
+    file: 'skills/csharp-dotnet/SKILL.md',
     mustInclude: [
-      'csharp-dotnet/SKILL.md',
-      'typescript/SKILL.md',
+      'Non-Negotiable Rules',
+      'CancellationToken',
+      'AsNoTracking',
+      'async void',
+      'IHttpClientFactory',
+      'IDisposable',
       '[Action]_When[Scenario]_Then[Expectation]',
-      'typescript/references/react-next.md',
-      '~/.claude/CLAUDE.md',
+      'No FluentAssertions',
+      'MIT / Apache-2.0',
+      'captive dependencies',
     ],
   },
+
+  // Infrastructure: must still reference skill paths (they ARE the routing)
   {
     file: 'metadata/runtime-asset-map.yaml',
     mustInclude: [
@@ -66,7 +65,7 @@ const checks = [
   {
     file: 'install-codex.sh',
     mustInclude: [
-      'GLOBAL_AGENTS_FILE="$CODEX_DIR/AGENTS.md"',
+      'CODEX_DIR/AGENTS.md',
       'ROUTING_BLOCK_START="<!-- BEGIN nhat-dev-toolkit:language-routing -->"',
       'csharp-dotnet/SKILL.md',
       'typescript/SKILL.md',

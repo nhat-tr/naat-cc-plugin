@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# CLI wrapper for Elasticsearch log search.
+# Usage: kibana-logs [env] <<< '{"size":50,"query":{"bool":{"must":[{"term":{"level.keyword":"Error"}}]}}}'
+#        ELASTIC_INDEX=logstash-orangehub-regrinding kibana-logs qss <<< '{"size":10,"query":{"range":{"@timestamp":{"gte":"now-1h"}}}}'
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+exec tsx "$SCRIPT_DIR/../infra/kibana/kibana-search.ts" "$@"

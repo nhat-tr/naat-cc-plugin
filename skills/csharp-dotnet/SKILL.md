@@ -3,107 +3,152 @@ name: csharp-dotnet
 description: C# and .NET implementation guidance for backend, API, and data-layer work. Use when writing or modifying C# code, designing ASP.NET Core endpoints, configuring dependency injection, implementing EF Core queries or model configuration, applying async and concurrency patterns, or writing NUnit tests. Start by matching existing repository conventions and target framework constraints; use .NET 10 and C# 14 patterns only when compatible.
 ---
 
-# C# / .NET Implementation Workflow
+# C# / .NET — Single Source of Truth
 
-Use this skill to implement production-safe .NET changes with repository-first compatibility.
+All C#/.NET rules live here. Agents, reviewers, and pair sessions reference this file — they do not redefine these rules.
 
-## Execute This Workflow
+## 1. Inspect Constraints First
 
-1. Inspect repository constraints before editing.
-2. Match the existing architecture and coding conventions.
-3. Load only the reference file(s) needed for the current task.
-4. Implement the smallest change that solves the request.
-5. Validate with build and test commands, then report any unverified areas.
-
-## Inspect Constraints First
-
-Run these checks before choosing patterns
+Before choosing patterns, check the repo:
 
 - `rg --files -g '*.csproj'`
-- `rg -n '<TargetFramework|<TargetFrameworks|<LangVersion|<Nullable|<TreatWarningsAsErrors' -g '*.csproj'`
+- `rg -n '<TargetFramework|<LangVersion|<Nullable|<TreatWarningsAsErrors' -g '*.csproj'`
 - `rg -n 'NUnit|xunit|MSTest|FluentAssertions|NSubstitute|Moq|Testcontainers' -g '*.csproj'`
-- `rg -n 'AddDbContext|UseSqlServer|UseNpgsql|UseSqlite|MapGroup|AddControllers' src tests`
 
-**If JetBrains Rider MCP is available** (`mcp__jetbrains__*` tools present in your tool list), use these instead:
+**If JetBrains Rider MCP is available** (`mcp__jetbrains__*` tools):
+- `mcp__jetbrains__get_project_modules` — lists all projects
+- `mcp__jetbrains__get_project_dependencies <module>` — NuGet packages per project
+- `mcp__jetbrains__get_file_problems <file>` — Rider inspections on touched files
+- `mcp__jetbrains__reformat_file <file>` — apply formatting after edits
+- `mcp__jetbrains__rename_refactoring` — project-wide semantic rename
 
-- `mcp__jetbrains__get_project_modules` — lists all projects with paths (replaces `rg --files -g '*.csproj'`)
-- `mcp__jetbrains__get_project_dependencies <module>` — NuGet packages per project (replaces rg on `.csproj`)
+If the repo is not on .NET 10 / C# 14, preserve compatibility — do not force upgrades.
 
-If the repository is not on .NET 10 or C# 14, preserve compatibility and avoid forcing upgrades.
+## 2. Non-Negotiable Rules
 
-## Apply Guardrails
+These apply to ALL C# work — implementation, review, pairing, planning. No exceptions.
 
-- Prefer repository conventions over generic templates.
-- Prefer primary constructors for new services when the repository uses them.
-- Propagate `CancellationToken` through async call chains.
-- Use `AsNoTracking` for read-only EF queries.
-- Use structured logging message templates instead of string interpolation.
-- Always wrap `LogDebug` calls in an `if (logger.IsEnabled(LogLevel.Debug))` guard — no exceptions, regardless of argument cost.
-- Remove dead code and unused `using` directives while touching files.
-- Add `using` imports rather than writing fully qualified type names inline (e.g. `new AuthenticationHeaderValue(...)` not `new System.Net.Http.Headers.AuthenticationHeaderValue(...)`).
-- Prefer EF Core data annotations (`[Key]`, `[MaxLength]`, `[Required]`, `[Column]`, `[Table]`, `[ForeignKey]`, `[Index]`) over `IEntityTypeConfiguration` classes. Only use fluent configuration for things attributes can't express (composite keys, owned types, query filters, table splitting, many-to-many with payload, `HasPrecision`). For value conversions, prefer a reusable converter attribute over fluent `HasConversion`.
-- **Prefer `DbContext` directly over the Repository pattern with EF Core.** EF Core's `DbSet<T>` and LINQ already provide a queryable, unit-of-work abstraction — wrapping it in a generic `IRepository<T>` adds indirection with no benefit. Only introduce a dedicated repository class when it encapsulates non-trivial, reusable query logic that would otherwise be duplicated across multiple services; in that case, make it a concrete, named class (e.g. `OrderQueryService`), not a generic `IRepository<T>` interface.
-- **Never edit generated EF migration files directly** (the `*.cs` file or its `*.Designer.cs`). Always use `dotnet ef` commands to create, update, or remove migrations:
-  - Add migration: `dotnet ef migrations add <MigrationName> [--project <proj>] [--startup-project <proj>]`
-  - Update existing model snapshot: remove the migration and re-add it — `dotnet ef migrations remove` then `dotnet ef migrations add <MigrationName>`
-  - If a migration needs a custom SQL step (e.g. seed data, rename), add it via `migrationBuilder.Sql(...)` _only_ inside a freshly generated migration — never hand-edit the `Up`/`Down` scaffold of an existing one.
-- Prefer `AddScoped` over `AddSingleton`; use `Singleton` only when the type is truly stateless and thread-safe — think carefully.
-- Prefer `JsonSerializerOptions` / naming policies over `[JsonPropertyName]` attribute decoration.
-- Avoid broad refactors unless explicitly requested.
-- Use `System.Threading.Lock` for explicit lock objects:
-- Use source-generated regex for hot paths:
-- Use `field` keyword in property accessors when normalization or validation is needed:
+When applying these rules, **readability is the tiebreaker**. A rule that makes code harder to understand in context should be noted but not blindly followed. Prefer:
+- Linear flow over callbacks/indirection
+- Explicit over implicit
+- Named intermediate values over long chains
+- Early returns over deep nesting
+- Fewer abstractions until duplication forces one
 
-```csharp
-public string Email
-{
-    get;
-    set => field = value?.Trim().ToLowerInvariant()
-        ?? throw new ArgumentNullException(nameof(value));
-}
-```
+### Async
 
-- **Controllers are thin**: a controller method must only validate the request, delegate to a service, and map the result to a response. Business rules, orchestration logic, and data access must not live in a controller — extract them to a service or handler.
-- **One type per file**: every `class`, `record`, `interface`, `enum`, and `struct` lives in its own file named after the type. Do not append new types to an existing file — create a new file. The only exception is private nested types that are tightly coupled to their enclosing type and not used elsewhere.
-- **Member ordering within a type** (top → bottom):
-  1. `public` / `internal` constants and static fields
-  2. `public` / `internal` instance fields and auto-properties
+- Propagate `CancellationToken` through every async call chain
+- **No `async void`** — only valid for event handlers; causes unobservable exceptions
+- **No sync-over-async** — never use `.Result`, `.Wait()`, `.GetAwaiter().GetResult()` (blocks threads, causes starvation)
+- **No fire-and-forget** — every `Task` returned must be `await`ed
+- Use `Task.WhenAll` for independent concurrent work
+
+### Resource Management
+
+- **Use `using` / `await using`** for all `IDisposable` / `IAsyncDisposable` — no leaks
+- **Never `new HttpClient()` per request** — use `IHttpClientFactory` (prevents socket exhaustion)
+- External API calls must go through a typed client interface, not scattered `HttpClient` usage
+
+### EF Core
+
+- `AsNoTracking()` for all read-only queries
+- **No N+1** — use `Include()` for related data; use `AsSplitQuery()` for multiple collection includes (prevents cartesian explosion)
+- **No `FromSqlRaw` with string concatenation** — use `FromSql($"...")` interpolation (SQL injection)
+- **No client-side evaluation** — avoid `AsEnumerable()` or premature `ToList()` before filtering
+- DbContext lifetime must be **Scoped** (not Singleton — it's not thread-safe)
+- Prefer data annotations (`[Key]`, `[MaxLength]`, `[Required]`, `[Column]`, `[Table]`, `[ForeignKey]`, `[Index]`) over `IEntityTypeConfiguration`. Use fluent only for: composite keys, owned types, query filters, table splitting, many-to-many with payload, `HasPrecision`
+- **Prefer `DbContext` directly for simple queries.** Extract a named query class (e.g. `OrderQueries`) when the same complex query appears in 2+ services or when scattering queries across services hurts readability
+- **Never edit generated migration files** — use `dotnet ef migrations add/remove`
+
+### Logging
+
+- Use structured message templates — **no string interpolation** in log calls
+- **Always** gate `LogDebug` with `if (logger.IsEnabled(LogLevel.Debug))` — no exceptions
+- `LogInformation` / `LogWarning` / `LogError` don't need guards
+
+### Dependency Injection
+
+- Prefer `AddScoped` over `AddSingleton` — Singleton only when truly stateless and thread-safe
+- **No captive dependencies** — never inject Scoped/Transient into a Singleton
+- **No service locator** — don't use `IServiceProvider.GetService<T>()` to resolve dependencies
+- **No `new`-ing services** — everything through DI (breaks testability)
+- Register services by module using extension methods; keep `Program.cs` focused on composition
+- Prefer `JsonSerializerOptions` / naming policies over per-property `[JsonPropertyName]`
+- Use options objects for external config (not scattered string keys)
+
+### ASP.NET Core
+
+- **Controllers are thin** — validate request, delegate to service, map response. No business logic
+- Middleware ordering matters: `UseAuthentication` before `UseAuthorization`, `UseRouting` before `UseEndpoints`
+- Apply authorization at group level (not per-endpoint) to avoid missing endpoints
+- Use policy-based authorization over role checks
+- Use built-in Minimal API validation (`[Required]`, `[Range]`); FluentValidation only if already adopted
+
+### Testing — NUnit
+
+- **Test naming: `[Action]_When[Scenario]_Then[Expectation]`**
+- Follow Arrange-Act-Assert structure
+- Use `Assert.That` with constraint model (`Is.EqualTo`, `Is.True`, etc.) — not `Assert.AreEqual`
+- Use `Assert.Multiple` to group related assertions
+- Use `Assert.ThrowsAsync<T>` for async exception tests (not `Assert.Throws<T>`)
+- **No FluentAssertions** — use NUnit constraint model
+- **No AutoMapper** — map explicitly
+- Use test categories (`[UnitTest]`, `[IntegrationTest]`, `[StagingOnly]`) for CI filtering
+- Prefer Testcontainers for integration tests over shared databases
+- Use `WebApplicationFactory` for full API integration tests
+
+### Packages
+
+- **MIT / Apache-2.0 licenses only** — no commercial NuGet packages
+
+## 3. Code Style
+
+- Match existing repository conventions — inspect actual code before assuming patterns
+- Prefer primary constructors when the parameter list stays short (≤4). For larger dependency lists, use traditional constructors with `readonly` fields
+- **One type per file** — unless types are tightly coupled and more readable together (e.g., discriminated union variants, a record + its nested builder, private nested types)
+- **Member ordering** (top → bottom):
+  1. Public/internal constants and static fields
+  2. Public/internal instance fields and auto-properties
   3. Constructor(s)
-  4. `public` / `internal` methods and properties
-  5. `protected` fields, properties, and methods
-  6. `private` fields and properties
-  7. `private` methods
-     Never interleave private members with public ones — all private fields/methods stay at the bottom.
+  4. Public/internal methods and properties
+  5. Protected fields, properties, methods
+  6. Private fields and properties
+  7. Private methods
+- Add `using` imports — **never** write fully qualified type names inline
+- Replace magic values with named constants (`nameof()`, `const` fields)
+- Remove dead code: unused `using`, parameters, variables, commented-out blocks
+- No exception swallowing — empty `catch` or catching `Exception` without logging/rethrowing
+- LINQ: no `ToList()` before `Where()`, no multiple enumerations, use `Any()` not `Count() > 0`
+- Avoid broad refactors unless explicitly requested
 
-## Reference Map
+### C# 14 Features (when repo supports)
 
-Read only what is relevant:
+- `field` keyword in property accessors for validation/normalization
+- `System.Threading.Lock` for explicit lock objects
+- Source-generated regex for hot paths
+- Null-conditional assignment (`x?.Prop = value;`)
 
-- `references/project-and-style.md`: solution layout, naming, constants, async, and general coding conventions.
-- `references/di-and-api-clients.md`: DI module registration and external API client patterns.
-- `references/aspnet-core-10.md`: Minimal API and API-layer patterns.
-- `references/testing-nunit.md`: unit and integration testing patterns with NUnit and Testcontainers.
+## 4. Reference Files
+
+Read only what's relevant to the current task:
+
+- `references/project-and-style.md` — solution layout, naming, constants, async examples
+- `references/di-and-api-clients.md` — DI module registration, typed HTTP clients, options pattern
+- `references/aspnet-core-10.md` — Minimal API patterns, validation, auth
+- `references/testing-nunit.md` — test setup examples, categories, Testcontainers, WebApplicationFactory
+
+## 5. Verification
+
+- Build: `dotnet build`
+- Test: `dotnet test` (or `dotnet test --filter "TestCategory=UnitTest"`)
+- If JetBrains Rider MCP is available: run `mcp__jetbrains__get_file_problems` on touched files
 
 ### Debugging failing tests
 
-When an HTTP assertion fails without a clear reason (e.g. unexpected 400/404/500), always read the response body before asserting to see the actual error detail:
+When an HTTP assertion fails without a clear reason, read the response body before asserting:
 
 ```csharp
 var response = await HttpClient.PostAsJsonAsync(...);
-Console.WriteLine(await response.Content.ReadAsStringAsync()); // add this to see the error
+Console.WriteLine(await response.Content.ReadAsStringAsync());
 Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.OK));
 ```
-
-## Deliverable Expectations
-
-When implementing changes:
-
-- Explain compatibility decisions (for example, why a .NET 10 feature was used or skipped).
-- Add or update tests when behavior changes.
-- Provide exact validation commands run, or clearly state what could not be run.
-
-**If JetBrains Rider MCP is available**, enhance verification with:
-
-- `mcp__jetbrains__get_file_problems <file>` on each touched file — Rider inspection results; catches issues before running `dotnet build`
-- `mcp__jetbrains__reformat_file <file>` — apply IDE formatting after significant edits
-- `mcp__jetbrains__rename_refactoring` — project-wide semantic rename (covers interface impls, mocks, generated code) instead of manual find+replace

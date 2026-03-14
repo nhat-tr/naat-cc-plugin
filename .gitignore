@@ -13,6 +13,17 @@ Thumbs.db
 .env
 .env.*
 
+# Dependencies
+node_modules/
+package-lock.json
+
+# Python
+__pycache__/
+*.pyc
+
+# Pair protocol state
+.pair/
+
 # Temporary
 *.tmp
 tasks/

@@ -237,3 +237,4 @@ echo ""
 echo "Report: $(pwd)/$REPORT_FILE"
 
 exit $gate_exit
+

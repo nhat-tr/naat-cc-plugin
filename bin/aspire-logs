@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# CLI wrapper for Aspire structured log search (local OTLP JSONL).
+# Usage: aspire-logs --resource RG-Core --level Error --last 5m
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+exec tsx "$SCRIPT_DIR/../infra/aspire/aspire-logs.ts" "$@"

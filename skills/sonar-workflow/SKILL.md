@@ -30,15 +30,12 @@ Use this skill for SonarQube analysis sessions in Codex.
 8. Once approved, read flagged source files and explain findings with context.
 9. End with quality gate summary and verdict.
 
-## Language Routing
+## Language Routing (REQUIRED)
 
-- C# / .NET work:
-  - `../csharp-dotnet/SKILL.md`
-  - `../csharp-dotnet/references/testing-nunit.md`
-  - NUnit test method names: `[Action]_When[Scenario]_Then[Expectation]`
-- TypeScript React / Next work:
-  - `../typescript/SKILL.md`
-  - `../typescript/references/react-next.md`
+Read `~/.claude/CLAUDE.md` (Claude Code) or `~/.codex/AGENTS.md` / `~/.agents/AGENTS.md` (Codex) → find the absolute path under "Global Language Rules" → `Read` that skill file. All rules in section 2 (Non-Negotiable Rules) apply when interpreting SonarQube findings.
+
+- **C# / .NET**: Read the C# skill file + testing reference.
+- **TypeScript / React / Next**: Read the TypeScript skill file + react-next reference.
 
 ## Rules
 

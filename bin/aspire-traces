@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# CLI wrapper for Aspire distributed trace search (local OTLP JSONL).
+# Usage: aspire-traces --resource DT-Core --errors --last 5m
+#        aspire-traces --id <traceId>
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+exec tsx "$SCRIPT_DIR/../infra/aspire/aspire-traces.ts" "$@"

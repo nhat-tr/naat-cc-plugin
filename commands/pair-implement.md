@@ -4,35 +4,44 @@ description: Implement the current stream or fix review findings. Reads `.pair/s
 
 # Pair Implement
 
-Implement code or fix review findings using the **pair-implementer** agent.
+Execute these instructions directly. Do NOT spawn a subagent.
 
-## What This Command Does
+## First Steps
 
-1. Reads `.pair/status.json` to determine mode (implement or fix)
-2. In **implement** mode: implements plan tasks up to the review boundary
-3. In **fix** mode: addresses BLOCKER and IMPORTANT findings from `.pair/review.md`
-4. Runs targeted checks when feasible
-5. **Updates `.pair/stream-log.md`** — append what changed, files touched, verification result, decisions made
-6. **Simplify**: run `/simplify` to review changed code for quality and clean up any issues found
-7. **Signal readiness**: update the stream log first, then write the current `dispatch_id` to `.pair/.ready`:
-   ```bash
-   jq -r '.dispatch_id' .pair/status.json > .pair/.ready
-   ```
-   The orchestrator handles all signaling. Do not call `pair-signal.sh`.
+1. Read `.pair/status.json` — check `waiting_for` (implement or fix)
+2. Read the language skill file from your CLAUDE.md "Global Language Rules" section (the absolute path is there)
+3. Read `.pair/plan.md` — `## Implementation Context` section first, then find the current stream
+4. If fix mode: read `.pair/review.md`
+5. Read `.pair/stream-log.md` — **last 2 entries only**: run `grep -n "^###" .pair/stream-log.md | tail -2` to get line offsets, read from the earlier one
 
-## When to Use
+## Mode
 
-- `.pair/status.json` says `waiting_for = "implement"` or `waiting_for = "fix"`
-- A stream is approved and ready for implementation, or review findings need fixing
+- **`implement`**: First stream with unchecked tasks, up to `**Review boundary**`
+- **`fix`**: Address BLOCKER and IMPORTANT from `.pair/review.md` (NITs optional unless cheap)
 
-## Usage
+## Workflow
 
-```text
-/pair-implement
-/pair-implement Implement the current stream
-```
+1. Identify current stream. Output: `## Stream N: [name]`
+2. Implement tasks. Mark each done: `bash ~/.dotfiles/scripts/pair-check.sh "Task ID"`
+3. Keep changes scoped to current stream
+4. Verify (language-specific):
+   - **C#**: `dotnet build`, then `dotnet test --filter <filter>`. If JetBrains MCP available: `mcp__jetbrains__get_file_problems` + `mcp__jetbrains__reformat_file` on touched files
+   - **TypeScript**: `tsc --noEmit`, then test runner from config
+   - **Rust**: `cargo check` + `cargo test` + `cargo clippy`
+   - **Python**: `pytest` + type checker
+5. Run `/simplify` to review changed code for quality and clean up any issues found
+6. **Update `.pair/stream-log.md`** — append `### YYYY-MM-DD HH:MM UTC — Stream N: implement/fix`:
+   - Agent: `claude / <model>`
+   - Language detected, skill path used
+   - What changed, files touched, key decisions
+   - Verification result (or why skipped)
+7. **Signal**: `jq -r '.dispatch_id' .pair/status.json > .pair/.ready`
 
-## Important
+## Rules
 
-- Keep changes scoped to the current stream.
-- Do **not** write `.pair/review.md` (reviewer step owns that file).
+- Do NOT write `.pair/status.json` directly
+- Do NOT write `.pair/review.md`
+- One change at a time, verify before next
+- If stuck after 2 attempts, stop and report
+- No optimistic assumptions — read code before claiming anything
+- Do not write `.ready` before updating stream log

@@ -16,15 +16,12 @@ You are a senior code reviewer. You review code across C#/.NET, TypeScript, Rust
 5. **Apply language-specific checks** — Use the relevant checklist below.
 6. **Report findings** — Use the output format at the bottom. Only report issues with >80% confidence.
 
-## Language Rule Routing (REQUIRED)
+## Language Rule Routing (REQUIRED — do this BEFORE reviewing any code)
 
-Skill file paths are in `~/.claude/CLAUDE.md` under "Global Language Rules". Read that file, find the absolute path for the language, then read the skill file.
+Read `~/.claude/CLAUDE.md` → find the absolute path under "Global Language Rules" → `Read` that skill file.
 
-- **C# / .NET (`.cs`, `.csproj`, test projects)**:
-  - Read the `csharp-dotnet/SKILL.md` skill file and `csharp-dotnet/references/testing-nunit.md`
-  - NUnit test method names must follow: `[Action]_When[Scenario]_Then[Expectation]`
-- **TypeScript React / Next (`.ts`, `.tsx`)**:
-  - Read the `typescript/SKILL.md` skill file and `typescript/references/react-next.md`
+- **C# / .NET** (`.cs`, `.csproj`): Read the C# skill file + testing reference. All rules in section 2 (Non-Negotiable Rules) are mandatory.
+- **TypeScript / React / Next** (`.ts`, `.tsx`): Read the TypeScript skill file + react-next reference.
 
 ## Confidence-Based Filtering
 
@@ -58,6 +55,8 @@ These MUST be flagged regardless of language:
 ---
 
 ## C# / .NET Checks
+
+> **All rules are defined in `csharp-dotnet/SKILL.md` section 2.** This section adds review-specific severity ratings and code examples for flagging violations.
 
 ### Async (CRITICAL)
 - **`async void`** — causes unobservable exceptions. Only valid for event handlers. Everything else must return `Task` or `ValueTask`.
@@ -362,6 +361,49 @@ public bool IsExpired() => DateTime.UtcNow > _expiresAt;
 
 // GOOD: injectable TimeProvider
 public bool IsExpired(TimeProvider time) => time.GetUtcNow() > _expiresAt;
+```
+
+### Readability (HIGH)
+
+Flag these in new or modified code. Readability is the top priority — see `csharp-dotnet/SKILL.md` section 2 preamble.
+
+- **Method requires scrolling to understand** — if the reader has to scroll past the method boundaries, extract named steps that describe what each block does
+- **Nesting deeper than 2 levels** — use early returns, guard clauses, or extract a named method
+- **Unnamed boolean expressions** — conditions with 2+ clauses should be assigned to a named variable or extracted to a method: `var isEligible = user.IsActive && !user.IsBanned;`
+- **Long LINQ/method chain** — chains exceeding ~3 operations without intermediate named variables hurt scanability. Break into named steps.
+- **Parameter list > 4 on new methods** — introduce a request/options object
+
+```csharp
+// BAD: deep nesting, hard to follow
+public async Task ProcessOrder(Order order, CancellationToken ct)
+{
+    if (order.Items.Any())
+    {
+        foreach (var item in order.Items)
+        {
+            if (item.IsAvailable)
+            {
+                if (item.Quantity > 0)
+                {
+                    await _inventory.ReserveAsync(item, ct);
+                }
+            }
+        }
+    }
+}
+
+// GOOD: early returns, flat flow, reads top-to-bottom
+public async Task ProcessOrder(Order order, CancellationToken ct)
+{
+    if (!order.Items.Any())
+        return;
+
+    var availableItems = order.Items
+        .Where(i => i.IsAvailable && i.Quantity > 0);
+
+    foreach (var item in availableItems)
+        await _inventory.ReserveAsync(item, ct);
+}
 ```
 
 ---

@@ -1,0 +1,65 @@
+{
+  "metadata": {
+    "generated": "2026-03-13T15:30:02.651Z",
+    "commit": "062fc6e",
+    "config": "/Users/nhat.tran/.local/share/my-claude-code/infra/observability-index/configs/dotnet.yaml",
+    "tier": 1
+  },
+  "entries": [
+    {
+      "file": "tests/fixtures/TraceService.cs",
+      "line": 16,
+      "namespace": "Acme.Tracing",
+      "class": "TraceService",
+      "method": "RunTracedAsync",
+      "spanName": "TraceService.RunTracedAsync",
+      "pattern": "RunInActivity"
+    },
+    {
+      "file": "tests/fixtures/TraceService.cs",
+      "line": 25,
+      "namespace": "Acme.Tracing",
+      "class": "TraceService",
+      "method": "HandleEventAsync",
+      "spanName": "",
+      "pattern": "RunInEventHandlingSpan",
+      "eventType": "SomeEvent"
+    },
+    {
+      "file": "tests/fixtures/TraceService.cs",
+      "line": 33,
+      "namespace": "Acme.Tracing",
+      "class": "TraceService",
+      "method": "PublishAsync",
+      "spanName": "my.exchange",
+      "pattern": "RunInEventPublishingSpan"
+    },
+    {
+      "file": "tests/fixtures/TraceService.cs",
+      "line": 42,
+      "namespace": "Acme.Tracing",
+      "class": "TraceService",
+      "method": "GraphQlRequestAsync",
+      "spanName": "",
+      "pattern": "RunGraphQLRequestInActivity"
+    },
+    {
+      "file": "tests/fixtures/TraceService.cs",
+      "line": 51,
+      "namespace": "Acme.Tracing",
+      "class": "TraceService",
+      "method": "GetProductAsync",
+      "spanName": "TraceService.GetProduct",
+      "pattern": "RunGraphQLRequestInActivity"
+    },
+    {
+      "file": "tests/fixtures/TraceService.cs",
+      "line": 56,
+      "namespace": "Acme.Tracing",
+      "class": "TraceService",
+      "method": "StartManualSpan",
+      "spanName": "TraceService.ManualSpan",
+      "pattern": "StartActivity"
+    }
+  ]
+}

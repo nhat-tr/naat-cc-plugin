@@ -1,0 +1,55 @@
+# Default .NET extraction pattern config.
+# Per-project override: place .observability/extractor.yaml in the project root.
+# Per-project configs can use `extends: dotnet` to add patterns on top of these defaults.
+
+file_globs: ["**/*.cs"]
+exclude_globs:
+  - "**/bin/**"
+  - "**/obj/**"
+  - "**/node_modules/**"
+  - "**/*.Tests/**"
+  - "**/*.DummyData/**"
+include_submodules: true
+
+patterns:
+  - name: "ILogger structured"
+    category: log
+    # Matches: _logger.LogInformation("template {Placeholder}", args)
+    # Also matches: _logger.LogInformation($"interpolated {expr}") — flagged as unstructured by analyzer
+    regex: '(?<receiver>_?[a-zA-Z][a-zA-Z0-9]*)\.(?<method>Log(?<level>Information|Warning|Error|Debug|Critical|Trace))\(\s*\$?"(?<template>[^"]+)"'
+    structured: detect   # inspect template for {Placeholder} tokens; $"..." prefix = unstructured
+
+  - name: "Serilog static"
+    category: log
+    # Matches: Log.Information("text"), Serilog.Log.Error("text")
+    regex: '(?:Serilog\.)?Log\.(?<level>Information|Warning|Error|Fatal|Debug|Verbose)\(\s*"(?<template>[^"]+)"'
+    structured: detect
+
+  - name: "RunInActivity"
+    category: trace
+    # Matches: .RunInActivity("SpanName", ...) — literal string span name
+    regex: '\.RunInActivity\(\s*"(?<spanName>[^"]+)"'
+
+  - name: "RunInEventHandlingSpan"
+    category: trace
+    # Matches: .RunInEventHandlingSpan(args, typeof(ConcreteEvent).Name, ...) or "spanName"
+    # Note: when typeof(TEvent).Name is used with a generic TEvent, spanName capture will be empty.
+    regex: '\.RunInEventHandlingSpan\([^,]+,\s*(?:typeof\((?<eventType>[^)]+)\)\.Name|"(?<spanName>[^"]+)")'
+
+  - name: "StartActivity"
+    category: trace
+    # Matches: .StartActivity("SpanName"), .StartActivity($"..."), .StartActivity(name: $"...")
+    # Captures literal span names directly; for $"nameof(...)" patterns, captures the interpolated template
+    regex: '\.StartActivity\(\s*(?:name:\s*)?\$?"(?<spanName>[^"]+)"'
+
+  - name: "RunInEventPublishingSpan"
+    category: trace
+    # Matches any call to .RunInEventPublishingSpan(... — span name is always passed via exchange/routingKey,
+    # not a string literal, so spanName will be empty. The call site itself is the observable artifact.
+    regex: '\.RunInEventPublishingSpan\((?:\s*"(?<spanName>[^"]+)")?'
+
+  - name: "RunGraphQLRequestInActivity"
+    category: trace
+    # Matches any call to .RunGraphQLRequestInActivity(... — operationName is typically a variable.
+    # spanName captured only when a literal string is the first arg; otherwise empty.
+    regex: '\.RunGraphQLRequestInActivity\((?:\s*"(?<spanName>[^"]+)")?'

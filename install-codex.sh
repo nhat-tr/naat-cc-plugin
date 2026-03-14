@@ -2,8 +2,12 @@
 # install-codex.sh — Install nhat-dev-toolkit skills for Codex.
 #
 # Usage:
-#   ./install-codex.sh              Install skills to ~/.codex/skills
+#   ./install-codex.sh              Install skills
 #   ./install-codex.sh --uninstall  Remove installed skill symlinks
+#
+# Installs to BOTH discovery paths:
+#   ~/.codex/skills/     (legacy Codex path)
+#   ~/.agents/skills/    (current Codex discovery path)
 
 set -euo pipefail
 
@@ -17,9 +21,10 @@ done
 PLUGIN_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 
 CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
-SKILLS_DIR="$CODEX_DIR/skills"
+AGENTS_DIR="$HOME/.agents"
+SKILLS_DIRS=("$CODEX_DIR/skills" "$AGENTS_DIR/skills")
 SRC_SKILLS_DIR="$PLUGIN_DIR/skills"
-GLOBAL_AGENTS_FILE="$CODEX_DIR/AGENTS.md"
+GLOBAL_INSTRUCTION_FILES=("$CODEX_DIR/AGENTS.md" "$AGENTS_DIR/AGENTS.md")
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -93,21 +98,24 @@ if [[ "${1:-}" == "--uninstall" ]]; then
   echo ""
 
   removed=0
-  for src in "$SRC_SKILLS_DIR"/*; do
-    [[ -d "$src" ]] || continue
-    [[ -f "$src/SKILL.md" ]] || continue
+  for skills_dir in "${SKILLS_DIRS[@]}"; do
+    [[ -d "$skills_dir" ]] || continue
+    for src in "$SRC_SKILLS_DIR"/*; do
+      [[ -d "$src" ]] || continue
+      [[ -f "$src/SKILL.md" ]] || continue
 
-    name="$(basename "$src")"
-    target="$SKILLS_DIR/$name"
+      name="$(basename "$src")"
+      target="$skills_dir/$name"
 
-    if [[ -L "$target" ]]; then
-      link_target="$(readlink "$target")"
-      if [[ "$link_target" == "$src" ]]; then
-        rm "$target"
-        info "Removed skill: $name"
-        ((removed+=1))
+      if [[ -L "$target" ]]; then
+        link_target="$(readlink "$target")"
+        if [[ "$link_target" == "$src" ]]; then
+          rm "$target"
+          info "Removed skill: $name (from $skills_dir)"
+          ((removed+=1))
+        fi
       fi
-    fi
+    done
   done
 
   if [[ $removed -eq 0 ]]; then
@@ -117,51 +125,105 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     info "Uninstalled $removed skills."
   fi
 
-  remove_managed_block "$GLOBAL_AGENTS_FILE"
-  info "Removed managed language routing block: $GLOBAL_AGENTS_FILE"
+  for gf in "${GLOBAL_INSTRUCTION_FILES[@]}"; do
+    remove_managed_block "$gf"
+    info "Removed managed block: $gf"
+  done
 
   exit 0
 fi
 
 echo -e "${BOLD}Installing nhat-dev-toolkit skills for Codex${NC}"
 echo -e "Source: $PLUGIN_DIR"
-echo -e "Target: $SKILLS_DIR"
+echo -e "Targets: ${SKILLS_DIRS[*]}"
 echo ""
-
-mkdir -p "$SKILLS_DIR"
 
 installed=0
 skipped=0
+pruned=0
 
-for src in "$SRC_SKILLS_DIR"/*; do
-  [[ -d "$src" ]] || continue
-  [[ -f "$src/SKILL.md" ]] || continue
+# Only install skills that are Codex-compatible.
+# Source of truth: metadata/runtime-asset-map.yaml
+# - codex.workflow_skills: review-workflow, planner-workflow,
+#   architect-workflow, discovery-workflow, sonar-workflow
+# - shared_language_skills: csharp-dotnet, typescript, rust, python, security-review
+#
+# Skills NOT installed (Claude Code-only):
+# - pair-plan, pair-implement, pair-review, pair-review-eco, pair-plan-challenge
+#   (require .pair/ state, /clear command, jq, sub-agent orchestration)
+# - observability-index (requires npx tsx, mcp__embedcode__ tools)
+# - get-api-docs (requires chub CLI)
+CODEX_SKILLS=(
+  review-workflow
+  planner-workflow
+  architect-workflow
+  discovery-workflow
+  sonar-workflow
+  csharp-dotnet
+  typescript
+  rust
+  python
+  security-review
+)
 
-  name="$(basename "$src")"
-  target="$SKILLS_DIR/$name"
+for skills_dir in "${SKILLS_DIRS[@]}"; do
+  mkdir -p "$skills_dir"
+  echo -e "${BOLD}  $skills_dir${NC}"
 
-  if [[ -L "$target" ]]; then
-    existing="$(readlink "$target")"
-    if [[ "$existing" == "$src" ]]; then
-      warn "$name (already linked)"
-      ((skipped+=1))
-      continue
-    else
-      warn "$name exists -> $existing (overwriting symlink)"
-      rm "$target"
+  # --- Prune stale skills (retired from repo or dropped from allowlist) ---
+  for target in "$skills_dir"/*/; do
+    [[ -L "${target%/}" ]] || continue
+    link_target="$(readlink "${target%/}")"
+    [[ "$link_target" == "$SRC_SKILLS_DIR/"* ]] || continue
+    name="$(basename "${target%/}")"
+    found=0
+    for allowed in "${CODEX_SKILLS[@]}"; do
+      [[ "$name" == "$allowed" ]] && found=1 && break
+    done
+    if [[ $found -eq 0 ]]; then
+      rm "${target%/}"
+      warn "  $name (retired — removed stale symlink)"
+      ((pruned++))
     fi
-  elif [[ -e "$target" ]]; then
-    backup="$target.bak"
-    warn "$name exists (backing up to $backup)"
-    mv "$target" "$backup"
-  fi
+  done
 
-  ln -s "$src" "$target"
-  info "$name"
-  ((installed+=1))
+  # --- Install skills ---
+  for name in "${CODEX_SKILLS[@]}"; do
+    src="$SRC_SKILLS_DIR/$name"
+    target="$skills_dir/$name"
+
+    if [[ ! -d "$src" ]] || [[ ! -f "$src/SKILL.md" ]]; then
+      warn "  $name (not found in source, skipping)"
+      continue
+    fi
+
+    if [[ -L "$target" ]]; then
+      existing="$(readlink "$target")"
+      if [[ "$existing" == "$src" ]]; then
+        warn "  $name (already linked)"
+        ((skipped+=1))
+        continue
+      else
+        warn "  $name exists -> $existing (overwriting)"
+        rm "$target"
+      fi
+    elif [[ -e "$target" ]]; then
+      warn "  $name exists (backing up to $target.bak)"
+      mv "$target" "$target.bak"
+    fi
+
+    ln -s "$src" "$target"
+    info "  $name"
+    ((installed+=1))
+  done
+  echo ""
 done
 
+# --- Language routing in both global instruction files ---
 routing_block="$(cat <<EOF
+## Code Priority (nhat-dev-toolkit)
+- When choosing between approaches, optimize in this order: **readability → maintainability → correctness patterns → performance**. Prefer the obvious solution over the clever one. If a rule makes code harder to understand in context, note the tradeoff and choose readability.
+
 ## Global Language Rules (nhat-dev-toolkit)
 - For any C#/.NET task (*.cs, *.csproj, *.sln, or dotnet commands), always load and follow $SRC_SKILLS_DIR/csharp-dotnet/SKILL.md.
 - NUnit test method names must follow [Action]_When[Scenario]_Then[Expectation].
@@ -170,12 +232,16 @@ routing_block="$(cat <<EOF
 EOF
 )"
 
-upsert_managed_block "$GLOBAL_AGENTS_FILE" "$routing_block"
-info "Updated global language routing: $GLOBAL_AGENTS_FILE"
+for gf in "${GLOBAL_INSTRUCTION_FILES[@]}"; do
+  upsert_managed_block "$gf" "$routing_block"
+  info "Updated language routing: $gf"
+done
 
 echo ""
 echo -e "${BOLD}Installation complete${NC}"
 info "Installed: $installed"
 [[ $skipped -gt 0 ]] && warn "Skipped:   $skipped (already installed)"
+[[ $pruned -gt 0 ]] && warn "Pruned:    $pruned (retired skills removed)"
 echo ""
-echo "Skills installed at: $SKILLS_DIR"
+echo "Skills installed at:"
+for sd in "${SKILLS_DIRS[@]}"; do echo "  $sd"; done

@@ -8,27 +8,22 @@ Review and fix code changed in the current stream. Do not add features. Do not t
 
 ## Steps
 
-1. Read `.pair/context.md` — project conventions, global rules, language constraints.
-   Output: `[context] context.md loaded`
-   If the file does not exist, halt and write that to the stream log before stopping.
+1. Read `.pair/stream-log.md` — **last entry only** (`grep -n "^###" .pair/stream-log.md | tail -1`) to identify which files were changed.
 
-2. Read `.pair/stream-log.md` to identify which files were changed in the current stream.
+2. Read each changed file.
 
-3. Read each changed file.
-
-4. Review and fix:
+3. Review and fix:
    - Unnecessary abstractions for single-use logic
    - Duplicated code that already exists elsewhere in the repo
    - Dead branches, unused variables, unreachable code
    - Over-complex expressions where a simpler form is equivalent
    - Missing early returns or guard clauses that reduce nesting
-   - Anything that contradicts conventions found in context.md
 
-5. Update `.pair/stream-log.md` — append `### YYYY-MM-DD HH:MM UTC — Simplify` with:
+4. Update `.pair/stream-log.md` — append `### YYYY-MM-DD HH:MM UTC — Simplify` with:
    - files reviewed
    - changes made (or "no changes needed")
 
-6. **Signal readiness**:
+5. **Signal readiness**:
    ```bash
    jq -r '.dispatch_id' .pair/status.json > .pair/.ready
    ```

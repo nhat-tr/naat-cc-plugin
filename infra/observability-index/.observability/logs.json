@@ -1,0 +1,243 @@
+{
+  "metadata": {
+    "generated": "2026-03-13T15:30:02.651Z",
+    "commit": "062fc6e",
+    "config": "/Users/nhat.tran/.local/share/my-claude-code/infra/observability-index/configs/dotnet.yaml",
+    "tier": 1
+  },
+  "entries": [
+    {
+      "file": "tests/fixtures/FileScopedNamespace.cs",
+      "line": 14,
+      "namespace": "Acme.FileScopedNamespace",
+      "class": "FileScopedService",
+      "method": "Execute",
+      "level": "Information",
+      "template": "Executing {CorrelationId}",
+      "structured": true,
+      "properties": [
+        "CorrelationId"
+      ],
+      "hasTraceContext": false,
+      "pattern": "ILogger structured"
+    },
+    {
+      "file": "tests/fixtures/SampleService.cs",
+      "line": 14,
+      "namespace": "Acme.Services.Orders",
+      "class": "SampleService",
+      "method": "ProcessOrderAsync",
+      "level": "Information",
+      "template": "Processing order {OrderId}",
+      "structured": true,
+      "properties": [
+        "OrderId"
+      ],
+      "hasTraceContext": false,
+      "pattern": "ILogger structured"
+    },
+    {
+      "file": "tests/fixtures/SampleService.cs",
+      "line": 15,
+      "namespace": "Acme.Services.Orders",
+      "class": "SampleService",
+      "method": "ProcessOrderAsync",
+      "level": "Debug",
+      "template": "Debug detail {OrderId} {Status}",
+      "structured": true,
+      "properties": [
+        "OrderId",
+        "Status"
+      ],
+      "hasTraceContext": false,
+      "pattern": "ILogger structured"
+    },
+    {
+      "file": "tests/fixtures/SampleService.cs",
+      "line": 16,
+      "namespace": "Acme.Services.Orders",
+      "class": "SampleService",
+      "method": "ProcessOrderAsync",
+      "level": "Warning",
+      "template": "Order {OrderId} is delayed",
+      "structured": true,
+      "properties": [
+        "OrderId"
+      ],
+      "hasTraceContext": false,
+      "pattern": "ILogger structured"
+    },
+    {
+      "file": "tests/fixtures/SampleService.cs",
+      "line": 17,
+      "namespace": "Acme.Services.Orders",
+      "class": "SampleService",
+      "method": "ProcessOrderAsync",
+      "level": "Error",
+      "template": "Order {OrderId} failed with {ErrorCode}",
+      "structured": true,
+      "properties": [
+        "OrderId",
+        "ErrorCode"
+      ],
+      "hasTraceContext": false,
+      "pattern": "ILogger structured"
+    },
+    {
+      "file": "tests/fixtures/SampleService.cs",
+      "line": 22,
+      "namespace": "Acme.Services.Orders",
+      "class": "SampleService",
+      "method": "SendUnstructured",
+      "level": "Error",
+      "template": "Unexpected error: ",
+      "structured": false,
+      "properties": [],
+      "hasTraceContext": false,
+      "pattern": "ILogger structured"
+    },
+    {
+      "file": "tests/fixtures/SampleService.cs",
+      "line": 27,
+      "namespace": "Acme.Services.Orders",
+      "class": "SampleService",
+      "method": "SendInterpolated",
+      "level": "Information",
+      "template": "Interpolated {val} message",
+      "structured": false,
+      "properties": [],
+      "hasTraceContext": false,
+      "pattern": "ILogger structured"
+    },
+    {
+      "file": "tests/fixtures/SerilogService.cs",
+      "line": 7,
+      "namespace": "Acme.Infrastructure.Logging",
+      "class": "SerilogService",
+      "method": "DoWork",
+      "level": "Information",
+      "template": "Starting work for {Key}",
+      "structured": true,
+      "properties": [
+        "Key"
+      ],
+      "hasTraceContext": false,
+      "pattern": "Serilog static"
+    },
+    {
+      "file": "tests/fixtures/SerilogService.cs",
+      "line": 8,
+      "namespace": "Acme.Infrastructure.Logging",
+      "class": "SerilogService",
+      "method": "DoWork",
+      "level": "Warning",
+      "template": "Value {Value} is below threshold",
+      "structured": true,
+      "properties": [
+        "Value"
+      ],
+      "hasTraceContext": false,
+      "pattern": "Serilog static"
+    },
+    {
+      "file": "tests/fixtures/SerilogService.cs",
+      "line": 9,
+      "namespace": "Acme.Infrastructure.Logging",
+      "class": "SerilogService",
+      "method": "DoWork",
+      "level": "Error",
+      "template": "Critical failure for {Key}: {Value}",
+      "structured": true,
+      "properties": [
+        "Key",
+        "Value"
+      ],
+      "hasTraceContext": false,
+      "pattern": "Serilog static"
+    },
+    {
+      "file": "tests/fixtures/SerilogService.cs",
+      "line": 14,
+      "namespace": "Acme.Infrastructure.Logging",
+      "class": "SerilogService",
+      "method": "DoUnstructured",
+      "level": "Error",
+      "template": "Unexpected error: ",
+      "structured": false,
+      "properties": [],
+      "hasTraceContext": false,
+      "pattern": "Serilog static"
+    },
+    {
+      "file": "tests/fixtures/SerilogService.cs",
+      "line": 15,
+      "namespace": "Acme.Infrastructure.Logging",
+      "class": "SerilogService",
+      "method": "DoUnstructured",
+      "level": "Fatal",
+      "template": "Fatal error: ",
+      "structured": false,
+      "properties": [],
+      "hasTraceContext": false,
+      "pattern": "Serilog static"
+    },
+    {
+      "file": "tests/fixtures/TraceService.cs",
+      "line": 18,
+      "namespace": "Acme.Tracing",
+      "class": "TraceService",
+      "method": "RunTracedAsync",
+      "level": "Information",
+      "template": "Running traced operation {Input}",
+      "structured": true,
+      "properties": [
+        "Input"
+      ],
+      "hasTraceContext": true,
+      "pattern": "ILogger structured"
+    },
+    {
+      "file": "tests/fixtures/TraceService.cs",
+      "line": 27,
+      "namespace": "Acme.Tracing",
+      "class": "TraceService",
+      "method": "HandleEventAsync",
+      "level": "Information",
+      "template": "Handling event {EventId}",
+      "structured": true,
+      "properties": [
+        "EventId"
+      ],
+      "hasTraceContext": true,
+      "pattern": "ILogger structured"
+    },
+    {
+      "file": "tests/fixtures/TraceService.cs",
+      "line": 35,
+      "namespace": "Acme.Tracing",
+      "class": "TraceService",
+      "method": "PublishAsync",
+      "level": "Information",
+      "template": "Publishing to {Exchange}",
+      "structured": true,
+      "properties": [
+        "Exchange"
+      ],
+      "hasTraceContext": true,
+      "pattern": "ILogger structured"
+    },
+    {
+      "file": "tests/fixtures/TraceService.cs",
+      "line": 57,
+      "namespace": "Acme.Tracing",
+      "class": "TraceService",
+      "method": "StartManualSpan",
+      "level": "Information",
+      "template": "Manual span started",
+      "structured": false,
+      "properties": [],
+      "hasTraceContext": true,
+      "pattern": "ILogger structured"
+    }
+  ]
+}

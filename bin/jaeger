@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# CLI wrapper for Jaeger trace search.
+# Usage: jaeger [env] <<< '{"action":"services"}'
+#        echo '{"action":"search","service":"X","tags":"error=true"}' | jaeger oae
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+exec tsx "$SCRIPT_DIR/../infra/jaeger/jaeger-search.ts" "$@"

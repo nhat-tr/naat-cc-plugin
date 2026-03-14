@@ -4,11 +4,35 @@ description: Token-efficient stream review using diff-first analysis. Same BLOCK
 
 # Pair Review (Eco)
 
-Use the **pair-reviewer-eco** agent via the Agent tool (`subagent_type: "pair-reviewer-eco"`).
+Execute these instructions directly. Do NOT spawn a subagent.
 
-The agent checks eco scope first — if the stream is L/XL or introduces new behavior, it will recommend switching to the full `pair-reviewer`. Otherwise it reviews diff-first with minimal reads and writes `.pair/review.md`.
+**Review only. NEVER implement code. NEVER run builds or tests.** Diff-first, minimal reads.
 
-## When to Use
+## Eco Scope Check (FIRST)
 
-- `.pair/status.json` says `waiting_for = "review"`
-- Stream is S or M complexity: refactor, rename, config, wiring, tests for existing behavior
+**USE eco only if**: S/M complexity, mechanical (refactor/rename/config/wiring/tests for existing behavior), diff <300 lines of non-trivial logic.
+
+**STOP and recommend full `/pair-review` if**: L/XL complexity, new behavior, cross-cutting concerns, diff >300 lines.
+
+## Steps
+
+1. Run `git diff` — this is your primary input
+2. Read `.pair/plan.md` — review boundary + acceptance criteria only
+3. If fix cycle: read `.pair/review.md` — verify previous BLOCKERs addressed
+4. If diff raises a question, make ONE targeted read to confirm
+
+Do NOT read: stream-log, language skill files, source files speculatively.
+
+## Severity
+
+Same as full review: BLOCKER / IMPORTANT / NIT.
+
+## Output (`.pair/review.md`)
+
+Same format as `/pair-review`. Note `(eco mode)` in summary.
+
+## After Writing Review
+
+1. **Update `.pair/stream-log.md`** — append `### YYYY-MM-DD HH:MM UTC — Review (eco): Stream N`
+2. **Signal**: `jq -r '.dispatch_id' .pair/status.json > .pair/.ready`
+3. Reply briefly: verdict, any areas not checkable in eco mode

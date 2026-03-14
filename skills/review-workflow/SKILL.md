@@ -26,19 +26,26 @@ Use this skill for code-review sessions in Codex.
 4. Report findings by severity, then by file.
 5. End with review summary and verdict.
 
-## Language Routing
+## Language Routing (REQUIRED — do this BEFORE reviewing)
 
-- C# / .NET work:
-  - `../csharp-dotnet/SKILL.md`
-  - `../csharp-dotnet/references/testing-nunit.md`
-  - NUnit test method names: `[Action]_When[Scenario]_Then[Expectation]`
-- TypeScript React / Next work:
-  - `../typescript/SKILL.md`
-  - `../typescript/references/react-next.md`
+Read `~/.claude/CLAUDE.md` (Claude Code) or `~/.codex/AGENTS.md` / `~/.agents/AGENTS.md` (Codex) → find the absolute path under "Global Language Rules" → `Read` that skill file. All rules in section 2 (Non-Negotiable Rules) are mandatory review criteria.
+
+- **C# / .NET**: Read the C# skill file + testing reference. NUnit test names: `[Action]_When[Scenario]_Then[Expectation]`
+- **TypeScript / React / Next**: Read the TypeScript skill file + react-next reference.
+
+## Readability Checks (HIGH)
+
+Flag these in new or modified code:
+
+- Method requires scrolling to understand — extract named steps
+- Nesting deeper than 2 levels — use early returns or extract
+- Unnamed boolean expressions with 2+ clauses — assign to named variable
+- Long LINQ/method chain (>3 operations) without intermediate names
+- Parameter list > 4 on new methods — introduce request/options object
 
 ## Rules
 
-- Prioritize security and correctness over style.
+- Optimize for **readability → maintainability → correctness patterns → performance**.
 - Apply repository-convention-first gating for style/architecture findings.
 - Keep findings evidence-based with file/line references.
 - Suggest concrete fixes for each reported issue.

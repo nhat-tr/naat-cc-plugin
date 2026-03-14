@@ -14,13 +14,19 @@ Runtime/asset mapping source of truth:
 
 ## Install
 
-### Claude Code
+### Claude Code (one command)
 
 ```bash
-git clone <repo-url> ~/.claude/plugins/nhat-dev-toolkit
-cd ~/.claude/plugins/nhat-dev-toolkit
-./install.sh
+git clone <repo-url> ~/.local/share/my-claude-code && cd ~/.local/share/my-claude-code && ./install.sh
 ```
+
+The installer handles everything:
+- **Prerequisites** — checks for node >= 20, npm, kubectl (fails fast with install hints)
+- **Infra deps** — installs `tsx` globally, `@types/node` in `infra/`
+- **Claude Code integration** — symlinks agents, commands, skills, contexts into `~/.claude/`
+- **CLI tools** — symlinks `jaeger`, `grafana`, `kibana-logs` into `~/.local/bin/`
+- **CLAUDE.md** — injects language-routing block for C#, TypeScript, Rust, Python
+- **Post-install checks** — warns if `~/.local/bin` is not in PATH or kubectl has no cluster
 
 Uninstall:
 
@@ -43,7 +49,7 @@ Uninstall:
 ```
 
 Notes:
-- `install.sh` is Claude-specific and installs to `~/.claude/`.
+- `install.sh` is Claude-specific and installs to `~/.claude/` and `~/.local/bin/`.
 - `install-codex.sh` installs skill symlinks to `~/.codex/skills/`.
 - Both installers also maintain a managed language-routing block in global instruction files:
   - Codex: `~/.codex/AGENTS.md`
@@ -63,6 +69,9 @@ Notes:
 | pair-programmer | sonnet | `/pair` | Interactive pairing, writes code with you |
 | troubleshooter | sonnet | `/troubleshoot` | Systematic debugging, root cause analysis |
 | sonar-analyst | sonnet | `/sonar` | SonarQube analysis — run scanners, interpret findings, quality gate |
+| grafana-analyst | sonnet | `/grafana` | Query Grafana for service health, pod resources, dashboards |
+| jaeger-analyst | sonnet | `/jaeger` | Search OTel traces — slow spans, errors, trace waterfalls |
+| kibana-analyst | sonnet | `/kibana-logs` | Search Elasticsearch logs — ES Query DSL, trace correlation |
 
 ### Claude Code Commands
 
@@ -76,16 +85,18 @@ Notes:
 | `/troubleshoot` | Debug an issue — reproduce, isolate, hypothesize, fix |
 | `/verify` | Cross-language build/lint/test gate — PASS/FAIL report |
 | `/sonar` | SonarQube static analysis — run scanner, fetch results, explain findings |
+| `/grafana` | Query Grafana for service health metrics, pod CPU/memory, dashboards |
+| `/jaeger` | Search and diagnose OTel traces — errors, latency, trace waterfalls |
+| `/kibana-logs` | Search Elasticsearch logs — natural language to ES Query DSL |
+| `/generate-index` | Generate `.observability/logs.json` + `traces.json` for the current project |
 
 ### Codex Workflow Skills
 
 | Skill | Purpose |
 |-------|---------|
 | `review-workflow` | Uncommitted-diff code review workflow |
-| `pair-workflow` | Interactive pair-programming workflow |
 | `planner-workflow` | Planning-only phased implementation workflow |
 | `architect-workflow` | Architecture and tradeoff workflow |
-| `troubleshoot-workflow` | Systematic debugging workflow |
 | `discovery-workflow` | Evidence-first use-case discovery workflow |
 | `sonar-workflow` | SonarQube analysis and quality gate workflow |
 
@@ -98,6 +109,42 @@ Notes:
 | `rust` | thiserror/anyhow, ownership patterns, Tokio, clippy, cargo workspaces |
 | `python` | Type hints, Pydantic, FastAPI, httpx, pytest |
 | `security-review` | 10-category cross-language security checklist |
+| `observability-index` | Generate `.observability/logs.json` + `traces.json`; optional Tier 2 caller/callee enrichment via embedcode |
+
+### Observability CLI Tools
+
+All CLI tools support `--help` for full usage instructions.
+
+**Remote cluster tools** — access Grafana, Jaeger, and Elasticsearch via kubectl. Environments: `qss`, `oae`, `prod`.
+
+```bash
+# Jaeger — trace search (kubectl port-forward, no auth)
+echo '{"action":"services"}' | jaeger qss
+echo '{"action":"search","service":"X","tags":"error=true"}' | jaeger oae
+echo '{"action":"trace","id":"abc123"}' | jaeger prod
+
+# Grafana — service health and pod resources (kubectl port-forward, K8s secret auth)
+echo '{"action":"health","namespace":"regrinding"}' | grafana qss
+echo '{"action":"pods","namespace":"tlm"}' | grafana oae
+
+# Elasticsearch logs — ES Query DSL (direct ES API, K8s secret auth)
+echo '{"size":50,"query":{"term":{"level.keyword":"Error"}}}' | kibana-logs oae
+```
+
+**Local Aspire tools** — read OTLP JSON lines from the OTel collector file exporter. Requires Aspire with file exporter configured (see `LocalDevInfra` setup).
+
+```bash
+# Aspire structured logs — filtered, noise-excluded
+aspire-logs --resource DT-Core --level Error,Warning --last 5m
+aspire-logs --list-resources
+aspire-logs --resource RG-Core --grep "connection" --follow
+aspire-logs --resource RG-Core --level Error -o /tmp/diag.txt
+
+# Aspire distributed traces — filtered, text waterfalls for agent consumption
+aspire-traces --resource DT-Core --errors --last 5m
+aspire-traces --id abc123def456    # full span waterfall
+aspire-traces --resource RG-Core --min-duration 500ms
+```
 
 ### SonarQube Infrastructure
 
@@ -152,15 +199,27 @@ nhat-dev-toolkit/
 ├── .claude-plugin/
 │   └── plugin.json
 ├── agents/
+├── bin/                        CLI tools (symlinked to ~/.local/bin/)
+│   ├── aspire-logs
+  │   ├── aspire-traces
+│   ├── grafana
+│   ├── jaeger
+│   └── kibana-logs
 ├── commands/
 ├── contexts/
-├── infra/sonarqube/
-│   ├── docker-compose.yml
-│   ├── sonar-manage.sh
-│   ├── scan-dotnet.sh
-│   ├── scan-frontend.sh
-│   ├── fetch-results.sh
-│   └── templates/
+├── infra/
+│   ├── aspire/                 Aspire structured log + trace scripts
+│   ├── grafana/                Grafana query script (kubectl port-forward)
+│   ├── jaeger/                 Jaeger trace search script
+│   ├── kibana/                 Elasticsearch log search script
+│   ├── observability-index/    Index extractor (produces .observability/*.json)
+│   └── sonarqube/
+│       ├── docker-compose.yml
+│       ├── sonar-manage.sh
+│       ├── scan-dotnet.sh
+│       ├── scan-frontend.sh
+│       ├── fetch-results.sh
+│       └── templates/
 ├── metadata/
 ├── scripts/ci/
 ├── skills/

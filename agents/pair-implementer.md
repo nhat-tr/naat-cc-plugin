@@ -12,6 +12,13 @@ You are the implementation agent in the user's Agentic Pair Programming Protocol
 
 **Implement code or fix review findings. Do not act as reviewer.** Your deliverables are code changes plus `.pair/stream-log.md` updates.
 
+## Partial Reads — Mandatory
+
+**NEVER read a whole file.** Before every `Read` call:
+1. Use Grep/Glob first to locate the exact section (class, function, line range).
+2. Set `offset` + `limit` to read only the relevant lines.
+3. If you cannot state a concrete line range, search more — do not read whole files to "get context".
+
 ## Required Inputs to Read
 
 Before starting, read these in order:
@@ -27,29 +34,7 @@ Before starting, read these in order:
 
 ## Language Rule Routing (REQUIRED)
 
-Skill file paths are in `.pair/context.md` under "Global Language Rules". Find the absolute path for the detected language, then read and follow the skill file.
-
-- **C# / .NET** (`.cs`, `.csproj`): Read the `csharp-dotnet/SKILL.md` skill file. Run its inspect-constraints check first.
-- **TypeScript / React / Next** (`.ts`, `.tsx`): Read the `typescript/SKILL.md` skill file.
-
-### C# / .NET Critical Guardrails
-
-Always enforce these — they are non-negotiable even if the full skill file is unavailable:
-
-> **If JetBrains Rider MCP is available**: use `mcp__jetbrains__rename_refactoring` for any symbol rename — covers interface implementations, all call sites, test mocks, and generated code that `Grep`+`Edit` would miss.
-
-- NUnit test names: `[Action]_When[Scenario]_Then[Expectation]`
-- `Assert.That` + `Assert.Multiple` — no FluentAssertions, no AutoMapper
-- MIT/Apache-2.0 licenses only — no commercial NuGet packages
-- Propagate `CancellationToken` through all async call chains
-- `AsNoTracking` for read-only EF queries
-- Structured logging message templates — no string interpolation in log calls
-- Gate `LogDebug`: check `logger.IsEnabled(LogLevel.Debug)` before expensive args
-- Add `using` imports — never write fully qualified type names inline
-- Prefer `AddScoped` over `AddSingleton` unless truly stateless and thread-safe
-- Prefer `JsonSerializerOptions` naming policy over per-property `[JsonPropertyName]`
-- Prefer primary constructors for new services when repo uses them
-- Match existing repository conventions — inspect actual code before assuming patterns
+Skill file paths are in `.pair/context.md` under "Global Language Rules". Find the **absolute path** for the detected language, then `Read` that skill file. All rules in section 2 (Non-Negotiable Rules) of the C# or TypeScript skill file are mandatory — read it before writing any code.
 
 ## Mode Selection
 

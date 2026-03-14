@@ -28,6 +28,13 @@ This is collaborative, iterative, and fast. Not a lecture. Not a code review.
 - Don't add tests, docs, or types to code that isn't being changed right now
 - Don't over-engineer — solve the immediate problem
 
+## Partial Reads — Mandatory
+
+**NEVER read a whole file.** Before every `Read` call:
+1. Use Grep/Glob first to locate the exact section (class, function, line range).
+2. Set `offset` + `limit` to read only the relevant lines.
+3. If you cannot state a concrete line range, search more — do not read whole files to "get context".
+
 ## Session Flow
 
 1. **Understand the goal** — ask one clarifying question if truly ambiguous, otherwise start coding
@@ -36,41 +43,12 @@ This is collaborative, iterative, and fast. Not a lecture. Not a code review.
 4. **Verify** — run the relevant test or build command
 5. **Iterate** — if something's wrong, fix it. If it works, move on.
 
-## Language Rule Routing (REQUIRED)
+## Language Rule Routing (REQUIRED — do this BEFORE writing any code)
 
-Skill file paths are in `~/.claude/CLAUDE.md` under "Global Language Rules". Read that file, find the absolute path for the language, then read the skill file.
+Read `~/.claude/CLAUDE.md` → find the absolute path under "Global Language Rules" → `Read` that skill file.
 
-- **C# / .NET (`.cs`, `.csproj`, test projects)**:
-  - Read the `csharp-dotnet/SKILL.md` skill file and `csharp-dotnet/references/testing-nunit.md`
-  - NUnit test method names must follow: `[Action]_When[Scenario]_Then[Expectation]`
-- **TypeScript React / Next (`.ts`, `.tsx`)**:
-  - Read the `typescript/SKILL.md` skill file and `typescript/references/react-next.md`
-
-### C# / .NET Critical Guardrails
-
-Always enforce these — they are non-negotiable even if the full skill file is unavailable:
-
-- NUnit test names: `[Action]_When[Scenario]_Then[Expectation]`
-- `Assert.That` + `Assert.Multiple` — no FluentAssertions, no AutoMapper
-- MIT/Apache-2.0 licenses only
-- Propagate `CancellationToken` through all async call chains
-- `AsNoTracking` for read-only EF queries
-- Structured logging message templates — no string interpolation in log calls
-- Gate `LogDebug`: check `logger.IsEnabled(LogLevel.Debug)` before expensive args
-- Add `using` imports — never write fully qualified type names inline
-- Prefer `AddScoped` over `AddSingleton` unless truly stateless and thread-safe
-- Match existing repository conventions — inspect actual code before assuming patterns
-
-## Language-Specific Pairing
-
-### C# / .NET
-- Build command: `dotnet build`
-- Test command: `dotnet test`
-- Watch mode: `dotnet watch test`
-- Know the project structure — find the right `.csproj` before running commands
-- Use primary constructors for new classes
-- Follow existing DI patterns in the solution
-- Use `[Action]_When[Scenario]_Then[Expectation]` for NUnit test method names
+- **C# / .NET** (`.cs`, `.csproj`): Read the C# skill file. All rules in section 2 (Non-Negotiable Rules) are mandatory. Build: `dotnet build` · Test: `dotnet test` · Watch: `dotnet watch test`
+- **TypeScript / React / Next** (`.ts`, `.tsx`): Read the TypeScript skill file + react-next reference.
 
 ### TypeScript
 - Detect package manager from lockfile (npm/pnpm/yarn/bun)

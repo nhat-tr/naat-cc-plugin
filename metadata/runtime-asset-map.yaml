@@ -12,7 +12,7 @@ claude:
       file: commands/pair.md
       agent: pair-programmer
       agent_file: agents/pair-programmer.md
-      codex_skill: skills/pair-workflow/SKILL.md
+      # No codex_skill — pair protocol requires stateful .pair/ orchestration + sub-agents
     - name: planner
       file: commands/planner.md
       agent: planner
@@ -27,7 +27,6 @@ claude:
       file: commands/troubleshoot.md
       agent: troubleshooter
       agent_file: agents/troubleshooter.md
-      codex_skill: skills/troubleshoot-workflow/SKILL.md
     - name: discover
       file: commands/discover.md
       agent: discovery
@@ -38,6 +37,21 @@ claude:
       agent: sonar-analyst
       agent_file: agents/sonar-analyst.md
       codex_skill: skills/sonar-workflow/SKILL.md
+    - name: grafana
+      file: commands/grafana.md
+      agent: grafana-analyst
+      agent_file: agents/grafana-analyst.md
+      # No codex_skill — requires kubectl port-forward + K8s secrets
+    - name: jaeger
+      file: commands/jaeger.md
+      agent: jaeger-analyst
+      agent_file: agents/jaeger-analyst.md
+      # No codex_skill — requires kubectl port-forward
+    - name: kibana-logs
+      file: commands/kibana-logs.md
+      agent: kibana-analyst
+      agent_file: agents/kibana-analyst.md
+      # No codex_skill — requires K8s secrets for ES auth
 
 codex:
   workflow_skills:
@@ -45,10 +59,8 @@ codex:
       file: skills/review-workflow/SKILL.md
       maps_to_claude_command: commands/review.md
       maps_to_claude_agent: agents/code-reviewer.md
-    - name: pair-workflow
-      file: skills/pair-workflow/SKILL.md
-      maps_to_claude_command: commands/pair.md
-      maps_to_claude_agent: agents/pair-programmer.md
+    # pair-workflow removed — pair protocol is Claude Code-only
+    # (requires .pair/ state files, /clear command, sub-agent orchestration)
     - name: planner-workflow
       file: skills/planner-workflow/SKILL.md
       maps_to_claude_command: commands/planner.md
@@ -57,10 +69,6 @@ codex:
       file: skills/architect-workflow/SKILL.md
       maps_to_claude_command: commands/architect.md
       maps_to_claude_agent: agents/architect.md
-    - name: troubleshoot-workflow
-      file: skills/troubleshoot-workflow/SKILL.md
-      maps_to_claude_command: commands/troubleshoot.md
-      maps_to_claude_agent: agents/troubleshooter.md
     - name: discovery-workflow
       file: skills/discovery-workflow/SKILL.md
       maps_to_claude_command: commands/discover.md
