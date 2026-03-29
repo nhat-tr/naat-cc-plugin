@@ -62,9 +62,11 @@ When applying these rules, **readability is the tiebreaker**. A rule that makes 
 
 ### Logging
 
+- **Always use `[LoggerMessage]` source generator** — not `_logger.LogXxx(...)`. It avoids boxing, allocations, and string formatting when the log level is disabled. Make the class `partial` to enable it.
+- Define `[LoggerMessage]` methods as `private static partial void` at the bottom of the class, grouped together
+- For static methods that need to log, accept an `ILogger` parameter (optional with `= null` if callers shouldn't be forced to provide one)
 - Use structured message templates — **no string interpolation** in log calls
-- **Always** gate `LogDebug` with `if (logger.IsEnabled(LogLevel.Debug))` — no exceptions
-- `LogInformation` / `LogWarning` / `LogError` don't need guards
+- No manual `IsEnabled` guards — the source generator handles level checks automatically
 
 ### Dependency Injection
 
@@ -104,7 +106,8 @@ When applying these rules, **readability is the tiebreaker**. A rule that makes 
 ## 3. Code Style
 
 - Match existing repository conventions — inspect actual code before assuming patterns
-- Prefer primary constructors when the parameter list stays short (≤4). For larger dependency lists, use traditional constructors with `readonly` fields
+- **Private static readonly fields** use `_camelCase` prefix: e.g. `_ambient`, `_instance`, `_default`
+- **Prefer primary constructors** for all classes and records — including large dependency lists. Use traditional constructors with `readonly` fields only when you need constructor body logic (e.g., validation, computed fields, or conditional assignment)
 - **One type per file** — unless types are tightly coupled and more readable together (e.g., discriminated union variants, a record + its nested builder, private nested types)
 - **Member ordering** (top → bottom):
   1. Public/internal constants and static fields
@@ -114,6 +117,7 @@ When applying these rules, **readability is the tiebreaker**. A rule that makes 
   5. Protected fields, properties, methods
   6. Private fields and properties
   7. Private methods
+- **Always leave a blank line between access-level groups** (public → protected → private) of fields, properties, or methods
 - Add `using` imports — **never** write fully qualified type names inline
 - Replace magic values with named constants (`nameof()`, `const` fields)
 - Remove dead code: unused `using`, parameters, variables, commented-out blocks

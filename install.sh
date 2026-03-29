@@ -416,7 +416,7 @@ echo "  Agents:    $AGENTS_DIR/"
 echo "  Commands:  $COMMANDS_DIR/"
 echo "  Contexts:  $CONTEXTS_DIR/"
 echo "  Skills:    $COMMANDS_DIR/<skill-name>.md"
-echo "  CLI Tools: $LOCAL_BIN/{jaeger,grafana,kibana-logs,aspire-logs,aspire-traces}"
+echo "  CLI Tools: $LOCAL_BIN/{jaeger,grafana,kibana-logs,kibana-traffic,aspire-logs,aspire-traces}"
 echo "  CLAUDE.md: $GLOBAL_CLAUDE_FILE"
 echo ""
 
@@ -432,7 +432,7 @@ fi
 echo -e "${BOLD}CLI verification${NC}"
 cli_ok=0
 cli_fail=0
-for cmd in jaeger grafana kibana-logs aspire-logs aspire-traces; do
+for cmd in jaeger grafana kibana-logs kibana-traffic aspire-logs aspire-traces; do
     if "$LOCAL_BIN/$cmd" --help &>/dev/null; then
         info "  $cmd --help OK"
         ((cli_ok++))

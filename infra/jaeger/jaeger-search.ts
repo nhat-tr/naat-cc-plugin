@@ -13,8 +13,9 @@
  *   {"action": "trace", "id": "<traceID>"}
  */
 import { withPortForward } from "../kubectl-portforward.ts";
-import { apiGet, readStdinJson } from "../http.ts";
+import { apiGet, parseInlineJsonArg, readJsonInput } from "../http.ts";
 
+const inlineJson = parseInlineJsonArg();
 const ENV = process.argv[2] ?? "qss";
 const NS = "pos-tracing";
 const SVC = "pos-tracing-jaeger-query";
@@ -140,6 +141,7 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
   console.log(`jaeger — Jaeger trace search via kubectl port-forward
 
 Usage:
+  jaeger [env] -j '<json>'
   echo '<json>' | jaeger [env]
 
 Environments: qss (default), oae, prod
@@ -168,7 +170,7 @@ Examples:
   process.exit(0);
 }
 
-const q = await readStdinJson();
+const q = await readJsonInput(inlineJson);
 const action = (q.action as string) ?? "search";
 
 try {
@@ -207,7 +209,7 @@ try {
     } else if (action === "trace") {
       const id = q.id as string;
       if (!id) throw new Error("'id' required for trace action");
-      const data = await apiGet(base, `/api/trace/${id}`) as { data: Trace[] };
+      const data = await apiGet(base, `/api/traces/${id}`) as { data: Trace[] };
       printTraceDetail(data, id);
 
     } else {

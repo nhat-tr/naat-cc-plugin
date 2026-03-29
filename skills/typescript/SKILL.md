@@ -36,6 +36,8 @@ Preserve compatibility with existing framework versions and build tooling.
 - Prefer clear immutable updates over in-place mutation.
 - Replace debug `console.log` in production paths with repo-standard logging.
 - Avoid broad refactors unless explicitly requested.
+- Prefer `Number.parseInt` over global `parseInt`.
+- Prefer `globalThis` over `window` for cross-runtime compatibility.
 
 ## Reference Map
 

@@ -18,7 +18,19 @@
       "Bash(echo:*)",
       "Bash(aspire-logs:*)",
       "Bash(for cmd:*)",
-      "Bash(bash /Users/nhat.tran/.local/share/my-claude-code/install.sh 2>&1 | grep -E \"CLI|verification|Environment|OK|FAILED|PATH|kubectl|Aspire|complete\")"
+      "Bash(bash /Users/nhat.tran/.local/share/my-claude-code/install.sh 2>&1 | grep -E \"CLI|verification|Environment|OK|FAILED|PATH|kubectl|Aspire|complete\")",
+      "WebFetch(domain:www.elastic.co)",
+      "Bash(jq -c \"select\\(.type == \"\"user\"\"\\) | {msg: \\(.message.content // .message | tostring\\)[0:200]}\")",
+      "Bash(jq -r \"select\\(.type == \"\"assistant\"\"\\) | .message.content | if type == \"\"array\"\" then [.[] | select\\(.type == \"\"text\"\"\\) | .text] | join\\(\"\"\\\\n\"\"\\) else . end\")",
+      "Bash(jq -r \":*)",
+      "Bash(jq -r \"select\\(.type == \"\"progress\"\"\\) | .content[0:200]\")",
+      "Bash(jq:*)",
+      "Bash(find /Users/nhat.tran/.local/share/my-claude-code -name *observability* -o -name *playbook*)",
+      "Bash(git:*)",
+      "Read(//Users/nhat.tran/.claude/**)",
+      "Bash(find /Users/nhat.tran/.local/share/my-claude-code/skills/pair-* -type f -name \"*.md\")",
+      "Bash(aspire:*)",
+      "Bash(python3:*)"
     ],
     "deny": [
       "Read(**/.env)",

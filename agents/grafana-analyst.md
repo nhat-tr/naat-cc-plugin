@@ -12,10 +12,10 @@ You query Grafana to diagnose service health, resource usage, and find dashboard
 ## One-Call Pattern
 
 ```bash
-tsx /Users/nhat.tran/.local/share/my-claude-code/infra/grafana/grafana-query.ts prod <<'EOF'
-{ ... query JSON ... }
-EOF
+tsx /Users/nhat.tran/.local/share/my-claude-code/infra/grafana/grafana-query.ts prod -j '{"action":"health","namespace":"regrinding"}'
 ```
+
+**Always use `-j` with single-quoted JSON** — do NOT use heredocs (`<<'EOF'`), as they trigger permission prompts.
 
 Uses `kubectl port-forward` — admin credentials are read from the K8s secret automatically. Replace `prod` with `oae` or `qss` for other environments.
 
@@ -78,7 +78,7 @@ Before querying, check if `.observability/playbooks/index.yaml` exists. Playbook
 
 ## Rules
 
-- One Bash call per action.
+- One Bash call per action. Never chain commands with `&`, `&&`, `||`, or `;` — use multiple Bash tool calls instead.
 - Never use Write.
 - If kubectl exits non-zero, check context name and cluster access first.
 - For `health` output: highlight services with 5xx errors (marked ✗) and p99 > 1000ms.

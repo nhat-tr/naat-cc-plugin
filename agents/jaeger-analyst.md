@@ -16,13 +16,23 @@ If `.observability/traces.json` exists, read it to find:
 - Which service and operation to filter by
 - If you have a traceId from Kibana, go directly to trace waterfall
 
+## Correlation from Kibana
+
+When you receive a trace ID from Kibana results (from the user or from a kibana-analyst investigation):
+1. Use `{"action": "trace", "id": "<traceId>"}` for the full span waterfall.
+2. In the waterfall, focus on:
+   - Spans marked `✗ ERROR` — these are the failure points
+   - The **longest** span — often the bottleneck
+   - Service boundaries where errors originate vs. where they propagate
+3. The `t:<id>` tag from Kibana output is the full Jaeger-compatible trace ID — use it directly.
+
 ## One-Call Pattern
 
 ```bash
-tsx /Users/nhat.tran/.local/share/my-claude-code/infra/jaeger/jaeger-search.ts qss <<'EOF'
-{ ... query JSON ... }
-EOF
+tsx /Users/nhat.tran/.local/share/my-claude-code/infra/jaeger/jaeger-search.ts qss -j '{"action":"search","service":"..."}'
 ```
+
+**Always use `-j` with single-quoted JSON** — do NOT use heredocs (`<<'EOF'`), as they trigger permission prompts.
 
 Uses `kubectl port-forward` directly — no browser cookies required. Replace `qss` with `oae` or `prod` for other environments.
 
@@ -78,10 +88,28 @@ Services follow the pattern `<service-name>-v2.<namespace>` or `<namespace>.<ser
 
 Common namespaces: `regrinding`, `tlm`, `tlm-generic`, `identity-data-hub`, `order-data-hub`, `product-data-hub`
 
+## Retention Awareness
+
+Jaeger trace retention is typically limited (often 1-2 days in production). Before running tag-based searches for older date ranges:
+
+1. Run a quick unfiltered search for the target service with `lookback: "7d"` and `limit: 5`.
+2. Check the oldest trace timestamp in the results.
+3. If the oldest trace is newer than the requested date range, **stop searching** — the traces have been purged. Report the retention limit and skip further tag-based queries.
+
+Do NOT exhaustively try different tag formats when the underlying data isn't retained.
+
+## Tag Search Strategy
+
+When searching by application-level identifiers (serial numbers, entity IDs):
+- Try at most **2 tag name variants** (e.g., `physical.id=X` and `physicalId=X`).
+- If both return 0 results and you've confirmed retention covers the date range, the identifier is not in span tags.
+- Do NOT cycle through 5+ tag name guesses — report "not found in tags" and move on.
+
 ## Rules
 
-- One Bash call per action.
+- One Bash call per action. Never chain commands with `&`, `&&`, `||`, or `;` — use multiple Bash tool calls instead.
 - Never use Write.
 - If kubectl exits non-zero, check context name and cluster access first.
 - If trace list is empty, show the query used and suggest: broader lookback, different service name, or remove duration filter.
 - For trace waterfall (`trace` action), always note which spans have errors and which are the slowest.
+- When called by the troubleshoot orchestrator, structure your output as: **Trace ID**, **root span** (service + operation + duration), **error chain** (span sequence from root to error with error tags), **verdict** (one sentence on what failed and where).

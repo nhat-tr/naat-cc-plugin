@@ -18,6 +18,24 @@ export async function apiGet(
   return res.json();
 }
 
+/** Extract and remove `-j '<json>'` from process.argv, returning the JSON string or undefined. */
+export function parseInlineJsonArg(): string | undefined {
+  const idx = process.argv.indexOf("-j");
+  if (idx === -1 || idx + 1 >= process.argv.length) return undefined;
+  const val = process.argv[idx + 1];
+  process.argv.splice(idx, 2);
+  return val;
+}
+
+/** Parse inline JSON from `-j` flag, fall back to stdin. */
+export async function readJsonInput(inlineJson?: string): Promise<Record<string, unknown>> {
+  if (inlineJson) {
+    try { return JSON.parse(inlineJson); }
+    catch { console.error("ERROR: Invalid JSON in -j argument"); process.exit(1); }
+  }
+  return readStdinJson();
+}
+
 export async function readStdinJson(): Promise<Record<string, unknown>> {
   const raw = await new Promise<string>((resolve) => {
     let buf = "";

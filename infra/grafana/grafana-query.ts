@@ -13,8 +13,9 @@
  *   {"action": "query", "expr": "sum(rate(istio_requests_total{...}[5m])) by (destination_service_name)"}
  */
 import { withPortForward, kubectlJson, resolveContext } from "../kubectl-portforward.ts";
-import { apiGet, readStdinJson } from "../http.ts";
+import { apiGet, parseInlineJsonArg, readJsonInput } from "../http.ts";
 
+const inlineJson = parseInlineJsonArg();
 const ENV = process.argv[2] ?? "qss";
 const NS = "pos-monitoring";
 const SVC = "pos-monitoring-grafana";
@@ -179,6 +180,7 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
   console.log(`grafana — Grafana diagnostics via kubectl port-forward
 
 Usage:
+  grafana [env] -j '<json>'
   echo '<json>' | grafana [env]
 
 Environments: qss (default), oae, prod
@@ -202,7 +204,7 @@ Examples:
   process.exit(0);
 }
 
-const q = await readStdinJson();
+const q = await readJsonInput(inlineJson);
 const action = (q.action as string) ?? "health";
 
 // Start credential fetch early — it runs in parallel with port-forward setup
