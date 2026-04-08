@@ -73,6 +73,29 @@ Before making code changes, inspect the app state:
 3. `aspire logs <resource>` — view console output
 4. `aspire otel traces <resource>` — view distributed traces
 
+### Inspecting span attributes (trace-inspect)
+
+For deep trace analysis (e.g. extracting `gen_ai.input.messages` from LLM spans), use the `trace-inspect.cs` script in the project's `scripts/` directory. This avoids ad-hoc `curl`-to-Jaeger calls.
+
+```bash
+# List all trace IDs
+dotnet script scripts/trace-inspect.cs -- --list --apphost <path>
+
+# Show all spans for a trace (prefix match on trace ID)
+dotnet script scripts/trace-inspect.cs -- --trace-id <prefix> --apphost <path>
+
+# Extract a specific span attribute (pretty-prints embedded JSON)
+dotnet script scripts/trace-inspect.cs -- --trace-id <prefix> --attr gen_ai.input.messages --apphost <path>
+
+# Filter spans by name (substring, case-insensitive)
+dotnet script scripts/trace-inspect.cs -- --trace-id <prefix> --span "chat gpt" --apphost <path>
+
+# Pipe mode — feed JSON from aspire otel traces directly
+aspire otel traces --format Json | dotnet script scripts/trace-inspect.cs -- --trace-id <prefix> --attr gen_ai.input.messages
+```
+
+Set `ASPIRE_APPHOST` in your environment to avoid passing `--apphost` every time. The `--apphost` flag is forwarded directly to `aspire otel traces`.
+
 ### Adding integrations
 
 Use `aspire docs search` to find integration documentation, then `aspire docs get` to read the full guide. Use `aspire add` to add the integration package to the AppHost.

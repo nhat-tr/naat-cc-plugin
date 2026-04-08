@@ -14,10 +14,22 @@ Plan only. NEVER implement code. Your primary deliverable is `.pair/plan.md`.
 - Claude command: `commands/pair-plan.md`
 - Claude agents: `agents/pair-sketcher.md` (sketch), `agents/pair-planner.md` (detail / update)
 
+## Enhanced Mode Detection
+
+Check if `.pair/spec.md` exists AND is not the default template (contains actual feature content, not just `[Feature Name]` placeholders). If so, you are in **enhanced harness mode**:
+
+- `.pair/spec.md` is the source of truth for what to build
+- Every stream MUST include a `Satisfies: F1.AC1, F2.AC3` line referencing AC IDs from the spec
+- Every AC from the spec must be covered by at least one stream
+- The plan challenge reviewer will verify AC coverage — unreferenced ACs are BLOCKER findings
+
+If `.pair/spec.md` doesn't exist or is a blank template, use classic mode (no AC traceability required).
+
 ## Mode Selection
 
 Read `.pair/status.json` field `waiting_for`:
 
+- **`plan`** (enhanced mode): Generate the full plan from `.pair/spec.md`. Use `/writing-plans` if available, with these overrides: save to `.pair/plan.md` (not `docs/superpowers/plans/`), do NOT offer execution choice, do NOT commit to git. Then signal.
 - **`plan-update`**: Challenger found blockers. Read `.pair/review.md`, address all BLOCKER and IMPORTANT findings in `.pair/plan.md`, then signal.
 - **`plan-detail`**: Human approved the high-level draft. Expand existing `.pair/plan.md` into full detail (Phase 2). Do NOT signal.
 - **anything else / initial**: Phase 1 — write high-level draft only (approach, rough stream names, risks). Set `waiting_for = "plan-detail"` in status.json and stop. Do NOT signal.

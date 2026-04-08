@@ -30,7 +30,11 @@
       "Read(//Users/nhat.tran/.claude/**)",
       "Bash(find /Users/nhat.tran/.local/share/my-claude-code/skills/pair-* -type f -name \"*.md\")",
       "Bash(aspire:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Read(//Users/nhat.tran/Work/worktrees/Regrinding/AI/workAi/**)",
+      "Bash(dotnet run:*)",
+      "Bash(dotnet tool:*)",
+      "Bash(dotnet script:*)"
     ],
     "deny": [
       "Read(**/.env)",

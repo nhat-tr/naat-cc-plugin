@@ -48,60 +48,29 @@ YELLOW='\033[0;33m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-ROUTING_BLOCK_START="<!-- BEGIN nhat-dev-toolkit:language-routing -->"
-ROUTING_BLOCK_END="<!-- END nhat-dev-toolkit:language-routing -->"
-
 info()  { echo -e "${GREEN}[+]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[x]${NC} $1" >&2; }
 
-strip_managed_block() {
-    local source_file="$1"
-    local target_file="$2"
+install_claude_md() {
+    local source="$PLUGIN_DIR/CLAUDE.md"
+    local target="$GLOBAL_CLAUDE_FILE"
 
-    awk -v start="$ROUTING_BLOCK_START" -v end="$ROUTING_BLOCK_END" '
-        $0 == start { in_block = 1; next }
-        $0 == end { in_block = 0; next }
-        !in_block { print }
-    ' "$source_file" > "$target_file"
-}
-
-upsert_managed_block() {
-    local file="$1"
-    local block="$2"
-    local stripped_file
-    local output_file
-
-    mkdir -p "$(dirname "$file")"
-    [[ -f "$file" ]] || touch "$file"
-
-    stripped_file="$(mktemp)"
-    output_file="$(mktemp)"
-
-    strip_managed_block "$file" "$stripped_file"
-
-    cat "$stripped_file" > "$output_file"
-    if [[ -s "$output_file" ]]; then
-        printf '\n' >> "$output_file"
+    if [[ ! -f "$source" ]]; then
+        error "CLAUDE.md not found in plugin directory"
+        return 1
     fi
 
-    printf '%s\n' "$ROUTING_BLOCK_START" >> "$output_file"
-    printf '%s\n' "$block" >> "$output_file"
-    printf '%s\n' "$ROUTING_BLOCK_END" >> "$output_file"
+    mkdir -p "$(dirname "$target")"
 
-    mv "$output_file" "$file"
-    rm -f "$stripped_file"
-}
+    # Back up existing file if it wasn't installed by us
+    if [[ -f "$target" ]] && ! grep -q '__PLUGIN_DIR__\|nhat-dev-toolkit' "$target" 2>/dev/null; then
+        cp "$target" "$target.bak"
+        warn "Backed up existing CLAUDE.md to $target.bak"
+    fi
 
-remove_managed_block() {
-    local file="$1"
-    local stripped_file
-
-    [[ -f "$file" ]] || return 0
-
-    stripped_file="$(mktemp)"
-    strip_managed_block "$file" "$stripped_file"
-    mv "$stripped_file" "$file"
+    sed "s|__PLUGIN_DIR__|$PLUGIN_DIR|g" "$source" > "$target"
+    info "Installed CLAUDE.md"
 }
 
 symlink_files() {
@@ -228,8 +197,14 @@ if [[ "${1:-}" == "--uninstall" ]]; then
         info "Uninstalled $removed files."
     fi
 
-    remove_managed_block "$GLOBAL_CLAUDE_FILE"
-    info "Removed managed language routing block: $GLOBAL_CLAUDE_FILE"
+    if [[ -f "$GLOBAL_CLAUDE_FILE" ]]; then
+        rm "$GLOBAL_CLAUDE_FILE"
+        info "Removed CLAUDE.md: $GLOBAL_CLAUDE_FILE"
+        if [[ -f "$GLOBAL_CLAUDE_FILE.bak" ]]; then
+            mv "$GLOBAL_CLAUDE_FILE.bak" "$GLOBAL_CLAUDE_FILE"
+            info "Restored backup: $GLOBAL_CLAUDE_FILE"
+        fi
+    fi
     exit 0
 fi
 
@@ -389,19 +364,7 @@ echo -e "${BOLD}CLI Tools${NC}"
 symlink_files "cli" "$PLUGIN_DIR/bin/*" "$LOCAL_BIN"
 
 # --- Language routing in CLAUDE.md ---
-routing_block="$(cat <<EOF
-## Code Priority (nhat-dev-toolkit)
-- When choosing between approaches, optimize in this order: **readability → maintainability → correctness patterns → performance**. Prefer the obvious solution over the clever one. If a rule makes code harder to understand in context, note the tradeoff and choose readability.
-
-## Global Language Rules (nhat-dev-toolkit)
-- For any C#/.NET task (*.cs, *.csproj, *.sln, or dotnet commands), always load and follow $PLUGIN_DIR/skills/csharp-dotnet/SKILL.md.
-- NUnit test method names must follow [Action]_When[Scenario]_Then[Expectation].
-- For any TypeScript/React task (*.ts, *.tsx, package.json, npm/pnpm/yarn commands, React or Next.js files), always load and follow $PLUGIN_DIR/skills/typescript/SKILL.md.
-- For React or Next.js implementation details, consult $PLUGIN_DIR/skills/typescript/references/react-next.md.
-EOF
-)"
-
-upsert_managed_block "$GLOBAL_CLAUDE_FILE" "$routing_block"
+install_claude_md
 
 # --- Summary ---
 echo ""

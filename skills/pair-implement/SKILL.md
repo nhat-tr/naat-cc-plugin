@@ -42,15 +42,20 @@ Read in order before starting:
    ```bash
    bash ~/.dotfiles/scripts/pair-check.sh "10.1"
    ```
-3. In **fix** mode: parse `.pair/review.md` findings into fix actions. Apply BLOCKER and IMPORTANT fixes.
+3. In **fix** mode: parse `.pair/review.md` and/or `.pair/eval-results.json` findings into fix actions. Apply BLOCKER and IMPORTANT fixes.
+   - If `.pair/eval-results.json` exists, use it as the primary guide for failed ACs and test failures.
+   - If `eval_fail_count >= 2` in `.pair/status.json`, invoke `/troubleshoot` (systematic-debugging) BEFORE attempting any fix. Do not skip this.
 4. Keep changes scoped to the current stream; log required scope exceptions.
-5. Run targeted verification using the right command for the language:
+5. **Testing approach**: Use `/superpowers:test-driven-development` for new functionality — write the failing test first, then implement. Where the test framework supports it, include AC IDs in test names (e.g., `[TestCase("F1.AC1")]`, `test.describe("F1.AC1: ...")`). This is best-effort.
+6. For complex streams with 3+ independent tasks, consider `/superpowers:dispatching-parallel-agents` to dispatch subagents for independent tasks that don't share files.
+7. Run targeted verification using the right command for the language:
    - **C#**: `dotnet build`, then `dotnet test --filter <relevant filter>`
    - **TypeScript**: `tsc --noEmit`, then detect test runner from config (jest/vitest/playwright)
    - **Rust**: `cargo check`, `cargo test`, `cargo clippy`
    - **Python**: `pytest <path>`, `mypy` or `pyright` if configured
    If unable to run, state the reason explicitly in the stream log.
-6. **Update `.pair/stream-log.md`** before signaling. Append a heading `### YYYY-MM-DD HH:MM UTC — Stream N: implement` with:
+8. Before claiming done, invoke `/superpowers:verification-before-completion` — do not claim success without running the actual verification command and checking its output.
+9. **Update `.pair/stream-log.md`** before signaling. Append a heading `### YYYY-MM-DD HH:MM UTC — Stream N: implement` with:
    - **Agent:** `codex / <model>`
    - stream/task identifier
    - what changed (or findings addressed/deferred)
@@ -58,7 +63,7 @@ Read in order before starting:
    - key decisions/tradeoffs
    - verification run and result (or why skipped)
    - blockers/questions (if any)
-7. **Signal readiness** — read `dispatch_id` from `.pair/status.json`, then write it to `.pair/.ready`:
+10. **Signal readiness** — read `dispatch_id` from `.pair/status.json`, then write it to `.pair/.ready`:
    ```bash
    jq -r '.dispatch_id' .pair/status.json > .pair/.ready
    ```
