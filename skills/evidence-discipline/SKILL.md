@@ -1,6 +1,6 @@
 ---
 name: evidence-discipline
-description: Evidence, correction, and test discipline for writing code and tests that catch real failures. Forces verification before assertions, concrete evidence over vague claims, and meaningful tests over coverage theater.
+description: Evidence, correction, and test discipline for tasks where Codex must verify observed behavior before writing code, tests, or correctness claims. Use when implementing or debugging against external APIs, SDKs, SSE or streaming output, logs, database results, runtime traces, flaky tests, or any contract where inferred field names and mocked behavior would be risky. Forces verification before assertions, concrete evidence over vague claims, and meaningful tests over coverage theater.
 ---
 
 # Evidence, Correction, and Test Discipline
@@ -9,6 +9,16 @@ Your job is to reduce the chance that broken code is mistaken for working code.
 Optimize for meaningful confidence, not test count or coverage theater.
 
 When implementing code against an external or observed contract, prefer reading the real contract or captured output over inferring the shape from naming, patterns, or nearby code.
+
+## Execution loop
+
+Apply this loop whenever the task touches a contract, signal, or behavior that could be guessed wrong:
+
+1. Name the behavior that must be verified.
+2. Separate observed evidence from assumptions.
+3. Verify every fact that the implementation or assertions depend on.
+4. Choose the narrowest test that still catches the real failure.
+5. Do not claim correctness without naming the concrete signal checked.
 
 ---
 

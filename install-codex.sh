@@ -8,6 +8,10 @@
 # Installs to BOTH discovery paths:
 #   ~/.codex/skills/     (legacy Codex path)
 #   ~/.agents/skills/    (current Codex discovery path)
+#
+# Also installs AGENTS.md to:
+#   ~/.codex/AGENTS.md
+#   ~/.agents/AGENTS.md
 
 set -euo pipefail
 
@@ -24,7 +28,7 @@ CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
 AGENTS_DIR="$HOME/.agents"
 SKILLS_DIRS=("$CODEX_DIR/skills" "$AGENTS_DIR/skills")
 SRC_SKILLS_DIR="$PLUGIN_DIR/skills"
-GLOBAL_INSTRUCTION_FILES=("$CODEX_DIR/AGENTS.md" "$AGENTS_DIR/AGENTS.md")
+GLOBAL_AGENTS_FILES=("$CODEX_DIR/AGENTS.md" "$AGENTS_DIR/AGENTS.md")
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -32,60 +36,32 @@ YELLOW='\033[0;33m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-ROUTING_BLOCK_START="<!-- BEGIN nhat-dev-toolkit:language-routing -->"
-ROUTING_BLOCK_END="<!-- END nhat-dev-toolkit:language-routing -->"
+AGENTS_MANAGED_MARKER="nhat-dev-toolkit managed global instructions template"
 
 info()  { echo -e "${GREEN}[+]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[x]${NC} $1" >&2; }
 
-strip_managed_block() {
-  local source_file="$1"
-  local target_file="$2"
+install_agents_md() {
+  local source="$PLUGIN_DIR/AGENTS.md"
+  local target
 
-  awk -v start="$ROUTING_BLOCK_START" -v end="$ROUTING_BLOCK_END" '
-    $0 == start { in_block = 1; next }
-    $0 == end { in_block = 0; next }
-    !in_block { print }
-  ' "$source_file" > "$target_file"
-}
-
-upsert_managed_block() {
-  local file="$1"
-  local block="$2"
-  local stripped_file
-  local output_file
-
-  mkdir -p "$(dirname "$file")"
-  [[ -f "$file" ]] || touch "$file"
-
-  stripped_file="$(mktemp)"
-  output_file="$(mktemp)"
-
-  strip_managed_block "$file" "$stripped_file"
-
-  cat "$stripped_file" > "$output_file"
-  if [[ -s "$output_file" ]]; then
-    printf '\n' >> "$output_file"
+  if [[ ! -f "$source" ]]; then
+    error "AGENTS.md not found in plugin directory"
+    return 1
   fi
 
-  printf '%s\n' "$ROUTING_BLOCK_START" >> "$output_file"
-  printf '%s\n' "$block" >> "$output_file"
-  printf '%s\n' "$ROUTING_BLOCK_END" >> "$output_file"
+  for target in "${GLOBAL_AGENTS_FILES[@]}"; do
+    mkdir -p "$(dirname "$target")"
 
-  mv "$output_file" "$file"
-  rm -f "$stripped_file"
-}
+    if [[ -f "$target" ]] && ! grep -q "$AGENTS_MANAGED_MARKER" "$target" 2>/dev/null; then
+      cp "$target" "$target.bak"
+      warn "Backed up existing AGENTS.md to $target.bak"
+    fi
 
-remove_managed_block() {
-  local file="$1"
-  local stripped_file
-
-  [[ -f "$file" ]] || return 0
-
-  stripped_file="$(mktemp)"
-  strip_managed_block "$file" "$stripped_file"
-  mv "$stripped_file" "$file"
+    sed "s|__PLUGIN_DIR__|$PLUGIN_DIR|g" "$source" > "$target"
+    info "Installed AGENTS.md: $target"
+  done
 }
 
 if [[ ! -d "$SRC_SKILLS_DIR" ]]; then
@@ -125,9 +101,15 @@ if [[ "${1:-}" == "--uninstall" ]]; then
     info "Uninstalled $removed skills."
   fi
 
-  for gf in "${GLOBAL_INSTRUCTION_FILES[@]}"; do
-    remove_managed_block "$gf"
-    info "Removed managed block: $gf"
+  for gf in "${GLOBAL_AGENTS_FILES[@]}"; do
+    if [[ -f "$gf" ]]; then
+      rm "$gf"
+      info "Removed AGENTS.md: $gf"
+      if [[ -f "$gf.bak" ]]; then
+        mv "$gf.bak" "$gf"
+        info "Restored backup: $gf"
+      fi
+    fi
   done
 
   exit 0
@@ -147,6 +129,7 @@ pruned=0
 # - codex.workflow_skills: review-workflow, planner-workflow,
 #   architect-workflow, discovery-workflow, sonar-workflow
 # - shared_language_skills: csharp-dotnet, typescript, rust, python, security-review
+# - direct codex skills: evidence-discipline
 #
 # Skills NOT installed (Claude Code-only):
 # - pair-plan, pair-implement, pair-review, pair-review-eco, pair-plan-challenge
@@ -164,6 +147,7 @@ CODEX_SKILLS=(
   rust
   python
   security-review
+  evidence-discipline
 )
 
 for skills_dir in "${SKILLS_DIRS[@]}"; do
@@ -219,23 +203,8 @@ for skills_dir in "${SKILLS_DIRS[@]}"; do
   echo ""
 done
 
-# --- Language routing in both global instruction files ---
-routing_block="$(cat <<EOF
-## Code Priority (nhat-dev-toolkit)
-- When choosing between approaches, optimize in this order: **readability → maintainability → correctness patterns → performance**. Prefer the obvious solution over the clever one. If a rule makes code harder to understand in context, note the tradeoff and choose readability.
-
-## Global Language Rules (nhat-dev-toolkit)
-- For any C#/.NET task (*.cs, *.csproj, *.sln, or dotnet commands), always load and follow $SRC_SKILLS_DIR/csharp-dotnet/SKILL.md.
-- NUnit test method names must follow [Action]_When[Scenario]_Then[Expectation].
-- For any TypeScript/React task (*.ts, *.tsx, package.json, npm/pnpm/yarn commands, React or Next.js files), always load and follow $SRC_SKILLS_DIR/typescript/SKILL.md.
-- For React or Next.js implementation details, consult $SRC_SKILLS_DIR/typescript/references/react-next.md.
-EOF
-)"
-
-for gf in "${GLOBAL_INSTRUCTION_FILES[@]}"; do
-  upsert_managed_block "$gf" "$routing_block"
-  info "Updated language routing: $gf"
-done
+# --- Global AGENTS.md installation ---
+install_agents_md
 
 echo ""
 echo -e "${BOLD}Installation complete${NC}"
@@ -245,3 +214,5 @@ info "Installed: $installed"
 echo ""
 echo "Skills installed at:"
 for sd in "${SKILLS_DIRS[@]}"; do echo "  $sd"; done
+echo "Global AGENTS.md installed at:"
+for gf in "${GLOBAL_AGENTS_FILES[@]}"; do echo "  $gf"; done

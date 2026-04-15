@@ -108,6 +108,7 @@ When applying these rules, **readability is the tiebreaker**. A rule that makes 
 - Match existing repository conventions — inspect actual code before assuming patterns
 - **Private static readonly fields** use `_camelCase` prefix: e.g. `_ambient`, `_instance`, `_default`
 - **Prefer primary constructors** for all classes and records — including large dependency lists. Use traditional constructors with `readonly` fields only when you need constructor body logic (e.g., validation, computed fields, or conditional assignment)
+- **Prefer named arguments for higher-arity record/constructor calls when positional arguments stop being readable.** Apply this selectively for clarity; do not force named arguments on short, obvious calls.
 - **One type per file** — unless types are tightly coupled and more readable together (e.g., discriminated union variants, a record + its nested builder, private nested types)
 - **Member ordering** (top → bottom):
   1. Public/internal constants and static fields
@@ -124,6 +125,11 @@ When applying these rules, **readability is the tiebreaker**. A rule that makes 
 - No exception swallowing — empty `catch` or catching `Exception` without logging/rethrowing
 - LINQ: no `ToList()` before `Where()`, no multiple enumerations, use `Any()` not `Count() > 0`
 - Avoid broad refactors unless explicitly requested
+- Prefer named arguments for higher-arity record/constructor calls
+  when positional arguments stop being readable. Apply this
+  selectively for clarity; do not force named arguments on short,
+  obvious calls.
+
 
 ### C# 14 Features (when repo supports)
 

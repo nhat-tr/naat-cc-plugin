@@ -25,7 +25,7 @@ The installer handles everything:
 - **Infra deps** — installs `tsx` globally, `@types/node` in `infra/`
 - **Claude Code integration** — symlinks agents, commands, skills, contexts into `~/.claude/`
 - **CLI tools** — symlinks `jaeger`, `grafana`, `kibana-logs` into `~/.local/bin/`
-- **CLAUDE.md** — injects language-routing block for C#, TypeScript, Rust, Python
+- **CLAUDE.md** — installs the full global instruction file with repo-path substitution
 - **Post-install checks** — warns if `~/.local/bin` is not in PATH or kubectl has no cluster
 
 Uninstall:
@@ -50,11 +50,13 @@ Uninstall:
 
 Notes:
 - `install.sh` is Claude-specific and installs to `~/.claude/` and `~/.local/bin/`.
-- `install-codex.sh` installs skill symlinks to `~/.codex/skills/`.
-- Both installers also maintain a managed language-routing block in global instruction files:
+- `install-codex.sh` installs skill symlinks to `~/.codex/skills/` and `~/.agents/skills/`.
+- `install-codex.sh` also installs the full `AGENTS.md` template to:
   - Codex: `~/.codex/AGENTS.md`
-  - Claude Code: `~/.claude/CLAUDE.md`
-- Both installers use symlinks so repo edits are reflected immediately.
+  - Copilot CLI / shared agents path: `~/.agents/AGENTS.md`
+- `install.sh` installs the full `CLAUDE.md` template to `~/.claude/CLAUDE.md`.
+- Both installers back up existing global instruction files before replacing them.
+- Skill installs use symlinks so repo edits are reflected immediately. Global instruction files are rendered copies with repo-path substitution.
 
 ## What's Included
 

@@ -1,3 +1,4 @@
+<!-- nhat-dev-toolkit managed global instructions template. install-codex.sh replaces __PLUGIN_DIR__ with the repo path in installed copies. -->
 # How I Work
 
 ## Read Before You Answer
@@ -77,7 +78,7 @@ This applies to all languages, all frameworks, all projects. It is not optional 
 
 ## Tools & Environment
 
-- Never use `docker`. Always use `podman` instead.
+- Prefer `docker` over `podman` for local container workflows. Use `podman` only when the user explicitly asks for it.
 - For local development, use the `aspire`  skills: always load and follow __PLUGIN_DIR__/skills/aspire/SKILL.md.
 - For any C#/.NET project, use these JetBrains MCP tools (`mcp__jetbrains__*`) where they are genuinely better:
   - **Use JetBrains**: `rename_refactoring` (semantic rename across solution), `get_project_modules`, `get_project_dependencies`, `get_file_problems` (Rider inspections), `get_all_open_file_paths`, `open_file_in_editor`, `reformat_file`

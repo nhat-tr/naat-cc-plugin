@@ -65,8 +65,16 @@ const checks = [
   {
     file: 'install-codex.sh',
     mustInclude: [
-      'CODEX_DIR/AGENTS.md',
-      'ROUTING_BLOCK_START="<!-- BEGIN nhat-dev-toolkit:language-routing -->"',
+      'GLOBAL_AGENTS_FILES=("$CODEX_DIR/AGENTS.md" "$AGENTS_DIR/AGENTS.md")',
+      'install_agents_md()',
+      'local source="$PLUGIN_DIR/AGENTS.md"',
+      'AGENTS_MANAGED_MARKER="nhat-dev-toolkit managed global instructions template"',
+      'Installed AGENTS.md:',
+    ],
+  },
+  {
+    file: 'AGENTS.md',
+    mustInclude: [
       'csharp-dotnet/SKILL.md',
       'typescript/SKILL.md',
       'react-next.md',
