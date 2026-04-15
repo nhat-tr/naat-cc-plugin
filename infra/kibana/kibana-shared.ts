@@ -77,11 +77,38 @@ export interface EsResult {
 
 // ── Credentials ──────────────────────────────────────────────────────────────
 
-export function getEsAuth(env: string): string {
+/**
+ * Get Elasticsearch auth header from Azure Key Vault or environment variables.
+ * Tries KV first, falls back to env vars.
+ */
+export async function getEsAuth(env: string): Promise<string> {
+  // Try env var first (for CI/CD environments)
   const envVar = `${env.toUpperCase()}_POS_ELASTIC_USER_PASSWORD`;
-  const password = process.env[envVar];
-  if (!password) throw new Error(`Missing env var ${envVar}`);
-  return Buffer.from(`elastic:${password}`).toString('base64');
+  const envPassword = process.env[envVar];
+  // if (envPassword) {
+  //   return Buffer.from(`elastic:${envPassword}`).toString('base64');
+  // }
+
+  // Fall back to Azure Key Vault
+  const { exec } = await import('child_process');
+  const { promisify } = await import('util');
+  const execAsync = promisify(exec);
+
+  const kvVaultName = env === 'PROD' ? 'WE-POS-SHR-KV' : `WE-${env}POS-SHR-KV`;
+  const kvSecretName = 'POS-ELASTIC-USER-PASSWORD';
+
+  try {
+    const { stdout } = await execAsync(
+      `az keyvault secret show --vault-name "${kvVaultName}" --name "${kvSecretName}" --query "value" -o tsv`
+    );
+    const password = stdout.trim();
+    if (!password) throw new Error('Empty secret value from Key Vault');
+    return Buffer.from(`elastic:${password}`).toString('base64');
+  } catch (error) {
+    throw new Error(
+      `Failed to get Elasticsearch password: env var ${envVar} not set and KV lookup failed. ${(error as Error).message}`
+    );
+  }
 }
 
 // ── ES API ───────────────────────────────────────────────────────────────────
@@ -90,7 +117,7 @@ export async function esSearch(
   env: string,
   esIndex: string,
   query: Record<string, unknown>,
-  auth: string,
+  auth: string
 ): Promise<EsResult> {
   const host = ES_HOSTS[env.toLowerCase()];
   if (!host) throw new Error(`Unknown env '${env}'. Use: oae, prod, qss`);
@@ -117,7 +144,7 @@ export async function esGetDoc(
   env: string,
   esIndex: string,
   docId: string,
-  auth: string,
+  auth: string
 ): Promise<Record<string, unknown> | null> {
   const host = ES_HOSTS[env.toLowerCase()];
   if (!host) throw new Error(`Unknown env '${env}'. Use: oae, prod, qss`);
@@ -137,7 +164,9 @@ export async function esGetDoc(
     const text = await res.text();
     throw new Error(`HTTP ${res.status}: ${text.slice(0, 400)}`);
   }
-  const data = (await res.json()) as { hits?: { hits?: { _id: string; _index: string; _source: Record<string, unknown> }[] } };
+  const data = (await res.json()) as {
+    hits?: { hits?: { _id: string; _index: string; _source: Record<string, unknown> }[] };
+  };
   const hit = data.hits?.hits?.[0];
   return hit ? { _id: hit._id, _index: hit._index, ...hit._source } : null;
 }
@@ -149,7 +178,10 @@ export interface ApplyDefaultsOptions {
   raw?: boolean;
 }
 
-export function applyDefaults(query: Record<string, unknown>, opts: ApplyDefaultsOptions = {}): void {
+export function applyDefaults(
+  query: Record<string, unknown>,
+  opts: ApplyDefaultsOptions = {}
+): void {
   if (!('_source' in query)) query._source = SOURCE_FIELDS;
   if (!('sort' in query)) query.sort = [{ '@timestamp': { order: 'desc' } }];
   if (!('track_total_hits' in query)) query.track_total_hits = false;

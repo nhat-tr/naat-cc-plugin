@@ -76,7 +76,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 const parsed = parseArgs(process.argv);
-const ENV = parsed.env;
+const ENV = (parsed.env as string).toUpperCase();
 
 let INDEX: string;
 try {
@@ -90,7 +90,7 @@ try {
 
 if (parsed.getDocId) {
   try {
-    const auth = getEsAuth(ENV);
+    const auth = await getEsAuth(ENV);
     const doc = await esGetDoc(ENV, INDEX, parsed.getDocId, auth);
     if (!doc) {
       console.error(`Document ${parsed.getDocId} not found in ${INDEX}`);
@@ -149,8 +149,7 @@ function formatLongMessage(raw: string): string {
       frame.includes('MessageText:');
 
     const isAppFrame =
-      frame.startsWith('Hoffmann.') &&
-      !entryPointNoise.some((n) => frame.includes(n));
+      frame.startsWith('Hoffmann.') && !entryPointNoise.some((n) => frame.includes(n));
 
     // Deduplicate: skip if same method as previous (e.g. repeated DocumentExecuter frames)
     const methodSig = frame.split(' in ')[0];
@@ -215,7 +214,13 @@ function formatResults(data: EsResult, outfile: string): void {
     const svc = str(s, 'service_implementation', 'kubernetes.labels.release', 'app_name');
     if (svc !== '-') svcCounts.set(svc, (svcCounts.get(svc) ?? 0) + 1);
 
-    const { value: tid, field } = strWithField(s, 'trace-id', 'jaeger-trace-id', 'trace_id', 'TraceId');
+    const { value: tid, field } = strWithField(
+      s,
+      'trace-id',
+      'jaeger-trace-id',
+      'trace_id',
+      'TraceId'
+    );
     if (tid !== '-') {
       traceIds.add(tid);
       if (!traceField) traceField = field;
@@ -285,7 +290,9 @@ function formatResults(data: EsResult, outfile: string): void {
     const isLong = logMsg.length > 120 || logMsg.includes('\n');
     const errSuffix = errMsg !== '-' ? `\n  ERR: ${errMsg}` : '';
     if (isLong) {
-      console.log(`${ts} ${level.padStart(5)} ${svc}${tagStr}\n  ${formatLongMessage(logMsg)}${errSuffix}`);
+      console.log(
+        `${ts} ${level.padStart(5)} ${svc}${tagStr}\n  ${formatLongMessage(logMsg)}${errSuffix}`
+      );
     } else {
       const inlineErr = errMsg !== '-' ? ` ERR: ${errMsg}` : '';
       console.log(`${ts} ${level.padStart(5)} ${svc}${tagStr} ${logMsg}${inlineErr}`);
@@ -479,7 +486,7 @@ if (parsed.query) {
 applyDefaults(query, { raw: parsed.raw });
 
 try {
-  const auth = getEsAuth(ENV);
+  const auth = await getEsAuth(ENV);
   const result = await esSearch(ENV, INDEX, query, auth);
 
   const outfile = `/tmp/kibana-logs-${Math.floor(Date.now() / 1000)}.json`;

@@ -16,7 +16,7 @@ You query Elasticsearch directly and display log results.
 Single-line command, no heredoc:
 
 ```bash
-tsx /Users/nhat.tran/.local/share/my-claude-code/infra/kibana/kibana-search.ts oae regrinding -q '*error*' --from now-1h -n 50
+tsx $HOME/.local/share/my-claude-code/infra/kibana/kibana-search.ts oae regrinding -q '*error*' --from now-1h -n 50
 ```
 
 Options: `-q <term>` (wildcard on message+log), `--from <time>`, `--to <time>`, `-n <size>`, `--raw` (include unstructured log-only entries).
@@ -27,7 +27,7 @@ Default `--from` is `now-1h` when using `-q`.
 Use `-j` with single-quoted JSON for `term` on `.keyword` fields or multi-condition `bool`:
 
 ```bash
-tsx /Users/nhat.tran/.local/share/my-claude-code/infra/kibana/kibana-search.ts oae regrinding -j '{"size":50,"query":{...}}'
+tsx $HOME/.local/share/my-claude-code/infra/kibana/kibana-search.ts oae regrinding -j '{"size":50,"query":{...}}'
 ```
 
 **Always use `-j` with single quotes** — do NOT use heredocs (`<<'EOF'`), as they trigger permission prompts.
@@ -67,13 +67,13 @@ If you need expanded detail (full untruncated messages, error bodies, field disc
 
 ```bash
 # Show all errors with full messages
-tsx /Users/nhat.tran/.local/share/my-claude-code/infra/kibana/kibana-search.ts --detail /tmp/kibana-logs-XXXXX.json --level Error
+tsx $HOME/.local/share/my-claude-code/infra/kibana/kibana-search.ts --detail /tmp/kibana-logs-XXXXX.json --level Error
 
 # Filter by pattern in message/error fields
-tsx /Users/nhat.tran/.local/share/my-claude-code/infra/kibana/kibana-search.ts --detail /tmp/kibana-logs-XXXXX.json --grep "BadRequest"
+tsx $HOME/.local/share/my-claude-code/infra/kibana/kibana-search.ts --detail /tmp/kibana-logs-XXXXX.json --grep "BadRequest"
 
 # Discover available field names
-tsx /Users/nhat.tran/.local/share/my-claude-code/infra/kibana/kibana-search.ts --detail /tmp/kibana-logs-XXXXX.json --fields
+tsx $HOME/.local/share/my-claude-code/infra/kibana/kibana-search.ts --detail /tmp/kibana-logs-XXXXX.json --fields
 ```
 
 Do NOT write python/node/jq scripts to parse the saved JSON — use `--detail` instead.
@@ -88,13 +88,13 @@ Some services write exceptions as raw text to stdout instead of structured Seril
 
 1. **Get the timestamp** from a structured log hit (e.g., via trace-id query):
    ```bash
-   tsx /Users/nhat.tran/.local/share/my-claude-code/infra/kibana/kibana-search.ts oae digital-twin -j '{"size":1,"query":{"term":{"trace-id":"<id>"}}}'
+   tsx $HOME/.local/share/my-claude-code/infra/kibana/kibana-search.ts oae digital-twin -j '{"size":1,"query":{"term":{"trace-id":"<id>"}}}'
    ```
    Note the `@timestamp` from the result.
 
 2. **Query surrounding logs with `--raw`** to bypass the message-existence filter and find unstructured `log`-only entries:
    ```bash
-   tsx /Users/nhat.tran/.local/share/my-claude-code/infra/kibana/kibana-search.ts oae digital-twin --raw -j '{"size":50,"query":{"bool":{"must_not":[{"exists":{"field":"message"}}],"filter":[{"range":{"@timestamp":{"gte":"<TS-2s>","lte":"<TS+2s>"}}}]}}}'
+   tsx $HOME/.local/share/my-claude-code/infra/kibana/kibana-search.ts oae digital-twin --raw -j '{"size":50,"query":{"bool":{"must_not":[{"exists":{"field":"message"}}],"filter":[{"range":{"@timestamp":{"gte":"<TS-2s>","lte":"<TS+2s>"}}}]}}}'
    ```
    Use `must_not exists message` to exclude structured entries and surface only the raw stdout lines.
 
