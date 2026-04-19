@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '⚠ VERIFY before done — UI change: Aspire+browser | API change: Aspire+curl | logic only: tsc+test | skipping = not done'"
+          }
+        ]
+      }
+    ]
+  }
+}

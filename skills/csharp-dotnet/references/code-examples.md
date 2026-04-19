@@ -1,6 +1,6 @@
 # Code Examples
 
-Pure code samples for patterns defined in SKILL.md. No rules here — see SKILL.md for the authoritative guidance.
+Pure code samples for runtime patterns defined in SKILL.md. No rules here — see SKILL.md for the authoritative guidance. For test-related code samples (NUnit, Testcontainers, WebApplicationFactory, Respawn, Aspire testing, podman), see `test-code-examples.md`.
 
 ## Table of Contents
 
@@ -14,10 +14,9 @@ Pure code samples for patterns defined in SKILL.md. No rules here — see SKILL.
 - [IAsyncEnumerable Streaming](#iasyncenumerable-streaming)
 - [EF Core Data Annotations](#ef-core-data-annotations)
 - [Manual Mapping](#manual-mapping)
-- [Test Naming and Structure](#test-naming-and-structure)
-- [Test Categories](#test-categories)
-- [Testcontainers Setup](#testcontainers-setup)
-- [WebApplicationFactory with Testcontainers](#webapplicationfactory-with-testcontainers)
+- [Group-Level Authorization](#group-level-authorization)
+- [Policy-Based Authorization Setup](#policy-based-authorization-setup)
+- [Global JsonSerializerOptions](#global-jsonserializeroptions)
 
 ## LoggerMessage Source Generator
 
@@ -43,6 +42,8 @@ public sealed partial class OrderService(
     private static partial void LogOrderCreated(ILogger logger, int orderId, string customerId);
 }
 ```
+
+Class is `sealed partial` — `sealed` per Code Style, `partial` required by the `[LoggerMessage]` source generator.
 
 ## Typed HTTP Client with Options
 
@@ -122,45 +123,45 @@ builder.Services.AddProblemDetails();
 
 Demonstrates: SKILL.md § ASP.NET Core, § Error Handling
 
+Use `IExceptionHandler` (.NET 8+) — the framework writes the RFC 9457 response from `AddProblemDetails()` automatically. One `UseExceptionHandler()` call, no manual JSON writing.
+
 ```csharp
-// Program.cs setup
+public sealed class DomainExceptionHandler(IProblemDetailsService problemDetailsService) : IExceptionHandler
+{
+    public async ValueTask<bool> TryHandleAsync(
+        HttpContext httpContext,
+        Exception exception,
+        CancellationToken cancellationToken)
+    {
+        var (status, title) = exception switch
+        {
+            OrderNotFoundException => (StatusCodes.Status404NotFound, "Order not found"),
+            InsufficientStockException => (StatusCodes.Status409Conflict, "Insufficient stock"),
+            _ => (0, string.Empty),
+        };
+
+        if (status == 0) return false; // let the next handler / default pipeline take it
+
+        httpContext.Response.StatusCode = status;
+        return await problemDetailsService.TryWriteAsync(new ProblemDetailsContext
+        {
+            HttpContext = httpContext,
+            Exception = exception,
+            ProblemDetails = { Status = status, Title = title, Detail = exception.Message },
+        });
+    }
+}
+```
+
+Registration:
+
+```csharp
 builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<DomainExceptionHandler>();
 
 var app = builder.Build();
 app.UseExceptionHandler();
 app.UseStatusCodePages();
-
-// Custom exception handler for domain exceptions
-app.UseExceptionHandler(errorApp =>
-{
-    errorApp.Run(async context =>
-    {
-        var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
-        var problemDetails = exception switch
-        {
-            OrderNotFoundException e => new ProblemDetails
-            {
-                Status = StatusCodes.Status404NotFound,
-                Title = "Order not found",
-                Detail = e.Message
-            },
-            InsufficientStockException e => new ProblemDetails
-            {
-                Status = StatusCodes.Status409Conflict,
-                Title = "Insufficient stock",
-                Detail = e.Message
-            },
-            _ => new ProblemDetails
-            {
-                Status = StatusCodes.Status500InternalServerError,
-                Title = "An unexpected error occurred"
-            }
-        };
-
-        context.Response.StatusCode = problemDetails.Status ?? 500;
-        await context.Response.WriteAsJsonAsync(problemDetails);
-    });
-});
 ```
 
 ## Primary Constructor Service
@@ -168,15 +169,22 @@ app.UseExceptionHandler(errorApp =>
 Demonstrates: SKILL.md § Code Style
 
 ```csharp
-public sealed class OrderService(
+public sealed partial class OrderService(
     AppDbContext db,
     IShippingApiClient shipping,
     ILogger<OrderService> logger)
 {
     public async Task<Order> CreateAsync(CreateOrderRequest request, CancellationToken ct)
     {
-        // Business logic here
+        LogCreating(logger, request.CustomerId);
+        var order = await db.Orders.AddAsync(Order.From(request), ct);
+        await db.SaveChangesAsync(ct);
+        await shipping.GetStatusAsync(order.Entity.TrackingId, ct);
+        return order.Entity;
     }
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Creating order for {CustomerId}")]
+    private static partial void LogCreating(ILogger logger, string customerId);
 }
 ```
 
@@ -185,15 +193,17 @@ public sealed class OrderService(
 Demonstrates: SKILL.md § Async
 
 ```csharp
-public async Task<Order> GetOrderAsync(int id, CancellationToken ct)
+public async Task<OrderDto> GetOrderAsync(int id, CancellationToken ct)
 {
     var order = await db.Orders.AsNoTracking().FirstOrDefaultAsync(o => o.Id == id, ct)
         ?? throw new OrderNotFoundException(id);
 
     var shipping = await shippingClient.GetStatusAsync(order.TrackingId, ct);
-    return order with { ShippingStatus = shipping.Status };
+    return order.ToDto() with { ShippingStatus = shipping.Status };
 }
 ```
+
+`Order` is a persistence class (see EF Core Data Annotations); `OrderDto` is a record, so `with` is valid there. Pass `ct` through every await.
 
 ## Task.WhenAll for Concurrent Work
 
@@ -246,10 +256,12 @@ public class Order
     [Key]
     public int Id { get; set; }
 
-    [Required, MaxLength(50)]
-    public string CustomerId { get; set; } = string.Empty;
+    [MaxLength(50)]
+    public required string CustomerId { get; set; }
 
-    [Required]
+    [MaxLength(100)]
+    public required string TrackingId { get; set; }
+
     public OrderStatus Status { get; set; }
 
     [Column(TypeName = "decimal(18,2)")]
@@ -258,6 +270,8 @@ public class Order
     public List<LineItem> LineItems { get; set; } = [];
 }
 ```
+
+`required` (C# 11+) replaces the `[Required]` + `= string.Empty` pattern — the compiler forces initialization at construction, and EF Core still respects the NOT NULL column shape. Left unsealed because EF Core proxies (`UseLazyLoadingProxies`) subclass entities at runtime; seal entities only if you are certain proxies will never be enabled.
 
 ## Manual Mapping
 
@@ -276,147 +290,57 @@ public static class OrderDtoExtensions
 }
 ```
 
-## Test Naming and Structure
+## Group-Level Authorization
 
-Demonstrates: SKILL.md § Testing
-
-```csharp
-[Test]
-public async Task CreateOrder_WhenItemsEmpty_ThenThrowsValidationException()
-{
-    // Arrange
-    var request = new CreateOrderRequest(CustomerId: "cust-1", Items: []);
-
-    // Act & Assert
-    Assert.ThrowsAsync<ValidationException>(
-        async () => await sut.CreateAsync(request, CancellationToken.None));
-}
-
-[Test]
-public async Task GetOrder_WhenExists_ThenReturnsCorrectDetails()
-{
-    // Arrange
-    var order = await CreateTestOrder();
-
-    // Act
-    var result = await sut.GetAsync(order.Id, CancellationToken.None);
-
-    // Assert
-    Assert.Multiple(() =>
-    {
-        Assert.That(result, Is.Not.Null);
-        Assert.That(result!.Id, Is.EqualTo(order.Id));
-        Assert.That(result.Status, Is.EqualTo(OrderStatus.Created));
-    });
-}
-```
-
-## Test Categories
-
-Demonstrates: SKILL.md § Testing
+Apply authorization at the group, not per-endpoint — avoids accidentally leaving endpoints unprotected.
 
 ```csharp
-[AttributeUsage(AttributeTargets.Method | AttributeTargets.Class)]
-public sealed class UnitTestAttribute : CategoryAttribute { }
+var group = app.MapGroup("/api/orders")
+    .RequireAuthorization("OrderPolicy");
 
-[AttributeUsage(AttributeTargets.Method | AttributeTargets.Class)]
-public sealed class IntegrationTestAttribute : CategoryAttribute { }
+group.MapGet("/", GetOrders);
+group.MapPost("/", CreateOrder);
 
-[AttributeUsage(AttributeTargets.Method | AttributeTargets.Class)]
-public sealed class StagingOnlyAttribute : CategoryAttribute { }
+// Public override when explicitly needed
+group.MapGet("/public", GetPublicOrders).AllowAnonymous();
 ```
 
-Filter in CI:
+## Policy-Based Authorization Setup
 
-```bash
-dotnet test --filter "TestCategory=UnitTest"
-dotnet test --filter "TestCategory!=StagingOnly&TestCategory!=IntegrationTest"
-```
-
-## Testcontainers Setup
-
-Demonstrates: SKILL.md § Testing
+Prefer policies over role-string checks. Policies compose and are testable.
 
 ```csharp
-private PostgreSqlContainer _postgres = null!;
-
-[OneTimeSetUp]
-public async Task OneTimeSetUp()
-{
-    _postgres = new PostgreSqlBuilder()
-        .WithImage("postgres:17")
-        .Build();
-    await _postgres.StartAsync();
-}
-
-[OneTimeTearDown]
-public async Task OneTimeTearDown()
-{
-    await _postgres.DisposeAsync();
-}
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy("OrderPolicy", policy =>
+        policy.RequireAuthenticatedUser()
+              .RequireClaim("scope", "orders"));
 ```
 
-## WebApplicationFactory with Testcontainers
+## Global JsonSerializerOptions
 
-Demonstrates: SKILL.md § Testing
+Configure naming globally — avoids sprinkling `[JsonPropertyName]` on every property. Use the attribute only when a single property must deviate.
+
+MVC controllers use `AddJsonOptions`; Minimal APIs use `ConfigureHttpJsonOptions`. If the app hosts both, configure both — they don't share the same options instance.
 
 ```csharp
-[TestFixture]
-public class OrderApiTests
+// Minimal APIs (Results.*, TypedResults.*, app.MapPost JSON binding)
+builder.Services.ConfigureHttpJsonOptions(options =>
 {
-    private PostgreSqlContainer _postgres = null!;
-    private WebApplicationFactory<Program> _factory = null!;
-    private HttpClient _client = null!;
+    options.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+    options.SerializerOptions.PropertyNameCaseInsensitive = true;
+});
 
-    [OneTimeSetUp]
-    public async Task OneTimeSetUp()
-    {
-        _postgres = new PostgreSqlBuilder()
-            .WithImage("postgres:17")
-            .Build();
-        await _postgres.StartAsync();
+// MVC controllers
+builder.Services.AddControllers().AddJsonOptions(options =>
+{
+    options.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+    options.JsonSerializerOptions.PropertyNameCaseInsensitive = true;
+});
 
-        _factory = new WebApplicationFactory<Program>()
-            .WithWebHostBuilder(builder =>
-            {
-                builder.ConfigureServices(services =>
-                {
-                    var descriptor = services.SingleOrDefault(
-                        d => d.ServiceType == typeof(DbContextOptions<AppDbContext>));
-                    if (descriptor is not null) services.Remove(descriptor);
-
-                    services.AddDbContext<AppDbContext>(options =>
-                        options.UseNpgsql(_postgres.GetConnectionString()));
-                });
-            });
-
-        _client = _factory.CreateClient();
-
-        // Run migrations
-        using var scope = _factory.Services.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        await db.Database.MigrateAsync();
-    }
-
-    [OneTimeTearDown]
-    public async Task OneTimeTearDown()
-    {
-        _client.Dispose();
-        await _factory.DisposeAsync();
-        await _postgres.DisposeAsync();
-    }
-
-    [Test, IntegrationTest]
-    public async Task CreateOrder_WhenValid_ThenReturns201()
-    {
-        // Arrange
-        var request = new CreateOrderRequest("cust-1", [new LineItem("SKU-1", 2)]);
-
-        // Act
-        var response = await _client.PostAsJsonAsync("/api/orders", request);
-
-        // Assert
-        Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Created));
-    }
-}
+// Standalone System.Text.Json serializer (outside the HTTP pipeline)
+var jsonOptions = new JsonSerializerOptions
+{
+    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    PropertyNameCaseInsensitive = true,
+};
 ```

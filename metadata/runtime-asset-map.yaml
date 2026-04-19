@@ -93,7 +93,7 @@ shared_language_skills:
 language_rule_routing:
   csharp_dotnet:
     skill: skills/csharp-dotnet/SKILL.md
-    testing_reference: skills/csharp-dotnet/references/testing-nunit.md
+    testing_reference: skills/csharp-dotnet/references/test-code-examples.md
     required_test_method_naming: "[Action]_When[Scenario]_Then[Expectation]"
     used_by:
       claude_agents:

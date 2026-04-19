@@ -34,7 +34,12 @@
       "Read(//Users/nhat.tran/Work/worktrees/Regrinding/AI/workAi/**)",
       "Bash(dotnet run:*)",
       "Bash(dotnet tool:*)",
-      "Bash(dotnet script:*)"
+      "Bash(dotnet script:*)",
+      "Bash(chmod +x *)",
+      "Bash(bash -n /Volumes/NaatsStore/dev/doing/my-claude-code/skills/brainstorming/scripts/start-server.sh)",
+      "Bash(bash -n /Volumes/NaatsStore/dev/doing/my-claude-code/skills/brainstorming/scripts/stop-server.sh)",
+      "Skill(update-config)",
+      "WebFetch(domain:dotnet.testcontainers.org)"
     ],
     "deny": [
       "Read(**/.env)",

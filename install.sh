@@ -52,6 +52,93 @@ info()  { echo -e "${GREEN}[+]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[x]${NC} $1" >&2; }
 
+install_hooks() {
+    local hooks_file="$PLUGIN_DIR/hooks/hooks.json"
+    local settings_file="$CLAUDE_DIR/settings.json"
+
+    if [[ ! -f "$hooks_file" ]]; then
+        warn "  No hooks/hooks.json found, skipping"
+        return 0
+    fi
+    if [[ ! -f "$settings_file" ]]; then
+        warn "  $settings_file not found, skipping hooks"
+        return 0
+    fi
+
+    python3 - "$hooks_file" "$settings_file" <<'EOF'
+import json, sys
+
+hooks_file, settings_file = sys.argv[1], sys.argv[2]
+
+with open(hooks_file) as f:
+    plugin_hooks = json.load(f).get("hooks", {})
+
+with open(settings_file) as f:
+    settings = json.load(f)
+
+settings.setdefault("hooks", {})
+added = 0
+
+for event, matchers in plugin_hooks.items():
+    settings["hooks"].setdefault(event, [])
+    for matcher in matchers:
+        plugin_commands = {h["command"] for h in matcher.get("hooks", [])}
+        already_exists = any(
+            plugin_commands <= {h["command"] for h in existing.get("hooks", [])}
+            for existing in settings["hooks"][event]
+            if existing.get("matcher") == matcher.get("matcher")
+        )
+        if not already_exists:
+            settings["hooks"][event].append(matcher)
+            added += 1
+
+with open(settings_file, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+
+print(f"Added {added} hook matcher(s)")
+EOF
+}
+
+uninstall_hooks() {
+    local hooks_file="$PLUGIN_DIR/hooks/hooks.json"
+    local settings_file="$CLAUDE_DIR/settings.json"
+
+    [[ -f "$hooks_file" ]] || return 0
+    [[ -f "$settings_file" ]] || return 0
+
+    python3 - "$hooks_file" "$settings_file" <<'EOF'
+import json, sys
+
+hooks_file, settings_file = sys.argv[1], sys.argv[2]
+
+with open(hooks_file) as f:
+    plugin_hooks = json.load(f).get("hooks", {})
+
+with open(settings_file) as f:
+    settings = json.load(f)
+
+removed = 0
+
+for event, matchers in plugin_hooks.items():
+    if event not in settings.get("hooks", {}):
+        continue
+    plugin_commands = {h["command"] for matcher in matchers for h in matcher.get("hooks", [])}
+    before = len(settings["hooks"][event])
+    settings["hooks"][event] = [
+        existing for existing in settings["hooks"][event]
+        if not ({h["command"] for h in existing.get("hooks", [])} & plugin_commands)
+    ]
+    removed += before - len(settings["hooks"][event])
+
+with open(settings_file, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+
+print(f"Removed {removed} hook matcher(s)")
+EOF
+}
+
 install_claude_md() {
     local source="$PLUGIN_DIR/CLAUDE.md"
     local target="$GLOBAL_CLAUDE_FILE"
@@ -205,6 +292,11 @@ if [[ "${1:-}" == "--uninstall" ]]; then
             info "Restored backup: $GLOBAL_CLAUDE_FILE"
         fi
     fi
+
+    echo ""
+    echo -e "${BOLD}Hooks${NC}"
+    uninstall_hooks
+
     exit 0
 fi
 
@@ -362,6 +454,11 @@ done
 echo ""
 echo -e "${BOLD}CLI Tools${NC}"
 symlink_files "cli" "$PLUGIN_DIR/bin/*" "$LOCAL_BIN"
+
+# --- Hooks ---
+echo ""
+echo -e "${BOLD}Hooks${NC}"
+install_hooks
 
 # --- Language routing in CLAUDE.md ---
 install_claude_md

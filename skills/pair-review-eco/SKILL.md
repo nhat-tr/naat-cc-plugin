@@ -59,9 +59,13 @@ Read in this order — nothing more unless the diff forces a targeted lookup:
 
 - `BLOCKER` — must fix before proceeding: security, data loss, `async void`, captive DI, `IDisposable` leaks, N+1 EF, sync-over-async (`.Result`/`.Wait()`)
 - `IMPORTANT` — should fix in this stream: missing tests, dead code, missing `AsNoTracking` on read queries
-- `NIT` — optional / later: style, naming, optional modernization
+- `NIT` — do NOT write to review.md. Ignore for output purposes.
 
 ## `.pair/review.md` Format
+
+**If no BLOCKER or IMPORTANT found:** write 1–2 sentences only (e.g. "Diff looks clean. No blockers — continue to next stream."). Do not enumerate checks or note what eco cannot verify.
+
+**If findings exist:**
 
 ```markdown
 # Review: [Stream label]
@@ -69,9 +73,6 @@ Read in this order — nothing more unless the diff forces a targeted lookup:
 **Reviewer:** `codex / <model>`
 **Date:** `YYYY-MM-DD HH:MM UTC`
 **Mode:** eco
-
-## Summary
-[2-3 sentences on overall quality. Note areas not checkable from diff alone.]
 
 ## Findings
 
@@ -85,14 +86,9 @@ Read in this order — nothing more unless the diff forces a targeted lookup:
 - **Issue:** ...
 - **Suggested fix:** ...
 
-### NIT: [short title]
-- **Issue:** ...
-
 ## Verdict
 [e.g. "No blockers. OK to continue." / "1 blocker must be fixed before proceeding."]
 ```
-
-If no findings: keep `## Findings`, state none found, note what eco review cannot verify.
 
 ## Steps
 
