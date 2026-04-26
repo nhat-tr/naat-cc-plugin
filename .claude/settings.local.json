@@ -39,7 +39,21 @@
       "Bash(bash -n /Volumes/NaatsStore/dev/doing/my-claude-code/skills/brainstorming/scripts/start-server.sh)",
       "Bash(bash -n /Volumes/NaatsStore/dev/doing/my-claude-code/skills/brainstorming/scripts/stop-server.sh)",
       "Skill(update-config)",
-      "WebFetch(domain:dotnet.testcontainers.org)"
+      "WebFetch(domain:dotnet.testcontainers.org)",
+      "Bash(npx tsc *)",
+      "Bash(tsx --version)",
+      "Bash(tsx --no-warnings --tsconfig /dev/null infra/azure-devops/fetch-pr-comments.ts)",
+      "Bash(tsx infra/azure-devops/fetch-pr-comments.ts 999 --include-sonar --only-sonar)",
+      "Bash(grep -v \"^$\")",
+      "Bash(awk '{print NR, length, $0}')",
+      "Bash(sort -k2 -rn)",
+      "Bash(grep *)",
+      "Bash(python eval-viewer/generate_review.py /Users/nhat.tran/.local/share/my-claude-code/ubiquitous-language-workspace/iteration-1 --skill-name ubiquitous-language --benchmark /Users/nhat.tran/.local/share/my-claude-code/ubiquitous-language-workspace/iteration-1/benchmark.json --static /tmp/ubiquitous-language-review-iteration-1.html)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(gh api *)",
+      "Bash(python -m scripts.aggregate_benchmark /Users/nhat.tran/.local/share/my-claude-code/skills/module-deepening-workspace/iteration-1 --skill-name module-deepening)",
+      "Bash(kill 57064)"
     ],
     "deny": [
       "Read(**/.env)",
