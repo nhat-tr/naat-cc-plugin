@@ -7,7 +7,7 @@ import { clearFileCache } from '../src/context-parser.js';
 import { buildEntries } from '../src/index.js';
 import type { LogEntry, TraceEntry } from '../src/types.js';
 
-const CALIBRATION_CORE = '/Users/nhat.tran/Work/worktrees/Calibration/Core';
+const CALIBRATION_CORE = process.env.OBSERVABILITY_INDEX_INTEGRATION_ROOT ?? '';
 
 // Skip if Calibration Core doesn't exist (CI without the repo)
 const shouldRun = fs.existsSync(CALIBRATION_CORE);

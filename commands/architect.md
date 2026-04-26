@@ -1,10 +1,10 @@
 ---
-description: Start a system design / architecture session. Analyzes current architecture, proposes changes with tradeoffs, and produces ADRs for significant decisions. Uses opus for deep reasoning.
+description: Start a system design / architecture session. Analyze the current architecture, propose changes with tradeoffs, and produce ADRs for significant decisions.
 ---
 
 # Architect
 
-Invoke the **architect** agent for system design and architectural decisions.
+Run a system design and architecture workflow for significant technical decisions.
 
 ## What This Command Does
 

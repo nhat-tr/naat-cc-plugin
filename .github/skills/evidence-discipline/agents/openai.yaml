@@ -1,0 +1,4 @@
+interface:
+  display_name: "Evidence Discipline"
+  short_description: "Verify observed facts before coding, testing, or claiming correctness"
+  default_prompt: "Use $evidence-discipline to ground this task in observed evidence before writing code, tests, or correctness claims."

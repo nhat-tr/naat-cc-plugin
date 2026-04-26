@@ -35,7 +35,7 @@ Two files in `docs/codediscover/`:
 ## STEP 1: ls then SCOPE
 
 **If user specifies subdirectories** (e.g. `Regrinding/Core`, `Regrinding/Frontend`, `Regrinding/Client.*`):
-- Run `ls <parent>` to expand globs. E.g. `ls /Users/nhat/Work/worktrees/Regrinding/` to see all Client.* dirs.
+- Run `ls <parent>` to expand globs. E.g. `ls <workspace-root>/Regrinding/` to see all `Client.*` dirs.
 - The for loop dirs are the expanded subdirectory paths, NOT top-level dirs.
 
 **If user specifies top-level repos** (e.g. `Calibration, NIA, Regrinding`):
@@ -71,7 +71,7 @@ for dir in dir1 dir2 dir3; do echo "=== $dir ===" && rg "Noun1|Noun2|Noun3" "<ro
 
 Example — user said "check Regrinding/Core, Regrinding/Frontend, Regrinding/Client.*":
 ```bash
-for dir in Core Frontend Client.LaserProcess Client.LaserEquipment; do echo "=== $dir ===" && rg "LaserProcess|Slot|Twin|OrderItem" "/Users/nhat/Work/worktrees/Regrinding/$dir" --type cs -n | head -15; done
+for dir in Core Frontend Client.LaserProcess Client.LaserEquipment; do echo "=== $dir ===" && rg "LaserProcess|Slot|Twin|OrderItem" "<workspace-root>/Regrinding/$dir" --type cs -n | head -15; done
 ```
 
 Rules:
@@ -85,7 +85,7 @@ Rules:
 
 ### Expected rg output format (every line self-contained):
 ```
-/Users/nhat/Work/worktrees/Regrinding/Core/Services/LaserProcessService.cs:15:    public async Task CreateLaserProcessAsync(...)
+<workspace-root>/Regrinding/Core/Services/LaserProcessService.cs:15:    public async Task CreateLaserProcessAsync(...)
 ```
 
 If a line has NO filepath prefix (just `3:public class Foo`), that line is CORRUPT — skip it entirely.
@@ -205,7 +205,7 @@ Query: `/codediscover lifecycle of slot to twin, check Regrinding/Core and Regri
 
 Step 1 — ls to expand globs:
 ```bash
-ls /Users/nhat/Work/worktrees/Regrinding/
+ls <workspace-root>/Regrinding/
 ```
 Output: `Core/ Frontend/ Client.LaserProcess/ Client.LaserEquipment/ ...`
 
@@ -221,7 +221,7 @@ Pattern:     LaserProcess|Slot|Twin|OrderItem
 
 Step 2 — search:
 ```bash
-for dir in Core Client.LaserProcess Client.LaserEquipment; do echo "=== $dir ===" && rg "LaserProcess|Slot|Twin|OrderItem" "/Users/nhat/Work/worktrees/Regrinding/$dir" --type cs -n | head -15; done
+for dir in Core Client.LaserProcess Client.LaserEquipment; do echo "=== $dir ===" && rg "LaserProcess|Slot|Twin|OrderItem" "<workspace-root>/Regrinding/$dir" --type cs -n | head -15; done
 ```
 
 Step 4 — trace with embedcode:
@@ -232,7 +232,7 @@ Returns: Execute → CreateTwin → DigitalTwinService.CreateTwinAsync → ...
 
 If embedcode fails, fallback second rg:
 ```bash
-for dir in Core Client.LaserProcess Client.LaserEquipment; do echo "=== $dir ===" && rg "CreateTwinAsync|Execute|OrderItemService|UpdateSlots" "/Users/nhat/Work/worktrees/Regrinding/$dir" --type cs -n | head -20; done
+for dir in Core Client.LaserProcess Client.LaserEquipment; do echo "=== $dir ===" && rg "CreateTwinAsync|Execute|OrderItemService|UpdateSlots" "<workspace-root>/Regrinding/$dir" --type cs -n | head -20; done
 ```
 
 Step 5 — validate:

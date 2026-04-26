@@ -1,124 +1,664 @@
-version: 1
-
-claude:
-  commands:
-    - name: review
-      file: commands/review.md
-      agent: code-reviewer
-      agent_file: agents/code-reviewer.md
-      context_file: contexts/review.md
-      codex_skill: skills/review-workflow/SKILL.md
-    - name: pair
-      file: commands/pair.md
-      agent: pair-programmer
-      agent_file: agents/pair-programmer.md
-      # No codex_skill — pair protocol requires stateful .pair/ orchestration + sub-agents
-    - name: planner
-      file: commands/planner.md
-      agent: planner
-      agent_file: agents/planner.md
-      codex_skill: skills/planner-workflow/SKILL.md
-    - name: architect
-      file: commands/architect.md
-      agent: architect
-      agent_file: agents/architect.md
-      codex_skill: skills/architect-workflow/SKILL.md
-    - name: troubleshoot
-      file: commands/troubleshoot.md
-      agent: troubleshooter
-      agent_file: agents/troubleshooter.md
-    - name: discover
-      file: commands/discover.md
-      agent: discovery
-      agent_file: agents/discovery.md
-      codex_skill: skills/discovery-workflow/SKILL.md
-    - name: sonar
-      file: commands/sonar.md
-      agent: sonar-analyst
-      agent_file: agents/sonar-analyst.md
-      codex_skill: skills/sonar-workflow/SKILL.md
-    - name: grafana
-      file: commands/grafana.md
-      agent: grafana-analyst
-      agent_file: agents/grafana-analyst.md
-      # No codex_skill — requires kubectl port-forward + K8s secrets
-    - name: jaeger
-      file: commands/jaeger.md
-      agent: jaeger-analyst
-      agent_file: agents/jaeger-analyst.md
-      # No codex_skill — requires kubectl port-forward
-    - name: kibana-logs
-      file: commands/kibana-logs.md
-      agent: kibana-analyst
-      agent_file: agents/kibana-analyst.md
-      # No codex_skill — requires K8s secrets for ES auth
-
-codex:
-  workflow_skills:
-    - name: review-workflow
-      file: skills/review-workflow/SKILL.md
-      maps_to_claude_command: commands/review.md
-      maps_to_claude_agent: agents/code-reviewer.md
-    # pair-workflow removed — pair protocol is Claude Code-only
-    # (requires .pair/ state files, /clear command, sub-agent orchestration)
-    - name: planner-workflow
-      file: skills/planner-workflow/SKILL.md
-      maps_to_claude_command: commands/planner.md
-      maps_to_claude_agent: agents/planner.md
-    - name: architect-workflow
-      file: skills/architect-workflow/SKILL.md
-      maps_to_claude_command: commands/architect.md
-      maps_to_claude_agent: agents/architect.md
-    - name: discovery-workflow
-      file: skills/discovery-workflow/SKILL.md
-      maps_to_claude_command: commands/discover.md
-      maps_to_claude_agent: agents/discovery.md
-    - name: sonar-workflow
-      file: skills/sonar-workflow/SKILL.md
-      maps_to_claude_command: commands/sonar.md
-      maps_to_claude_agent: agents/sonar-analyst.md
-
-shared_language_skills:
-  - name: csharp-dotnet
-    file: skills/csharp-dotnet/SKILL.md
-  - name: typescript
-    file: skills/typescript/SKILL.md
-  - name: rust
-    file: skills/rust/SKILL.md
-  - name: python
-    file: skills/python/SKILL.md
-  - name: security-review
-    file: skills/security-review/SKILL.md
-
-language_rule_routing:
-  csharp_dotnet:
-    skill: skills/csharp-dotnet/SKILL.md
-    testing_reference: skills/csharp-dotnet/references/test-code-examples.md
-    required_test_method_naming: "[Action]_When[Scenario]_Then[Expectation]"
-    used_by:
-      claude_agents:
-        - agents/code-reviewer.md
-        - agents/pair-programmer.md
-        - agents/sonar-analyst.md
-      codex_workflow_skills:
-        - skills/review-workflow/SKILL.md
-        - skills/pair-workflow/SKILL.md
-        - skills/sonar-workflow/SKILL.md
-      global_instruction_files:
-        - ~/.codex/AGENTS.md
-        - ~/.claude/CLAUDE.md
-  typescript_react:
-    skill: skills/typescript/SKILL.md
-    react_reference: skills/typescript/references/react-next.md
-    used_by:
-      claude_agents:
-        - agents/code-reviewer.md
-        - agents/pair-programmer.md
-        - agents/sonar-analyst.md
-      codex_workflow_skills:
-        - skills/review-workflow/SKILL.md
-        - skills/pair-workflow/SKILL.md
-        - skills/sonar-workflow/SKILL.md
-      global_instruction_files:
-        - ~/.codex/AGENTS.md
-        - ~/.claude/CLAUDE.md
+{
+  "version": 2,
+  "runtimes": {
+    "claude": {
+      "display_name": "Claude Code",
+      "global_instruction_path": "~/.claude/CLAUDE.md",
+      "agents_dir": "~/.claude/agents",
+      "commands_dir": "~/.claude/commands",
+      "contexts_dir": "~/.claude/contexts"
+    },
+    "codex": {
+      "display_name": "Codex",
+      "global_instruction_paths": [
+        "~/.codex/AGENTS.md",
+        "~/.agents/AGENTS.md"
+      ],
+      "skill_dirs": [
+        "~/.codex/skills",
+        "~/.agents/skills"
+      ]
+    },
+    "copilot": {
+      "display_name": "GitHub Copilot",
+      "repo_instruction_path": ".github/copilot-instructions.md",
+      "repo_instruction_dir": ".github/instructions",
+      "repo_skills_dir": ".github/skills",
+      "global_skill_dir": "~/.copilot/skills"
+    }
+  },
+  "generated_outputs": {
+    "repo_agents": {
+      "template": "repo-agents",
+      "output": "AGENTS.md"
+    },
+    "claude_global": {
+      "template": "claude",
+      "output": "CLAUDE.md"
+    },
+    "codex_global": {
+      "template": "codex",
+      "output": "generated/instructions/codex-global.md"
+    },
+    "copilot_repo": {
+      "template": "copilot",
+      "output": ".github/copilot-instructions.md"
+    },
+    "copilot_csharp": {
+      "template": "copilot-csharp",
+      "output": ".github/instructions/csharp.instructions.md"
+    },
+    "copilot_typescript": {
+      "template": "copilot-typescript",
+      "output": ".github/instructions/typescript.instructions.md"
+    }
+  },
+  "assets": {
+    "command.architect": {
+      "type": "command",
+      "canonical_file": "commands/architect.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface"
+      ]
+    },
+    "command.az-pr-review": {
+      "type": "command",
+      "canonical_file": "commands/az-pr-review.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface",
+        "azure_devops"
+      ]
+    },
+    "command.az-review-response": {
+      "type": "command",
+      "canonical_file": "commands/az-review-response.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface",
+        "azure_devops"
+      ]
+    },
+    "command.codediscover": {
+      "type": "command",
+      "canonical_file": "commands/codediscover.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface",
+        "shell",
+        "embedcode"
+      ]
+    },
+    "command.discover": {
+      "type": "command",
+      "canonical_file": "commands/discover.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface"
+      ]
+    },
+    "command.generate-index": {
+      "type": "command",
+      "canonical_file": "commands/generate-index.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface",
+        "local_cli"
+      ]
+    },
+    "command.kibana-logs": {
+      "type": "command",
+      "canonical_file": "commands/kibana-logs.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface",
+        "local_cli",
+        "kubernetes"
+      ]
+    },
+    "command.pair": {
+      "type": "command",
+      "canonical_file": "commands/pair.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface",
+        "pair_state",
+        "subagents"
+      ]
+    },
+    "command.pair-implement": {
+      "type": "command",
+      "canonical_file": "commands/pair-implement.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface",
+        "pair_state",
+        "jq"
+      ]
+    },
+    "command.pair-plan": {
+      "type": "command",
+      "canonical_file": "commands/pair-plan.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface",
+        "pair_state"
+      ]
+    },
+    "command.pair-plan-challenge": {
+      "type": "command",
+      "canonical_file": "commands/pair-plan-challenge.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface",
+        "pair_state"
+      ]
+    },
+    "command.pair-review": {
+      "type": "command",
+      "canonical_file": "commands/pair-review.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface",
+        "pair_state"
+      ]
+    },
+    "command.pair-review-eco": {
+      "type": "command",
+      "canonical_file": "commands/pair-review-eco.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface",
+        "pair_state"
+      ]
+    },
+    "command.pair-simplify": {
+      "type": "command",
+      "canonical_file": "commands/pair-simplify.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface",
+        "pair_state"
+      ]
+    },
+    "command.planner": {
+      "type": "command",
+      "canonical_file": "commands/planner.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface"
+      ]
+    },
+    "command.review": {
+      "type": "command",
+      "canonical_file": "commands/review.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface",
+        "git"
+      ]
+    },
+    "command.verify": {
+      "type": "command",
+      "canonical_file": "commands/verify.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "command_surface",
+        "shell"
+      ]
+    },
+    "agent.az-pr-review": {
+      "type": "agent",
+      "canonical_file": "agents/az-pr-review.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "shell",
+        "azure_devops"
+      ]
+    },
+    "agent.az-review-response": {
+      "type": "agent",
+      "canonical_file": "agents/az-review-response.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "shell",
+        "azure_devops"
+      ]
+    },
+    "agent.discovery": {
+      "type": "agent",
+      "canonical_file": "agents/discovery.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "shell"
+      ]
+    },
+    "agent.kibana-analyst": {
+      "type": "agent",
+      "canonical_file": "agents/kibana.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "local_cli",
+        "kubernetes"
+      ]
+    },
+    "agent.pair-planner": {
+      "type": "agent",
+      "canonical_file": "agents/pair-planner.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "pair_state",
+        "subagents"
+      ]
+    },
+    "agent.pair-sketcher": {
+      "type": "agent",
+      "canonical_file": "agents/pair-sketcher.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "pair_state"
+      ]
+    },
+    "skill.aspire": {
+      "type": "skill",
+      "canonical_file": "skills/aspire/SKILL.md",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ],
+      "requires": [
+        "shell",
+        "local_cli"
+      ]
+    },
+    "skill.brainstorming": {
+      "type": "skill",
+      "canonical_file": "skills/brainstorming/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "subagents"
+      ]
+    },
+    "skill.browser-agent-audit": {
+      "type": "skill",
+      "canonical_file": "skills/browser-agent-audit/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "browser"
+      ]
+    },
+    "skill.csharp-dotnet": {
+      "type": "skill",
+      "canonical_file": "skills/csharp-dotnet/SKILL.md",
+      "supported_runtimes": [
+        "claude",
+        "codex",
+        "copilot"
+      ],
+      "requires": [
+        "repo_read"
+      ],
+      "publish": {
+        "copilot": {
+          "kind": "repo_skill_copy",
+          "path": ".github/skills/csharp-dotnet"
+        }
+      }
+    },
+    "skill.discovery-workflow": {
+      "type": "workflow_skill",
+      "canonical_file": "skills/discovery-workflow/SKILL.md",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ],
+      "requires": [
+        "repo_read",
+        "shell"
+      ]
+    },
+    "skill.evidence-discipline": {
+      "type": "skill",
+      "canonical_file": "skills/evidence-discipline/SKILL.md",
+      "supported_runtimes": [
+        "claude",
+        "codex",
+        "copilot"
+      ],
+      "requires": [
+        "repo_read"
+      ],
+      "publish": {
+        "copilot": {
+          "kind": "repo_skill_copy",
+          "path": ".github/skills/evidence-discipline"
+        }
+      }
+    },
+    "skill.landing-page-review": {
+      "type": "skill",
+      "canonical_file": "skills/landing-page-review/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "subagents"
+      ]
+    },
+    "skill.module-deepening": {
+      "type": "skill",
+      "canonical_file": "skills/module-deepening/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "repo_read"
+      ]
+    },
+    "skill.observability-index": {
+      "type": "skill",
+      "canonical_file": "skills/observability-index/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "local_cli"
+      ]
+    },
+    "skill.pair-implement": {
+      "type": "workflow_skill",
+      "canonical_file": "skills/pair-implement/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "pair_state",
+        "clear_command",
+        "subagents",
+        "jq"
+      ]
+    },
+    "skill.pair-plan": {
+      "type": "workflow_skill",
+      "canonical_file": "skills/pair-plan/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "pair_state"
+      ]
+    },
+    "skill.pair-plan-challenge": {
+      "type": "workflow_skill",
+      "canonical_file": "skills/pair-plan-challenge/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "pair_state",
+        "clear_command"
+      ]
+    },
+    "skill.pair-retro": {
+      "type": "skill",
+      "canonical_file": "skills/pair-retro/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "pair_state"
+      ]
+    },
+    "skill.pair-review": {
+      "type": "workflow_skill",
+      "canonical_file": "skills/pair-review/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "pair_state",
+        "clear_command",
+        "jq"
+      ]
+    },
+    "skill.pair-review-eco": {
+      "type": "workflow_skill",
+      "canonical_file": "skills/pair-review-eco/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "pair_state"
+      ]
+    },
+    "skill.python": {
+      "type": "skill",
+      "canonical_file": "skills/python/SKILL.md",
+      "supported_runtimes": [
+        "claude",
+        "codex",
+        "copilot"
+      ],
+      "requires": [
+        "repo_read"
+      ],
+      "publish": {
+        "copilot": {
+          "kind": "repo_skill_copy",
+          "path": ".github/skills/python"
+        }
+      }
+    },
+    "skill.review-workflow": {
+      "type": "workflow_skill",
+      "canonical_file": "skills/review-workflow/SKILL.md",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ],
+      "requires": [
+        "repo_read",
+        "git_diff"
+      ],
+      "allow_runtime_pointer_block": true
+    },
+    "skill.rust": {
+      "type": "skill",
+      "canonical_file": "skills/rust/SKILL.md",
+      "supported_runtimes": [
+        "claude",
+        "codex",
+        "copilot"
+      ],
+      "requires": [
+        "repo_read"
+      ],
+      "publish": {
+        "copilot": {
+          "kind": "repo_skill_copy",
+          "path": ".github/skills/rust"
+        }
+      }
+    },
+    "skill.security-review": {
+      "type": "skill",
+      "canonical_file": "skills/security-review/SKILL.md",
+      "supported_runtimes": [
+        "claude",
+        "codex",
+        "copilot"
+      ],
+      "requires": [
+        "repo_read"
+      ],
+      "publish": {
+        "copilot": {
+          "kind": "repo_skill_copy",
+          "path": ".github/skills/security-review"
+        }
+      }
+    },
+    "skill.system-prompt-creator": {
+      "type": "skill",
+      "canonical_file": "skills/system-prompt-creator/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "shell"
+      ]
+    },
+    "skill.typescript": {
+      "type": "skill",
+      "canonical_file": "skills/typescript/SKILL.md",
+      "supported_runtimes": [
+        "claude",
+        "codex",
+        "copilot"
+      ],
+      "requires": [
+        "repo_read"
+      ],
+      "publish": {
+        "copilot": {
+          "kind": "repo_skill_copy",
+          "path": ".github/skills/typescript"
+        }
+      }
+    },
+    "skill.ubiquitous-language": {
+      "type": "skill",
+      "canonical_file": "skills/ubiquitous-language/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "repo_read"
+      ]
+    },
+    "skill.web-design-guidelines": {
+      "type": "skill",
+      "canonical_file": "skills/web-design-guidelines/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "repo_read"
+      ]
+    },
+    "cli.aspire-logs": {
+      "type": "cli",
+      "canonical_file": "bin/aspire-logs",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "local_cli"
+      ]
+    },
+    "cli.aspire-traces": {
+      "type": "cli",
+      "canonical_file": "bin/aspire-traces",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "local_cli"
+      ]
+    },
+    "cli.az-pr-comments": {
+      "type": "cli",
+      "canonical_file": "bin/az-pr-comments",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "local_cli",
+        "azure_devops"
+      ]
+    },
+    "cli.kibana-logs": {
+      "type": "cli",
+      "canonical_file": "bin/kibana-logs",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "local_cli",
+        "kubernetes"
+      ]
+    },
+    "cli.kibana-traffic": {
+      "type": "cli",
+      "canonical_file": "bin/kibana-traffic",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "local_cli",
+        "kubernetes"
+      ]
+    },
+    "cli.observability-index": {
+      "type": "cli",
+      "canonical_file": "bin/observability-index",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "local_cli"
+      ]
+    }
+  }
+}

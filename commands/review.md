@@ -1,10 +1,10 @@
 ---
-description: Review changed files for security, correctness, and quality. Invokes the code-reviewer agent across C#, TypeScript, Rust, and Python.
+description: Review changed files for security, correctness, and quality across C#, TypeScript, Rust, and Python.
 ---
 
 # Code Review
 
-Review all uncommitted changes using the **code-reviewer** agent. Be direct, evidence-based, and push back on risky changes. Ask when ambiguity affects severity.
+Review all uncommitted changes directly. Be direct, evidence-based, and push back on risky changes. Ask when ambiguity affects severity.
 
 
 

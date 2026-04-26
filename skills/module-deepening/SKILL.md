@@ -1,6 +1,6 @@
 ---
 name: module-deepening
-description: Tactical refactoring within an existing system using the deletion test, depth-as-leverage, two-adapter rule, and replace-don't-layer test discipline. Use when the user asks "should I extract this", "is this wrapper doing anything", "where should the seam go", "this feels over-abstracted", "is this module pulling its weight", or wants to consolidate tightly-coupled modules. Distinct from architect-workflow (system-level design / ADRs) — this is intra-module/tactical.
+description: Tactical refactoring within an existing system using the deletion test, depth-as-leverage, two-adapter rule, and replace-don't-layer test discipline. Use when the user asks "should I extract this", "is this wrapper doing anything", "where should the seam go", "this feels over-abstracted", "is this module pulling its weight", or wants to consolidate tightly-coupled modules. Distinct from the `/architect` workflow (system-level design / ADRs) — this is intra-module/tactical.
 ---
 
 # Module Deepening
@@ -87,16 +87,16 @@ Wrong seam costs you. An adapter in front of pure computation is pure overhead. 
 
 5. **Hand off to other skills when warranted:**
    - New domain term named during discussion → invoke `ubiquitous-language` to update `UBIQUITOUS_LANGUAGE.md`.
-   - Decision contradicts a prior architectural choice with load-bearing reasoning → invoke `architect-workflow` to record an ADR.
+   - Decision contradicts a prior architectural choice with load-bearing reasoning → invoke `/architect` to record an ADR.
    - Generic readability cleanup falls out of the discussion → invoke `simplify`.
 
 ## When This Skill Doesn't Apply
 
-- **System-level design** (new services, technology choices, bounded contexts) → `architect-workflow`.
+- **System-level design** (new services, technology choices, bounded contexts) → `/architect`.
 - **Generic readability** (rename, dead code, formatting) → `simplify`.
 - **Bug investigation** → `troubleshoot`.
 
-If the question is *"should this exist at all"*, that's this skill. If the question is *"how should this be organized at system level"*, that's `architect-workflow`.
+If the question is *"should this exist at all"*, that's this skill. If the question is *"how should this be organized at system level"*, that's `/architect`.
 
 ## Anti-patterns to Call Out
 

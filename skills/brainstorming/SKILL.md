@@ -99,7 +99,7 @@ Cover architecture, components, data flow, error handling, testing. Scale each s
 ## Documentation
 
 - **Detect mode**: `.pair/` initialized (has `status.json`)? → pair mode. Else generic.
-- **Pair mode**: write to `.pair/spec.md` using pair-spec template (F1.AC1 IDs + Verification entries — see `skills/pair-spec/SKILL.md`). Do NOT git-commit (pair protocol handles lifecycle).
+- **Pair mode**: write to `.pair/spec.md` using the approved anchor plus explicit AC IDs and verification entries. Keep the structure compatible with the downstream `pair-plan` enhanced-mode contract. Do NOT git-commit (pair protocol handles lifecycle).
 - **Generic mode**: write to `docs/specs/YYYY-MM-DD-<topic>-design.md` (user location overrides). Git-commit.
 - Anchor verbatim at top in both modes (`## Purpose`, `## Rejection Criteria`, `## Contrasts`) before mode-specific content.
 

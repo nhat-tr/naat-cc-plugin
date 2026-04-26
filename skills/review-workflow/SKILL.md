@@ -11,16 +11,12 @@ Use this skill for code-review sessions in Codex.
 
 - Runtime: `codex`
 - Claude command: `commands/review.md`
-- Claude agent: `agents/code-reviewer.md`
-- Claude context: `contexts/review.md`
 - Command alias in Claude: `/review`
 
 ## Workflow
 
 1. Load these source docs:
    - `../../commands/review.md`
-   - `../../agents/code-reviewer.md`
-   - `../../contexts/review.md`
 2. Run review on uncommitted changes only (`git diff --staged` and `git diff`).
 3. If no uncommitted changes exist, return: `No uncommitted changes to review.`
 4. Report findings by severity, then by file.
@@ -28,7 +24,12 @@ Use this skill for code-review sessions in Codex.
 
 ## Language Routing (REQUIRED — do this BEFORE reviewing)
 
-Read `~/.claude/CLAUDE.md` (Claude Code) or `~/.codex/AGENTS.md` / `~/.agents/AGENTS.md` (Codex) → find the absolute path under "Global Language Rules" → `Read` that skill file. All rules in section 2 (Non-Negotiable Rules) are mandatory review criteria.
+<!-- BEGIN RUNTIME POINTERS -->
+- Claude Code: `~/.claude/CLAUDE.md`
+- Codex: `~/.codex/AGENTS.md` or `~/.agents/AGENTS.md`
+<!-- END RUNTIME POINTERS -->
+
+Read the active runtime's global instruction file from the block above, then find the absolute path under "Global Language Rules" and `Read` that skill file. All rules in section 2 (Non-Negotiable Rules) are mandatory review criteria.
 
 - **C# / .NET**: Read the C# skill file + testing reference. NUnit test names: `[Action]_When[Scenario]_Then[Expectation]`
 - **TypeScript / React / Next**: Read the TypeScript skill file + react-next reference.

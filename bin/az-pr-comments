@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# CLI wrapper for Azure DevOps PR comment retrieval.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+exec tsx "$SCRIPT_DIR/../infra/azure-devops/fetch-pr-comments.ts" "$@"

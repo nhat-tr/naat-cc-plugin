@@ -6,7 +6,7 @@ Extracts log and trace instrumentation from .NET codebases into compact JSON fil
 
 ```bash
 # From any .NET project root:
-npx tsx /Users/nhat.tran/.local/share/my-claude-code/infra/observability-index/src/index.ts --root .
+observability-index --root .
 
 # Or via Claude Code command:
 /generate-index

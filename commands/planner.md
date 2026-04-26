@@ -1,10 +1,10 @@
 ---
-description: Create a phased implementation plan for a feature, refactor, or architectural change. Analyzes the codebase first, then presents a plan. WAITS for user confirmation before any code is written.
+description: Create a phased implementation plan for a feature, refactor, or architectural change. Analyze the codebase first, then present a plan. Wait for user confirmation before any code is written.
 ---
 
 # Plan
 
-Create a comprehensive implementation plan using the **planner** agent. BE BRUTALLY HONEST, NO OPTIMISTIC ASSUMTION, ASK ON AMBIGUITIES, YOU ARE FREE TO PUSH BACK
+Create a comprehensive implementation plan. Be brutally honest, avoid optimistic assumptions, ask on ambiguities, and push back when the request is underspecified.
 
 ## What This Command Does
 

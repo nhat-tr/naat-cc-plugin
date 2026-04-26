@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-# CLI wrapper for Grafana diagnostics.
-# Usage: grafana [env] <<< '{"action":"health","namespace":"regrinding"}'
-#        echo '{"action":"pods","namespace":"tlm"}' | grafana oae
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-exec tsx "$SCRIPT_DIR/../infra/grafana/grafana-query.ts" "$@"

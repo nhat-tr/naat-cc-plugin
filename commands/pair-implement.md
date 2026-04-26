@@ -29,7 +29,7 @@ Execute these instructions directly. Do NOT spawn a subagent.
    - **TypeScript**: `tsc --noEmit`, then test runner from config
    - **Rust**: `cargo check` + `cargo test` + `cargo clippy`
    - **Python**: `pytest` + type checker
-5. Run `/simplify` to review changed code for quality and clean up any issues found
+5. Run `/pair-simplify` to review changed code for quality and clean up any issues found
 6. **Update `.pair/stream-log.md`** — append `### YYYY-MM-DD HH:MM UTC — Stream N: implement/fix`:
    - Agent: `claude / <model>`
    - Language detected, skill path used

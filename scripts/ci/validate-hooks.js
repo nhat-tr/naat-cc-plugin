@@ -59,7 +59,7 @@ function validateHooks() {
 
       for (let i = 0; i < matchers.length; i++) {
         const matcher = matchers[i];
-        if (!matcher.matcher) {
+        if (typeof matcher.matcher !== 'string') {
           console.error(`ERROR: ${eventType}[${i}] missing 'matcher' field`);
           hasErrors = true;
         }

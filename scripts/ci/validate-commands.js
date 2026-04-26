@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * Validate command markdown files are non-empty and have valid cross-references.
+ * Validate command markdown files are non-empty and stay aligned with the runtime asset manifest.
  */
 
 const fs = require('fs');
 const path = require('path');
+const { getAssetEntries, loadManifest } = require('../lib/runtime-assets');
 
 const ROOT_DIR = process.env.ROOT_DIR || path.join(__dirname, '../..');
 const COMMANDS_DIR = path.join(ROOT_DIR, 'commands');
@@ -21,6 +22,11 @@ function validateCommands() {
   let hasErrors = false;
 
   const validCommands = new Set(files.map(f => f.replace(/\.md$/, '')));
+  const manifest = loadManifest();
+  const commandAssets = getAssetEntries(manifest).filter(asset => asset.type === 'command');
+  const manifestCommands = new Set(
+    commandAssets.map(asset => path.basename(asset.canonical_file, '.md'))
+  );
 
   const validAgents = new Set();
   if (fs.existsSync(AGENTS_DIR)) {
@@ -77,8 +83,22 @@ function validateCommands() {
     }
   }
 
+  for (const commandName of validCommands) {
+    if (!manifestCommands.has(commandName)) {
+      console.error(`ERROR: commands/${commandName}.md missing from runtime asset manifest`);
+      hasErrors = true;
+    }
+  }
+
+  for (const commandName of manifestCommands) {
+    if (!validCommands.has(commandName)) {
+      console.error(`ERROR: manifest references missing command commands/${commandName}.md`);
+      hasErrors = true;
+    }
+  }
+
   if (hasErrors) process.exit(1);
-  console.log(`Validated ${files.length} command files`);
+  console.log(`Validated ${files.length} command files and ${commandAssets.length} manifest command entries`);
 }
 
 validateCommands();

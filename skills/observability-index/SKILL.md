@@ -12,7 +12,7 @@ Use this skill when asked to generate, update, or enrich the observability index
 Run the extractor script against the current project root:
 
 ```bash
-npx tsx /Users/nhat.tran/.local/share/my-claude-code/infra/observability-index/src/index.ts --root .
+observability-index --root .
 ```
 
 This produces:

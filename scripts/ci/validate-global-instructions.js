@@ -1,42 +1,33 @@
 #!/usr/bin/env node
 /**
- * Validate global Codex/Claude instruction files include language routing rules.
- *
- * By default, missing files are skipped to keep CI portable.
- * Set REQUIRE_GLOBAL_INSTRUCTION_FILES=true to fail when files are missing.
+ * Validate generated instruction outputs include the expected routing rules.
  */
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const { GENERATED_MARKER, ROOT_DIR, loadManifest } = require('../lib/runtime-assets');
 
-const homeDir = os.homedir();
-const codexHome = process.env.CODEX_HOME || path.join(homeDir, '.codex');
-const claudeHome = process.env.CLAUDE_HOME || path.join(homeDir, '.claude');
-const requireGlobalFiles = ['1', 'true', 'yes'].includes(
-  String(process.env.REQUIRE_GLOBAL_INSTRUCTION_FILES || '').toLowerCase(),
-);
-
+const manifest = loadManifest();
 const checks = [
   {
-    label: 'Codex global instructions',
-    file: process.env.CODEX_GLOBAL_AGENTS_PATH || path.join(codexHome, 'AGENTS.md'),
-    requirements: [
-      { name: 'C# skill routing', anyOf: ['csharp-dotnet/SKILL.md'] },
-      { name: 'TypeScript skill routing', anyOf: ['typescript/SKILL.md'] },
-      { name: 'React guidance routing', anyOf: ['react-next.md'] },
-      { name: 'NUnit naming convention', anyOf: ['[Action]_When[Scenario]_Then[Expectation]'] },
-    ],
+    label: 'Repo AGENTS',
+    file: path.join(ROOT_DIR, manifest.generated_outputs.repo_agents.output),
+    requirements: ['skills/csharp-dotnet/SKILL.md', 'skills/typescript/SKILL.md', 'react-next.md'],
   },
   {
     label: 'Claude global instructions',
-    file: process.env.CLAUDE_GLOBAL_CLAUDE_PATH || path.join(claudeHome, 'CLAUDE.md'),
-    requirements: [
-      { name: 'C# skill routing', anyOf: ['csharp-dotnet/SKILL.md'] },
-      { name: 'TypeScript skill routing', anyOf: ['typescript/SKILL.md'] },
-      { name: 'React guidance routing', anyOf: ['react-next.md'] },
-      { name: 'NUnit naming convention', anyOf: ['[Action]_When[Scenario]_Then[Expectation]'] },
-    ],
+    file: path.join(ROOT_DIR, manifest.generated_outputs.claude_global.output),
+    requirements: ['__PLUGIN_DIR__/skills/csharp-dotnet/SKILL.md', '__PLUGIN_DIR__/skills/typescript/SKILL.md', 'react-next.md'],
+  },
+  {
+    label: 'Codex global instructions',
+    file: path.join(ROOT_DIR, manifest.generated_outputs.codex_global.output),
+    requirements: ['__PLUGIN_DIR__/skills/csharp-dotnet/SKILL.md', '__PLUGIN_DIR__/skills/typescript/SKILL.md', 'react-next.md'],
+  },
+  {
+    label: 'Copilot repo instructions',
+    file: path.join(ROOT_DIR, manifest.generated_outputs.copilot_repo.output),
+    requirements: ['.github/instructions/', '.github/skills/'],
   },
 ];
 
@@ -50,22 +41,22 @@ function validateGlobalInstructionFiles() {
 
   for (const check of checks) {
     if (!fs.existsSync(check.file)) {
-      const message = `${check.label} not found: ${check.file}`;
-      if (requireGlobalFiles) {
-        console.error(`ERROR: ${message}`);
-        hasErrors = true;
-      } else {
-        console.log(`Skipping: ${message}`);
-      }
+      console.error(`ERROR: ${check.label} not found: ${check.file}`);
+      hasErrors = true;
       continue;
     }
 
     const content = fs.readFileSync(check.file, 'utf-8');
 
+    if (!content.includes(GENERATED_MARKER)) {
+      console.error(`ERROR: ${check.label} is missing the generated marker`);
+      hasErrors = true;
+    }
+
     for (const requirement of check.requirements) {
-      if (!includesAny(content, requirement.anyOf)) {
+      if (!content.includes(requirement)) {
         console.error(
-          `ERROR: ${check.label} (${check.file}) missing ${requirement.name}; expected one of: ${requirement.anyOf.join(', ')}`,
+          `ERROR: ${check.label} (${check.file}) missing required token: ${requirement}`,
         );
         hasErrors = true;
       }
@@ -76,7 +67,7 @@ function validateGlobalInstructionFiles() {
 
   if (hasErrors) process.exit(1);
 
-  console.log(`Validated global instruction routing in ${validated} file(s)`);
+  console.log(`Validated generated instruction routing in ${validated} file(s)`);
 }
 
 validateGlobalInstructionFiles();

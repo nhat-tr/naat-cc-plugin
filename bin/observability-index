@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# CLI wrapper for observability index generation.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+exec tsx "$SCRIPT_DIR/../infra/observability-index/src/index.ts" "$@"

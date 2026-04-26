@@ -30,12 +30,12 @@ Match the user's request to a filter mode:
 
 With explicit PR ID:
 ```bash
-tsx $HOME/.local/share/my-claude-code/infra/azure-devops/fetch-pr-comments.ts <PR_ID> --format text [--only-sonar | --include-sonar]
+az-pr-comments <PR_ID> --format text [--only-sonar | --include-sonar]
 ```
 
 Auto-detect from current branch:
 ```bash
-tsx $HOME/.local/share/my-claude-code/infra/azure-devops/fetch-pr-comments.ts --detect --format text [--only-sonar | --include-sonar]
+az-pr-comments --detect --format text [--only-sonar | --include-sonar]
 ```
 
 The output header includes `Mode: default | include-sonar | only-sonar` and reports hidden Sonar counts when applicable. Resolved threads are counted but not listed.
