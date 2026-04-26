@@ -32,6 +32,14 @@ If the user can't articulate any, intent isn't stable — ask more questions. Do
 
 > Example: "NOT a read-through cache in the DB driver, because we don't want caching coupled to DB access."
 
+### Anchor Vocabulary
+
+When drafting Purpose, Rejection Criteria, and Contrasts, prefer canonical terms from `UBIQUITOUS_LANGUAGE.md` (if present). If you reach for a synonym (e.g., "user" when the project says **Customer**, "order" when it says **Purchase**), flag it explicitly:
+- Adopt the canonical term, OR
+- If the canonical term is genuinely wrong for this context, note the new distinction so the spec can capture it for `ubiquitous-language` to update later.
+
+Drift here propagates downstream — the Purpose seeds the spec, plan, and code.
+
 ### Confirmation Gate (blocking)
 
 Emit all three fields in one message. User confirms or corrects each explicitly. On correction: emit revised anchor, re-confirm. **Do NOT silently patch** — delta must be visible.
@@ -41,7 +49,7 @@ Emit all three fields in one message. User confirms or corrects each explicitly.
 Once confirmed, anchor is persistent. Reference at three checkpoints:
 
 1. **Direction-setting proposals** — state *"Serves Purpose because X. Does not violate R1/R2/R3."* Only on directional moments, not every question.
-2. **Pulse every ~5 Q&A turns** — 3 bullets: Purpose one-liner, emerging direction (max 3), any anchor tension. 15-second read.
+2. **Pulse every ~5 Q&A turns** — 4 bullets: Purpose one-liner, emerging direction (max 3), any anchor tension, any unresolved upstream decision blocking the current branch. 15-second read.
 3. **Pre-spec re-verification (blocking)** — re-emit current anchor, show delta if any field changed, require explicit re-approval before spec is written.
 
 ### Re-Anchoring Rule
@@ -56,7 +64,7 @@ Anchor copied verbatim to top of spec (`## Purpose`, `## Rejection Criteria`, `#
 
 Complete in order:
 
-1. **Explore project context** — files, docs, recent commits
+1. **Explore project context** — files, docs, recent commits; if `UBIQUITOUS_LANGUAGE.md` exists, partial-read the clusters relevant to the topic
 2. **Offer visual companion** (if visual questions ahead) — own message, no other content. See Visual Companion below.
 3. **Establish Core Anchor** — hard gate, before Q&A
 4. **Ask clarifying questions** — one at a time; pulse every ~5 turns; cross-check on direction-setting
@@ -85,10 +93,13 @@ Any mid-flow anchor correction → re-establish round, not silent patch.
 - Scope-check first: if the request describes multiple independent subsystems (chat + billing + analytics), flag immediately and decompose. Don't refine details of a project that needs splitting.
 - One question per message. Multiple choice preferred when it fits.
 - Focus: purpose, constraints, success criteria.
+- **Walk down each branch of the design tree, resolving dependencies between decisions one-by-one.** If decision B depends on A, resolve A first — exploring B's branches before A is settled produces speculative answers and forces rework.
 
 ## Exploring approaches
 
 Propose 2–3 options with trade-offs. Lead with your recommendation and reasoning.
+
+Options must differ in **fundamental approach** — different layer, different paradigm, different boundary — not surface parameters. Three minor variants of the same idea is one option, not three. If you can't articulate what fundamentally distinguishes each option, the spread is too narrow — go back to the design tree.
 
 ## Presenting the design
 
@@ -102,6 +113,7 @@ Cover architecture, components, data flow, error handling, testing. Scale each s
 - **Pair mode**: write to `.pair/spec.md` using the approved anchor plus explicit AC IDs and verification entries. Keep the structure compatible with the downstream `pair-plan` enhanced-mode contract. Do NOT git-commit (pair protocol handles lifecycle).
 - **Generic mode**: write to `docs/specs/YYYY-MM-DD-<topic>-design.md` (user location overrides). Git-commit.
 - Anchor verbatim at top in both modes (`## Purpose`, `## Rejection Criteria`, `## Contrasts`) before mode-specific content.
+- **Glossary write-back**: if the conversation surfaced new domain terms not yet in `UBIQUITOUS_LANGUAGE.md`, invoke the `ubiquitous-language` skill before finalizing the spec — keeps the glossary current and prevents decay.
 
 ## Spec Self-Review
 

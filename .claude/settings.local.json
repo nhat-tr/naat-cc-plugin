@@ -50,7 +50,9 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:github.com)",
       "Bash(gh api *)",
-      "Bash(kill 57064)"
+      "Bash(python -m scripts.aggregate_benchmark /Users/nhat.tran/.local/share/my-claude-code/skills/module-deepening-workspace/iteration-1 --skill-name module-deepening)",
+      "Bash(kill 57064)",
+      "Read(//Volumes/NaatsStore/dev/doing/my-claude-code/**)"
     ],
     "deny": [
       "Read(**/.env)",

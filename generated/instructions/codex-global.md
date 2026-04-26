@@ -15,6 +15,12 @@
 - Search first, then read the exact lines you need.
 - If you cannot name the target lines or symbol before reading, search more.
 
+## Domain Vocabulary
+
+- If `UBIQUITOUS_LANGUAGE.md` exists in or above the working directory, consult it before discussing or naming domain concepts.
+- Partial-read the relevant cluster (`## ...` headers); do not load the whole file.
+- Prefer its terms over generic synonyms when reasoning about the domain.
+
 ## Dependency Check Before Building
 
 - For new capabilities, inspect the repo's existing dependencies first.
