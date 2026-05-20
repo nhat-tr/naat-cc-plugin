@@ -1,0 +1,14 @@
+{
+  "eval_id": 3,
+  "eval_name": "thin-repository-wrapper",
+  "prompt": "Looking at `Hoffmann.Inventory.Data.Repositories.WarehouseRepository`. Every method is one line like `GetById(int id) => _context.Warehouses.FindAsync(id);` and `Search(WarehouseFilter f) => _context.Warehouses.Where(...).ToListAsync();`. Eight callers across the inventory service. Our team lead added it three years ago 'so we can swap EF Core later'. We never have. Worth keeping or should I have all the consumers query DbContext directly?",
+  "assertions": [
+    "Applies the deletion test by name to the repository",
+    "Identifies the wrapper as shallow / pass-through / hypothetical seam",
+    "Recommends inlining (callers query DbContext directly)",
+    "Pushes back on 'swap EF Core later' as the one-adapter / hypothetical-seam anti-pattern",
+    "Identifies the real seam location: DbContext / EF Core provider level (in-memory provider or similar)",
+    "Uses at least 3 of the skill vocabulary terms: seam, shallow, depth, leverage, locality, hypothetical, adapter",
+    "Ends with 'Which of these would you like to explore?' or equivalent prompt to user"
+  ]
+}

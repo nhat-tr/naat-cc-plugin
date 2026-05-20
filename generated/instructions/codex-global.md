@@ -17,9 +17,11 @@
 
 ## Domain Vocabulary
 
-- If `UBIQUITOUS_LANGUAGE.md` exists in or above the working directory, consult it before discussing or naming domain concepts.
+- If `UBIQUITOUS_LANGUAGE.md` exists in or above the working directory, consult it **before** discussing, naming, or generating any domain concept.
 - Partial-read the relevant cluster (`## ...` headers); do not load the whole file.
-- Prefer its terms over generic synonyms when reasoning about the domain.
+- Use its terms verbatim in generated code — types, variables, functions, endpoints. Do not paraphrase, abbreviate, or synonym-swap domain terms.
+- When reviewing code, treat names that diverge from the ubiquitous language as correctness issues, not style issues.
+- If a term does not exist in `UBIQUITOUS_LANGUAGE.md`, say so explicitly rather than inventing a name that sounds domain-like.
 
 ## Dependency Check Before Building
 
@@ -32,6 +34,15 @@
 - Do not claim shapes, fields, or behavior you did not observe in code or runtime evidence.
 - If correctness depends on an unverified assumption, verify it first.
 - When user evidence contradicts the plan, update the plan immediately.
+
+## Bug Diagnosis Gate
+
+When a user reports a bug or unexpected behavior — before writing any code:
+
+1. **Read every code path** that can produce the observed symptom. Do not stop at the first match.
+2. **Write the diagnosis** — confirmed root cause, all candidates considered, which paths were read.
+3. **State the architecture impact** — does the fix address root cause or symptom? What contract does it rely on? Is that contract guaranteed? Does it introduce coupling?
+4. **Hold code until the diagnosis is stable** — do not write, edit, or commit any code (including logs or instrumentation) until the root cause is confirmed. Label unverified hypotheses explicitly.
 
 ## Code Changes
 

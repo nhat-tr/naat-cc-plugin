@@ -39,6 +39,7 @@ interface ThreadComment {
   commentType: string;
   publishedDate: string;
   author: { displayName: string; uniqueName: string };
+  likedBy?: Array<{ displayName: string; uniqueName: string }>;
 }
 
 interface PrThread {
@@ -57,7 +58,7 @@ interface ReviewThread {
   filePath: string | null;
   line: number | null;
   isBot: boolean;
-  comments: Array<{ author: string; content: string; date: string }>;
+  comments: Array<{ id: number; author: string; content: string; date: string; likedBy: string[] }>;
 }
 
 type FilterMode = 'default' | 'include-sonar' | 'only-sonar';
@@ -151,9 +152,11 @@ function mapThread(thread: PrThread): ReviewThread {
     line: thread.threadContext?.rightFileStart?.line ?? null,
     isBot,
     comments: userComments.map(c => ({
+      id: c.id,
       author: c.author.displayName,
       content: c.content.trim(),
       date: c.publishedDate.slice(0, 10),
+      likedBy: (c.likedBy ?? []).map(l => l.displayName),
     })),
   };
 }

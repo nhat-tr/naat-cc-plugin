@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# validate-mermaid — validate every Mermaid code block found in Markdown files.
+# Requires: mmdc  (npm install -g @mermaid-js/mermaid-cli)
+# Usage:    validate-mermaid [file.md ...]
+#           Omit arguments to scan all docs/**/*.md in the current directory.
+
+set -euo pipefail
+
+if ! command -v mmdc >/dev/null 2>&1; then
+  echo "mmdc not found. Install with: npm install -g @mermaid-js/mermaid-cli" >&2
+  exit 1
+fi
+
+# Build file list: explicit args or every .md under docs/
+if (( $# > 0 )); then
+  files=("$@")
+else
+  mapfile -t files < <(find docs -name '*.md' 2>/dev/null | sort)
+fi
+
+if (( ${#files[@]} == 0 )); then
+  echo "No markdown files to check."
+  exit 0
+fi
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+errors=0
+total=0
+
+for f in "${files[@]}"; do
+  [[ -f "$f" ]] || continue
+
+  n=0
+  in_block=0
+  block=""
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if (( in_block == 0 )) && [[ "$line" == '```mermaid' ]]; then
+      in_block=1
+      block=""
+      continue
+    fi
+
+    if (( in_block == 1 )) && [[ "$line" != '```' ]]; then
+      block+="${line}"$'\n'
+      continue
+    fi
+
+    # End of a mermaid block: validate it.
+    (( in_block == 1 )) || continue
+    in_block=0
+    n=$((n + 1))
+    total=$((total + 1))
+
+    printf '%s' "$block" > "$tmp/d.mmd"
+
+    if err=$(mmdc -i "$tmp/d.mmd" -o "$tmp/out.svg" -q 2>&1); then
+      printf '  ok   block %-2d  %s\n' "$n" "$f"
+    else
+      printf '  FAIL block %-2d  %s\n' "$n" "$f"
+      head -1 "$tmp/d.mmd" | sed 's/^/         type: /'
+      printf '%s\n' "$err" \
+        | grep -Ev '^[[:space:]]*$|ExecutionContext|Protocol error|Target closed' \
+        | head -8 \
+        | sed 's/^/         /'
+      errors=$((errors + 1))
+    fi
+  done < "$f"
+done
+
+echo ""
+printf '%d diagram(s) checked — %d error(s)\n' "$total" "$errors"
+[[ $errors -eq 0 ]]

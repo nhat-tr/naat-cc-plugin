@@ -13,7 +13,6 @@
       "Bash(npm run:*)",
       "Bash(node:*)",
       "WebFetch(domain:developers.openai.com)",
-      "mcp__aspire__list_resources",
       "WebFetch(domain:aspire.dev)",
       "Bash(echo:*)",
       "Bash(aspire-logs:*)",
@@ -52,7 +51,17 @@
       "Bash(gh api *)",
       "Bash(python -m scripts.aggregate_benchmark /Users/nhat.tran/.local/share/my-claude-code/skills/module-deepening-workspace/iteration-1 --skill-name module-deepening)",
       "Bash(kill 57064)",
-      "Read(//Volumes/NaatsStore/dev/doing/my-claude-code/**)"
+      "Read(//Volumes/NaatsStore/dev/doing/my-claude-code/**)",
+      "Skill(skill-creator:skill-creator)",
+      "Read(//Users/nhat.tran/HES/**)",
+      "Bash(~/.local/share/my-claude-code/skills/aspire/scripts/trace-inspect.ts --help)",
+      "Bash(/Users/nhat.tran/.local/share/my-claude-code/skills/aspire/scripts/aspire-db.ts --help)",
+      "Bash(/Users/nhat.tran/.local/share/my-claude-code/skills/aspire/scripts/aspire-db.ts agent-data-db *)",
+      "Bash(/Users/nhat.tran/.local/share/my-claude-code/skills/aspire/scripts/aspire-db.ts recalcore-db *)",
+      "Bash(/Users/nhat.tran/.local/share/my-claude-code/skills/aspire/scripts/aspire-logs.ts --help)",
+      "Bash(/Users/nhat.tran/.local/share/my-claude-code/skills/aspire/scripts/aspire-logs.ts Paragon-Api --severity Error --limit 3)",
+      "Bash(/Users/nhat.tran/.local/share/my-claude-code/skills/aspire/scripts/aspire-logs.ts Paragon-Api --severity Warning --limit 3 --exclude \"healthz\")",
+      "Bash(./install.sh *)"
     ],
     "deny": [
       "Read(**/.env)",

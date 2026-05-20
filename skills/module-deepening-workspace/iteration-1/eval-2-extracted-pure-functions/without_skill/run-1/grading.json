@@ -1,0 +1,45 @@
+{
+  "expectations": [
+    {
+      "text": "Identifies that the bug lives in the orchestration (PlaceOrderAsync), not in the helper methods",
+      "passed": true,
+      "evidence": "'The bug lives in `PlaceOrderAsync` \u2014 specifically in the ordering and conditional logic that orchestrates those calls.'"
+    },
+    {
+      "text": "Applies the deletion test to the extracted helper methods",
+      "passed": false,
+      "evidence": "No deletion test as a named heuristic; recommends keeping the helpers based on cognitive-load arguments."
+    },
+    {
+      "text": "Names the anti-pattern: extracting pure functions for testability when bugs live in the call site",
+      "passed": false,
+      "evidence": "Says 'tested the parts not the whole' but does not name the specific anti-pattern of testability-driven extraction."
+    },
+    {
+      "text": "States that the test surface should be at PlaceOrderAsync's interface, not at the helper methods",
+      "passed": true,
+      "evidence": "'You need integration or orchestration-level tests on `PlaceOrderAsync` itself.'"
+    },
+    {
+      "text": "Uses at least 2 of the skill vocabulary terms",
+      "passed": false,
+      "evidence": "Uses 'abstraction', 'orchestration', 'pipeline' \u2014 not the skill's vocabulary (locality, leverage, test surface as a term, shallow, pass-through)."
+    },
+    {
+      "text": "Mentions 'replace, don't layer' or that helper unit tests become waste once orchestration tests exist",
+      "passed": false,
+      "evidence": "Recommends ADDING orchestration tests but explicitly says the refactor 'is architecturally sound' and keeps the helper tests."
+    },
+    {
+      "text": "Ends with 'Which of these would you like to explore?' or equivalent",
+      "passed": false,
+      "evidence": "Ends with 'Bottom Line' summary; no workflow prompt to user."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 5,
+    "total": 7,
+    "pass_rate": 0.2857
+  }
+}

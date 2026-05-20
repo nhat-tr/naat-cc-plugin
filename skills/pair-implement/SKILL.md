@@ -62,8 +62,7 @@ Read in order:
    - `.pair/eval-results.json` (if present) is primary guide for failed ACs/tests.
    - If `eval_fail_count >= 2`: invoke `/troubleshoot` BEFORE fixing. Do not skip.
 4. Keep changes scoped to the current stream; log exceptions.
-5. **TDD**: use `/superpowers:test-driven-development` for new functionality — failing test first, then implement. Include AC IDs in test names where framework supports it (e.g. `[TestCase("F1.AC1")]`, `test.describe("F1.AC1: ...")`). Best-effort.
-6. For streams with 3+ independent tasks, consider `/superpowers:dispatching-parallel-agents` for non-shared-file work.
+5. **TDD**: use Test Driven Development
 7. **Layered verification** — run in order. Stop and fix at the first failing layer.
 
    **Stream type lookup (first):** read `**Type:**` from the current stream in `.pair/plan.md`. Tags from `{static, service, frontend}`, comma-separated (e.g. `service, frontend`).
@@ -91,7 +90,6 @@ Read in order:
    - **Precondition**: the component is playwright-test-ready per the Frontend Component Requirements section above. If it isn't, playwright will flake — fix the component first, re-run 7c.
    - **Playwright via cost-isolated sub-agent (MANDATORY)**: dispatch Task with `subagent_type=general-purpose`, `model=haiku`. Prompt must include: URL/route, golden-path interactions derived from AC IDs, 1–3 edge cases. Require a compact pass/fail report per behavior with one-line reasons; **explicitly forbid DOM snapshot dumps in the response**. Verbose tool output stays in sub-agent context; only the verdict returns.
    - **Web Interface Guidelines audit (MANDATORY)**: invoke `/web-design-guidelines` on changed UI code. Fix every flagged issue; re-run until clean. Do NOT claim the stream done while any violation remains. If a guideline conflicts with spec's Purpose/RC, log the exception and ask the human to resolve — do not silently skip.
-8. Before claiming done, invoke `/superpowers:verification-before-completion` — do not claim success without running the actual verification command and checking output.
 9. **Update `.pair/stream-log.md`** before signaling. Append `### YYYY-MM-DD HH:MM UTC — Stream N: implement` with:
    - **Agent:** `codex / <model>`
    - stream/task id, what changed (or findings addressed/deferred), files touched, key decisions/tradeoffs, verification run + result (or why skipped), blockers/questions

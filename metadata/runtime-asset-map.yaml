@@ -396,6 +396,17 @@
         "subagents"
       ]
     },
+    "skill.kube-vuln": {
+      "type": "skill",
+      "canonical_file": "skills/kube-vuln/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "shell",
+        "subagents"
+      ]
+    },
     "skill.module-deepening": {
       "type": "skill",
       "canonical_file": "skills/module-deepening/SKILL.md",

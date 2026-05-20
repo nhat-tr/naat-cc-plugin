@@ -1,0 +1,396 @@
+{
+  "metadata": {
+    "skill_name": "module-deepening",
+    "skill_path": "/Users/nhat.tran/.local/share/my-claude-code/skills/module-deepening",
+    "executor_model": "claude-sonnet-4 (via Agent subagent)",
+    "analyzer_model": "claude-opus-4-7 (Claude Code main agent)",
+    "timestamp": "2026-04-26T18:08:07Z",
+    "evals_run": [
+      1,
+      2,
+      3
+    ],
+    "runs_per_configuration": 1
+  },
+  "runs": [
+    {
+      "eval_id": 1,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 7,
+        "failed": 0,
+        "total": 7,
+        "time_seconds": 47.7,
+        "tokens": 18652,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Applies the deletion test by name (as a named heading or explicit step)",
+          "passed": true,
+          "evidence": "Has '## Deletion test' heading and walks through what happens if the interface is deleted."
+        },
+        {
+          "text": "States the two-adapter rule (one adapter = hypothetical/indirection, two = real seam)",
+          "passed": true,
+          "evidence": "'A **seam** is real only when at least two adapters live behind it. - You have one adapter... One adapter = indirection.'"
+        },
+        {
+          "text": "Recommends deletion (conditional on real test-double adapter is acceptable)",
+          "passed": true,
+          "evidence": "'Yes. Rip it out.' with sound conditional: keep only if hand-written FakePaymentGatewayClient exists."
+        },
+        {
+          "text": "Uses at least 3 of the skill vocabulary terms",
+          "passed": true,
+          "evidence": "Uses seam, adapter, port, leverage, depth differential, hypothetical seam \u2014 well above 3."
+        },
+        {
+          "text": "Names the anti-pattern explicitly",
+          "passed": true,
+          "evidence": "'Your junior's argument is the classic anti-pattern... textbook version of adding a port for one implementation.'"
+        },
+        {
+          "text": "Does NOT propose new interface signatures or implementation code",
+          "passed": true,
+          "evidence": "No code proposals for new interfaces; only diagnosis and the 'discuss before designing' candidate."
+        },
+        {
+          "text": "Ends with 'Which of these would you like to explore?' or equivalent",
+          "passed": true,
+          "evidence": "Final line is exactly 'Which of these would you like to explore?'"
+        }
+      ],
+      "notes": [],
+      "eval_name": "single-adapter-port"
+    },
+    {
+      "eval_id": 2,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 7,
+        "failed": 0,
+        "total": 7,
+        "time_seconds": 51.4,
+        "tokens": 18814,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Identifies that the bug lives in the orchestration (PlaceOrderAsync), not in the helper methods",
+          "passed": true,
+          "evidence": "'It is in the **orchestration**: the call sequence in `PlaceOrderAsync` does not guard against order state...'"
+        },
+        {
+          "text": "Applies the deletion test to the extracted helper methods",
+          "passed": true,
+          "evidence": "Has '## Applying the Deletion Test' heading and walks through each method's caller count."
+        },
+        {
+          "text": "Names the anti-pattern: extracting pure functions for testability when bugs live in the call site",
+          "passed": true,
+          "evidence": "'The pure function passes its own tests while the call site is still wrong. That's precisely the anti-pattern this refactor fell into.'"
+        },
+        {
+          "text": "States that the test surface should be at PlaceOrderAsync's interface, not at the helper methods",
+          "passed": true,
+          "evidence": "'## The Deeper Problem: The Test Surface Is in the Wrong Place' \u2014 explicit dedicated section."
+        },
+        {
+          "text": "Uses at least 2 of the skill vocabulary terms",
+          "passed": true,
+          "evidence": "Uses locality, leverage, shallow module, pass-through, interface, test surface \u2014 well above 2."
+        },
+        {
+          "text": "Mentions 'replace, don't layer' or that helper unit tests become waste once orchestration tests exist",
+          "passed": true,
+          "evidence": "Step 4: 'Do not layer the new orchestration tests on top of the old helper tests.'"
+        },
+        {
+          "text": "Ends with 'Which of these would you like to explore?' or equivalent",
+          "passed": true,
+          "evidence": "Final line: 'Which of these would you like to explore?'"
+        }
+      ],
+      "notes": [],
+      "eval_name": "extracted-pure-functions"
+    },
+    {
+      "eval_id": 3,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 7,
+        "failed": 0,
+        "total": 7,
+        "time_seconds": 31.3,
+        "tokens": 17982,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Applies the deletion test by name to the repository",
+          "passed": true,
+          "evidence": "Opens with 'Apply the deletion test first: if you deleted `WarehouseRepository`...' and concludes 'The module fails the deletion test.'"
+        },
+        {
+          "text": "Identifies the wrapper as shallow / pass-through / hypothetical seam",
+          "passed": true,
+          "evidence": "'shallow pass-through with no depth', 'hypothetical seam', 'one adapter (EF Core / SQL), no substitute' \u2014 all three named."
+        },
+        {
+          "text": "Recommends inlining (callers query DbContext directly)",
+          "passed": true,
+          "evidence": "'Delete `WarehouseRepository`. Inline the EF Core calls at each call site.'"
+        },
+        {
+          "text": "Pushes back on 'swap EF Core later' as the one-adapter / hypothetical-seam anti-pattern",
+          "passed": true,
+          "evidence": "'## On the \"swap EF Core later\" argument \u2014 This is the one-adapter anti-pattern with a hypothetical justification.'"
+        },
+        {
+          "text": "Identifies the real seam location: DbContext / EF Core provider level",
+          "passed": true,
+          "evidence": "'The real swap seam \u2014 if you ever needed one \u2014 lives at the `DbContext` level anyway (EF Core providers), not at a hand-rolled repository layer above it.' Also mentions UseInMemoryDatabase."
+        },
+        {
+          "text": "Uses at least 3 of the skill vocabulary terms",
+          "passed": true,
+          "evidence": "Uses seam, shallow, depth, leverage, locality, hypothetical, adapter \u2014 well above 3."
+        },
+        {
+          "text": "Ends with 'Which of these would you like to explore?' or equivalent",
+          "passed": true,
+          "evidence": "Final line: 'Which of these would you like to explore?'"
+        }
+      ],
+      "notes": [],
+      "eval_name": "thin-repository-wrapper"
+    },
+    {
+      "eval_id": 1,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.2857,
+        "passed": 2,
+        "failed": 5,
+        "total": 7,
+        "time_seconds": 32.3,
+        "tokens": 15745,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Applies the deletion test by name (as a named heading or explicit step)",
+          "passed": false,
+          "evidence": "No mention of 'deletion test' as a named heuristic. Reasons through the question with general YAGNI framing."
+        },
+        {
+          "text": "States the two-adapter rule (one adapter = hypothetical/indirection, two = real seam)",
+          "passed": false,
+          "evidence": "No two-adapter rule. Mentions 'interfaces are not free' and YAGNI but no structural rule about adapter count."
+        },
+        {
+          "text": "Recommends deletion (conditional on real test-double adapter is acceptable)",
+          "passed": true,
+          "evidence": "Recommends removal with conditions on test mocking and DI complexity \u2014 directionally aligned."
+        },
+        {
+          "text": "Uses at least 3 of the skill vocabulary terms",
+          "passed": false,
+          "evidence": "Uses 'abstraction' and 'interface' but not the skill's specific vocabulary (seam, adapter as port, leverage, depth, locality)."
+        },
+        {
+          "text": "Names the anti-pattern explicitly",
+          "passed": false,
+          "evidence": "Mentions 'just in case is not a design driver' but does not name 'adding a port for one implementation' as a named anti-pattern."
+        },
+        {
+          "text": "Does NOT propose new interface signatures or implementation code",
+          "passed": true,
+          "evidence": "No code proposals."
+        },
+        {
+          "text": "Ends with 'Which of these would you like to explore?' or equivalent",
+          "passed": false,
+          "evidence": "Ends with 'Don't let \"we might change later\" win without a fight.' \u2014 no workflow prompt to user."
+        }
+      ],
+      "notes": [],
+      "eval_name": "single-adapter-port"
+    },
+    {
+      "eval_id": 2,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.2857,
+        "passed": 2,
+        "failed": 5,
+        "total": 7,
+        "time_seconds": 36.2,
+        "tokens": 16060,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Identifies that the bug lives in the orchestration (PlaceOrderAsync), not in the helper methods",
+          "passed": true,
+          "evidence": "'The bug lives in `PlaceOrderAsync` \u2014 specifically in the ordering and conditional logic that orchestrates those calls.'"
+        },
+        {
+          "text": "Applies the deletion test to the extracted helper methods",
+          "passed": false,
+          "evidence": "No deletion test as a named heuristic; recommends keeping the helpers based on cognitive-load arguments."
+        },
+        {
+          "text": "Names the anti-pattern: extracting pure functions for testability when bugs live in the call site",
+          "passed": false,
+          "evidence": "Says 'tested the parts not the whole' but does not name the specific anti-pattern of testability-driven extraction."
+        },
+        {
+          "text": "States that the test surface should be at PlaceOrderAsync's interface, not at the helper methods",
+          "passed": true,
+          "evidence": "'You need integration or orchestration-level tests on `PlaceOrderAsync` itself.'"
+        },
+        {
+          "text": "Uses at least 2 of the skill vocabulary terms",
+          "passed": false,
+          "evidence": "Uses 'abstraction', 'orchestration', 'pipeline' \u2014 not the skill's vocabulary (locality, leverage, test surface as a term, shallow, pass-through)."
+        },
+        {
+          "text": "Mentions 'replace, don't layer' or that helper unit tests become waste once orchestration tests exist",
+          "passed": false,
+          "evidence": "Recommends ADDING orchestration tests but explicitly says the refactor 'is architecturally sound' and keeps the helper tests."
+        },
+        {
+          "text": "Ends with 'Which of these would you like to explore?' or equivalent",
+          "passed": false,
+          "evidence": "Ends with 'Bottom Line' summary; no workflow prompt to user."
+        }
+      ],
+      "notes": [],
+      "eval_name": "extracted-pure-functions"
+    },
+    {
+      "eval_id": 3,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.2857,
+        "passed": 2,
+        "failed": 5,
+        "total": 7,
+        "time_seconds": 30.7,
+        "tokens": 15715,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Applies the deletion test by name to the repository",
+          "passed": false,
+          "evidence": "No 'deletion test' as a named heuristic. Argues by listing wrapper costs and benefits."
+        },
+        {
+          "text": "Identifies the wrapper as shallow / pass-through / hypothetical seam",
+          "passed": false,
+          "evidence": "Calls it a 'thin wrapper' and says abstraction 'has not aged well' but does not use the named terms shallow / pass-through / hypothetical seam."
+        },
+        {
+          "text": "Recommends inlining (callers query DbContext directly)",
+          "passed": true,
+          "evidence": "'Inline each call to the equivalent `_context.Warehouses.*` expression.'"
+        },
+        {
+          "text": "Pushes back on 'swap EF Core later' as the one-adapter / hypothetical-seam anti-pattern",
+          "passed": true,
+          "evidence": "Three concrete arguments: IQueryable leaks, EF Core not commodity, three years of zero swaps. Strong rebuttal but does not name the structural anti-pattern."
+        },
+        {
+          "text": "Identifies the real seam location: DbContext / EF Core provider level",
+          "passed": false,
+          "evidence": "Mentions in-memory SQLite / testcontainers as test setup but does not identify DbContext/EF Core provider as where the seam belongs structurally."
+        },
+        {
+          "text": "Uses at least 3 of the skill vocabulary terms",
+          "passed": false,
+          "evidence": "Uses 'wrapper', 'abstraction', 'indirection' but not seam/shallow/depth/leverage/locality/hypothetical as a vocabulary system."
+        },
+        {
+          "text": "Ends with 'Which of these would you like to explore?' or equivalent",
+          "passed": false,
+          "evidence": "Ends with 'Technically, there is no argument for keeping it.' \u2014 no workflow prompt."
+        }
+      ],
+      "notes": [],
+      "eval_name": "thin-repository-wrapper"
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 43.4667,
+        "stddev": 10.6978,
+        "min": 31.3,
+        "max": 51.4
+      },
+      "tokens": {
+        "mean": 18482.6667,
+        "stddev": 441.0911,
+        "min": 17982,
+        "max": 18814
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.2857,
+        "stddev": 0.0,
+        "min": 0.2857,
+        "max": 0.2857
+      },
+      "time_seconds": {
+        "mean": 33.0667,
+        "stddev": 2.829,
+        "min": 30.7,
+        "max": 36.2
+      },
+      "tokens": {
+        "mean": 15840.0,
+        "stddev": 191.1151,
+        "min": 15715,
+        "max": 16060
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.71",
+      "time_seconds": "+10.4",
+      "tokens": "+2643"
+    }
+  },
+  "notes": [
+    "Pass rate: with_skill 100% vs baseline 28.6% (+71pp). The skill is doing real work, not redundant scaffolding.",
+    "Both configurations reach the right CONCLUSION roughly equally well \u2014 baseline correctly recommends deletion in eval-1 and eval-3 and correctly identifies orchestration as the bug location in eval-2. The skill differentiates by DISCIPLINE: named heuristics (deletion test), precise vocabulary (seam/adapter/leverage/locality), explicit anti-pattern naming, and the workflow ending ('Which of these would you like to explore?').",
+    "Assertion 'Does NOT propose new interface signatures' (eval-1) may be non-discriminating in this prompt set since none of the prompts ask for interface design. To stress-test the 'discuss before designing' rule, future evals should include a prompt that tempts the model to jump to designing.",
+    "Token overhead from skill: +2,643 avg per run (~17%) \u2014 primarily from reading the 125-line SKILL.md.",
+    "Time overhead from skill: +10.4s avg per run (~31%) \u2014 substantial but acceptable for the +71pp pass rate gain.",
+    "Single-run-per-configuration limits variance analysis. If the skill ships, consider 3-run reruns for assertions that hover near the pass/fail boundary."
+  ]
+}

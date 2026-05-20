@@ -1,0 +1,26 @@
+{
+  "skill_name": "module-deepening",
+  "evals": [
+    {
+      "id": 1,
+      "name": "single-adapter-port",
+      "prompt": "In our checkout service (Hoffmann.Checkout.Api), I introduced an `IPaymentGatewayClient` interface six months ago when we thought we'd swap from Stripe to Adyen. We never did. We still have only `StripePaymentGatewayClient` as the implementation. All ~12 callers use the interface. Should I rip it out? My junior keeps saying 'we should keep the abstraction in case we change later'. What's your take?",
+      "expected_output": "Apply the deletion test and the two-adapter rule. Recommend removing the interface (single adapter = hypothetical seam). Push back on 'in case we change later' as the canonical anti-pattern. Use vocabulary: seam, adapter, port. Do NOT propose new interface signatures — discuss before designing.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "extracted-pure-functions",
+      "prompt": "I refactored our `OrderPlacementService` last sprint — pulled `CalculateLineDiscount`, `ValidateInventoryAvailability`, and `BuildShipmentPayload` out as static methods on `OrderPlacementHelper`, all unit tested with high coverage. Last Monday we shipped a prod bug where a discount applied to an already-cancelled order. The unit tests on the helper methods all passed. The orchestration in `PlaceOrderAsync` calls them in sequence. Where did I go wrong, and is this refactor still worth keeping?",
+      "expected_output": "Identify the anti-pattern: pure functions extracted for testability when bugs live in orchestration. The interface is at the wrong level — helper unit tests pass while the call site is wrong. Recommend tests at PlaceOrderAsync's interface (the actual seam callers cross). Mention replace-don't-layer: helper tests are now waste once orchestration tests exist. Use vocabulary: locality, interface, test surface.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "thin-repository-wrapper",
+      "prompt": "Looking at `Hoffmann.Inventory.Data.Repositories.WarehouseRepository`. Every method is one line like `GetById(int id) => _context.Warehouses.FindAsync(id);` and `Search(WarehouseFilter f) => _context.Warehouses.Where(...).ToListAsync();`. Eight callers across the inventory service. Our team lead added it three years ago 'so we can swap EF Core later'. We never have. Worth keeping or should I have all the consumers query DbContext directly?",
+      "expected_output": "Explicitly apply the deletion test — complexity vanishes if inlined, so it's pass-through. Identify as shallow / hypothetical seam. Recommend inlining. Push back on 'swap EF Core later' as classic single-adapter port anti-pattern. Note the actual seam for EF Core is at the DbContext provider level (in-memory provider for tests) — local-substitutable category. Use vocabulary precisely.",
+      "files": []
+    }
+  ]
+}

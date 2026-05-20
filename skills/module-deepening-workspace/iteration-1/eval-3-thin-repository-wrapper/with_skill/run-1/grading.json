@@ -1,0 +1,45 @@
+{
+  "expectations": [
+    {
+      "text": "Applies the deletion test by name to the repository",
+      "passed": true,
+      "evidence": "Opens with 'Apply the deletion test first: if you deleted `WarehouseRepository`...' and concludes 'The module fails the deletion test.'"
+    },
+    {
+      "text": "Identifies the wrapper as shallow / pass-through / hypothetical seam",
+      "passed": true,
+      "evidence": "'shallow pass-through with no depth', 'hypothetical seam', 'one adapter (EF Core / SQL), no substitute' \u2014 all three named."
+    },
+    {
+      "text": "Recommends inlining (callers query DbContext directly)",
+      "passed": true,
+      "evidence": "'Delete `WarehouseRepository`. Inline the EF Core calls at each call site.'"
+    },
+    {
+      "text": "Pushes back on 'swap EF Core later' as the one-adapter / hypothetical-seam anti-pattern",
+      "passed": true,
+      "evidence": "'## On the \"swap EF Core later\" argument \u2014 This is the one-adapter anti-pattern with a hypothetical justification.'"
+    },
+    {
+      "text": "Identifies the real seam location: DbContext / EF Core provider level",
+      "passed": true,
+      "evidence": "'The real swap seam \u2014 if you ever needed one \u2014 lives at the `DbContext` level anyway (EF Core providers), not at a hand-rolled repository layer above it.' Also mentions UseInMemoryDatabase."
+    },
+    {
+      "text": "Uses at least 3 of the skill vocabulary terms",
+      "passed": true,
+      "evidence": "Uses seam, shallow, depth, leverage, locality, hypothetical, adapter \u2014 well above 3."
+    },
+    {
+      "text": "Ends with 'Which of these would you like to explore?' or equivalent",
+      "passed": true,
+      "evidence": "Final line: 'Which of these would you like to explore?'"
+    }
+  ],
+  "summary": {
+    "passed": 7,
+    "failed": 0,
+    "total": 7,
+    "pass_rate": 1.0
+  }
+}

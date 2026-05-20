@@ -127,6 +127,18 @@ Choose service lifetime by the service's characteristics, not a blanket default:
 - **Seal classes not designed for inheritance.** `sealed` enables JIT devirtualization and signals intent. Only leave a class unsealed when you've designed it for extension.
 - **Use `record` for DTOs, API contracts, and value objects** — they get value equality, `with` expressions, and deconstruction for free. Use `class` for stateful services and entities with identity.
 - **Map explicitly** using static methods or extensions on the target type. Explicit mapping is searchable, debuggable, and fails at compile time when shapes change. See `references/code-examples.md` § Manual Mapping.
+- **Always use braces for control-flow blocks** — even single-statement `if`, `else`, `for`, `foreach`, `while`, `using`. Omitting braces is a common source of bugs when statements are added later and the indentation-only scoping is silently wrong. Use Allman style: opening brace on its own line.
+  ```csharp
+  // BAD
+  if (x > 0)
+      DoSomething();
+
+  // GOOD
+  if (x > 0)
+  {
+      DoSomething();
+  }
+  ```
 - **Private static readonly fields** use `_camelCase` prefix.
 - **Prefer primary constructors** for all classes and records — including large dependency lists. Use traditional constructors only when you need constructor body logic (validation, computed fields, conditional assignment). If the repo uses classic constructors, follow that style — don't mix.
 - **One type per file** — unless types are tightly coupled (discriminated union variants, a record + nested builder, private nested types).
