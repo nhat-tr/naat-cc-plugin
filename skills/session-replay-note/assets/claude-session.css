@@ -1,0 +1,74 @@
+/* ===== Claude Code session panes ============================================
+   Enable once:  Settings → Appearance → CSS snippets → (refresh) → toggle ON.
+   Renders in Reading view, Canvas cards, embeds and exports (not Live Preview).
+
+   Author / paste with fenced code blocks — paste the raw transcript inside:
+     ```claude-you      > your prompt, pasted raw
+     ```claude          ⏺ Claude's response, pasted raw
+
+   Change the look here once → every note + canvas card updates.
+   ============================================================================ */
+
+/* ---------- response pane:  ```claude ---------- */
+pre.language-claude,
+pre:has(> code.language-claude) {
+  background: #0d1117 !important;
+  border: 1px solid #30363d !important;
+  border-radius: 8px;
+  position: relative;
+  padding: 42px 16px 14px !important;
+  margin: 12px 0;
+}
+pre.language-claude code,
+pre:has(> code.language-claude) code {
+  background: transparent !important;
+  color: #e6edf3 !important;
+  -webkit-text-fill-color: #e6edf3 !important;
+  font-size: 0.95em !important;
+  line-height: 1.7 !important;
+  white-space: pre !important;
+  text-shadow: none !important;
+}
+pre.language-claude::before,
+pre:has(> code.language-claude)::before {
+  content: "\25CF  \25CF  \25CF      claude code";
+  position: absolute; top: 0; left: 0; right: 0;
+  padding: 9px 16px;
+  background: #161b22; color: #8b949e;
+  font-weight: 600; font-size: 0.78em;
+  border-bottom: 1px solid #30363d;
+  border-radius: 8px 8px 0 0;
+}
+
+/* ---------- your prompt:  ```claude-you ---------- */
+pre.language-claude-you,
+pre:has(> code.language-claude-you) {
+  background: rgba(56, 139, 253, 0.12) !important;
+  border: 1px solid #30363d !important;
+  border-left: 4px solid #58a6ff !important;
+  border-radius: 8px;
+  position: relative;
+  padding: 30px 14px 12px !important;
+  margin: 12px 0;
+}
+pre.language-claude-you code,
+pre:has(> code.language-claude-you) code {
+  background: transparent !important;
+  color: #1f6feb !important;
+  -webkit-text-fill-color: #1f6feb !important;
+  font-weight: 600;
+  font-size: 0.95em !important;
+  line-height: 1.65 !important;
+  white-space: pre !important;
+  text-shadow: none !important;
+}
+pre.language-claude-you::before,
+pre:has(> code.language-claude-you)::before {
+  content: "YOU";
+  position: absolute; top: 9px; left: 14px;
+  color: #58a6ff; font-weight: 700; font-size: 0.68em; letter-spacing: 0.14em;
+}
+
+/* hide theme's auto language label on these blocks */
+pre.language-claude .code-block-flair,
+pre.language-claude-you .code-block-flair { display: none !important; }

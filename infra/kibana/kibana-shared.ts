@@ -9,6 +9,7 @@ export const INDEX_ALIASES: Record<string, string> = {
   regrinding: 'logstash-orangehub-regrinding-*',
   calibration: 'logstash-orangehub-calibration-*',
   'order-data-hub': 'logstash-orangehub-order-data-hub-*',
+  'test-infrastructure': 'logstash-orangehub-test-infrastructure-*',
 };
 
 export const ES_HOSTS: Record<string, string> = {

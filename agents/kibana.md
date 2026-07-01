@@ -16,7 +16,7 @@ You query Elasticsearch directly and display log results.
 Single-line command, no heredoc:
 
 ```bash
-kibana-logs oae regrinding -q '*error*' --from now-1h -n 50
+tsx ~/.local/share/my-claude-code/infra/kibana/kibana-search.ts oae regrinding -q '*error*' --from now-1h -n 50
 ```
 
 Options: `-q <term>` (wildcard on message+log), `--from <time>`, `--to <time>`, `-n <size>`, `--raw` (include unstructured log-only entries).
@@ -27,14 +27,14 @@ Default `--from` is `now-1h` when using `-q`.
 Use `-j` with single-quoted JSON for `term` on `.keyword` fields or multi-condition `bool`:
 
 ```bash
-kibana-logs oae regrinding -j '{"size":50,"query":{...}}'
+tsx ~/.local/share/my-claude-code/infra/kibana/kibana-search.ts oae regrinding -j '{"size":50,"query":{...}}'
 ```
 
-**Always use `-j` with single quotes** — do NOT use heredocs (`<<'EOF'`), as they trigger permission prompts.
+**Always use `-j` with single quotes** — do NOT use heredocs (`<<'EOF'`) or any shell operators, as they trigger permission prompts even for trusted commands.
 
 ### Common
 
-Arguments: `[env] [index]` — env: `oae` (default), `prod`, `qss` — index: `regrinding` (default), `digital-twin`, `order-data-hub`.
+Arguments: `[env] [index]` — env: `oae` (default), `prod`, `qss` — index: `regrinding` (default), `digital-twin`, `order-data-hub`, `calibration`, `test-infrastructure`.
 
 Auto-applied: `_source` filtering, `sort` by `@timestamp desc`, exclusions, `message` existence filter. Consecutive duplicate messages are grouped in output.
 
@@ -67,13 +67,13 @@ If you need expanded detail (full untruncated messages, error bodies, field disc
 
 ```bash
 # Show all errors with full messages
-kibana-logs --detail /tmp/kibana-logs-XXXXX.json --level Error
+tsx ~/.local/share/my-claude-code/infra/kibana/kibana-search.ts --detail /tmp/kibana-logs-XXXXX.json --level Error
 
 # Filter by pattern in message/error fields
-kibana-logs --detail /tmp/kibana-logs-XXXXX.json --grep "BadRequest"
+tsx ~/.local/share/my-claude-code/infra/kibana/kibana-search.ts --detail /tmp/kibana-logs-XXXXX.json --grep "BadRequest"
 
 # Discover available field names
-kibana-logs --detail /tmp/kibana-logs-XXXXX.json --fields
+tsx ~/.local/share/my-claude-code/infra/kibana/kibana-search.ts --detail /tmp/kibana-logs-XXXXX.json --fields
 ```
 
 Do NOT write python/node/jq scripts to parse the saved JSON — use `--detail` instead.
@@ -88,13 +88,13 @@ Some services write exceptions as raw text to stdout instead of structured Seril
 
 1. **Get the timestamp** from a structured log hit (e.g., via trace-id query):
    ```bash
-   kibana-logs oae digital-twin -j '{"size":1,"query":{"term":{"trace-id":"<id>"}}}'
+   tsx ~/.local/share/my-claude-code/infra/kibana/kibana-search.ts oae digital-twin -j '{"size":1,"query":{"term":{"trace-id":"<id>"}}}'
    ```
    Note the `@timestamp` from the result.
 
 2. **Query surrounding logs with `--raw`** to bypass the message-existence filter and find unstructured `log`-only entries:
    ```bash
-   kibana-logs oae digital-twin --raw -j '{"size":50,"query":{"bool":{"must_not":[{"exists":{"field":"message"}}],"filter":[{"range":{"@timestamp":{"gte":"<TS-2s>","lte":"<TS+2s>"}}}]}}}'
+   tsx ~/.local/share/my-claude-code/infra/kibana/kibana-search.ts oae digital-twin --raw -j '{"size":50,"query":{"bool":{"must_not":[{"exists":{"field":"message"}}],"filter":[{"range":{"@timestamp":{"gte":"<TS-2s>","lte":"<TS+2s>"}}}]}}}'
    ```
    Use `must_not exists message` to exclude structured entries and surface only the raw stdout lines.
 
@@ -169,7 +169,7 @@ Combine multiple conditions with `bool`:
 
 | Error | Cause | Action |
 |-------|-------|--------|
-| `HTTP 401` | Credentials invalid | Check env var `{ENV}_POS_ELASTIC_USER_PASSWORD` is set |
+| `HTTP 401` | Wrong env/index | Verify the env (`oae`/`qss`/`prod`) and index name are correct |
 | `HTTP 404` | Index not found | List indices with `{"size": 0, "aggs": {"indices": {"terms": {"field": "_index", "size": 30}}}}` |
 | `HTTP 400` | Bad query DSL | Fix the JSON and re-run. Show the corrected query. |
 | `Total: 0` | No matches | Show the query, suggest broadening time range or changing index. Do NOT silently retry. |
@@ -198,7 +198,8 @@ The script already formats errors with message separated from stack trace. When 
 ## Rules
 
 - **One Bash call per search.** Never split into setup + query + parse steps.
-- **Never chain commands with `&`, `&&`, `||`, or `;`.** To run searches in parallel, use multiple Bash tool calls in the same message — not shell operators. Shell operators trigger permission prompts.
+- **Never use shell operators** (`&`, `&&`, `||`, `;`, `|`, `2>/dev/null`). Each tool call must be a single, self-contained command. To run multiple searches in parallel, issue multiple Bash tool calls in the same message — not shell operators. Shell operators make the entire compound command require a fresh permission prompt even when each individual command is already trusted.
+- **Never probe for unknown flags.** Only use flags explicitly documented in this skill (`-q`, `-j`, `-n`, `--from`, `--to`, `--raw`, `--get`, `--detail`, `--level`, `--grep`, `--fields`). Do not try undocumented flags with a `|| echo` fallback to test existence — there are no hidden flags to discover.
 - **Never use Write.** The script handles everything — no temp files needed.
 - **Never print credentials or secret values.**
 - **Never retry silently.** If result is wrong, show the query and explain before changing it.

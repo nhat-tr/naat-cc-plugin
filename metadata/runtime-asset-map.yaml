@@ -560,6 +560,16 @@
         }
       }
     },
+    "skill.session-replay-note": {
+      "type": "skill",
+      "canonical_file": "skills/session-replay-note/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ],
+      "requires": [
+        "shell"
+      ]
+    },
     "skill.system-prompt-creator": {
       "type": "skill",
       "canonical_file": "skills/system-prompt-creator/SKILL.md",

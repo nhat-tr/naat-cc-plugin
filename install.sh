@@ -19,6 +19,53 @@ info()  { echo -e "${GREEN}[+]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
 error() { echo -e "${RED}[x]${NC} $1" >&2; }
 
+install_permissions() {
+  local perms_file="permissions/allow.json"
+  local settings_file="$CLAUDE_DIR/settings.json"
+
+  [[ -f "$perms_file" ]] || return 0
+  [[ -f "$settings_file" ]] || return 0
+
+  python3 - "$perms_file" "$settings_file" <<'EOF'
+import json, sys
+perms_file, settings_file = sys.argv[1], sys.argv[2]
+with open(perms_file) as f:
+    entries = json.load(f).get("allow", [])
+with open(settings_file) as f:
+    settings = json.load(f)
+settings.setdefault("permissions", {}).setdefault("allow", [])
+existing = settings["permissions"]["allow"]
+for entry in entries:
+    if entry not in existing:
+        existing.append(entry)
+with open(settings_file, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+EOF
+}
+
+uninstall_permissions() {
+  local perms_file="permissions/allow.json"
+  local settings_file="$CLAUDE_DIR/settings.json"
+
+  [[ -f "$perms_file" ]] || return 0
+  [[ -f "$settings_file" ]] || return 0
+
+  python3 - "$perms_file" "$settings_file" <<'EOF'
+import json, sys
+perms_file, settings_file = sys.argv[1], sys.argv[2]
+with open(perms_file) as f:
+    entries = set(json.load(f).get("allow", []))
+with open(settings_file) as f:
+    settings = json.load(f)
+allow = settings.get("permissions", {}).get("allow", [])
+settings["permissions"]["allow"] = [e for e in allow if e not in entries]
+with open(settings_file, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+EOF
+}
+
 install_hooks() {
   local hooks_file="hooks/hooks.json"
   local settings_file="$CLAUDE_DIR/settings.json"
@@ -116,6 +163,7 @@ install_infra_deps() {
 if [[ "${1:-}" == "--uninstall" ]]; then
   node scripts/install-runtime.js --runtime claude --scope global --uninstall "${@:2}"
   unlink_cli_tools
+  uninstall_permissions
   uninstall_hooks
   exit 0
 fi
@@ -125,5 +173,6 @@ check_prerequisites
 install_infra_deps
 node scripts/install-runtime.js --runtime claude --scope global "$@"
 link_cli_tools
+install_permissions
 install_hooks
 info "Claude runtime install complete"

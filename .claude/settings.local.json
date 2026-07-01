@@ -61,7 +61,8 @@
       "Bash(/Users/nhat.tran/.local/share/my-claude-code/skills/aspire/scripts/aspire-logs.ts --help)",
       "Bash(/Users/nhat.tran/.local/share/my-claude-code/skills/aspire/scripts/aspire-logs.ts Paragon-Api --severity Error --limit 3)",
       "Bash(/Users/nhat.tran/.local/share/my-claude-code/skills/aspire/scripts/aspire-logs.ts Paragon-Api --severity Warning --limit 3 --exclude \"healthz\")",
-      "Bash(./install.sh *)"
+      "Bash(./install.sh *)",
+      "Bash(bash -n /Users/nhat.tran/.local/share/my-claude-code/install.sh)"
     ],
     "deny": [
       "Read(**/.env)",
