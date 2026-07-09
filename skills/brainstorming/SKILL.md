@@ -1,6 +1,6 @@
 ---
 name: brainstorming
-description: "Use before any creative work — new features, components, or behavior changes. Explores intent and requirements before implementation."
+description: "Turn a vague idea into an approved spec before any implementation. Trigger phrases: 'design a feature', 'think through the requirements', 'let's spec this out', 'before we build X', 'I have an idea', 'help me think about'. Explores intent via one-question-at-a-time dialogue, produces a spec (.pair/spec.md for pair-v2 work, docs/specs/ otherwise) ready for /pair-promote or plan mode."
 ---
 
 # Brainstorming Ideas Into Designs
@@ -109,8 +109,8 @@ Cover architecture, components, data flow, error handling, testing. Scale each s
 
 ## Documentation
 
-- **Detect mode**: `.pair/` initialized (has `status.json`)? → pair mode. Else generic.
-- **Pair mode**: write to `.pair/spec.md` using the approved anchor plus explicit AC IDs and verification entries. Keep the structure compatible with the downstream `pair-plan` enhanced-mode contract. Do NOT git-commit (pair protocol handles lifecycle).
+- **Detect mode**: `.pair/` directory exists, or the work will run through the pair-v2 workflow? → pair mode. Else generic.
+- **Pair mode**: write to `.pair/spec.md` using the approved anchor plus explicit AC IDs and verification entries — this is the spec `/pair-promote` consumes to build an implementable `.pair/plan.md`. Do NOT git-commit (`.pair/` is workflow state).
 - **Generic mode**: write to `docs/specs/YYYY-MM-DD-<topic>-design.md` (user location overrides). Git-commit.
 - Anchor verbatim at top in both modes (`## Purpose`, `## Rejection Criteria`, `## Contrasts`) before mode-specific content.
 - **Glossary write-back**: if the conversation surfaced new domain terms not yet in `UBIQUITOUS_LANGUAGE.md`, invoke the `ubiquitous-language` skill before finalizing the spec — keeps the glossary current and prevents decay.
@@ -131,24 +131,15 @@ Fix inline. No re-review.
 
 On changes: fix, re-run review loop. Proceed only once approved.
 
-## Stream Sketch (pair mode only)
+## Suggested Streams (pair mode only)
 
-After spec is approved, propose the stream breakdown before handing off to pair-plan. This seeds `.pair/plan.md` so pair-plan skips re-deriving what brainstorming already established.
-
-1. Propose streams: name + one-liner each, no file paths, max 6. State any obvious sequencing (e.g. "Stream 2 depends on Stream 1").
-2. User approves (or adjusts names/grouping).
-3. Write `.pair/plan.md` using the Phase 1 format (see pair-plan SKILL.md). Include Intent Check derived from the anchor, Proposed Approach prose, stream list, Key Risks.
-4. Update `.pair/stream-log.md`.
+After the spec is approved, append a `## Suggested Streams` section to `.pair/spec.md`: stream names + one-liner each (no file paths, max 6) and any obvious sequencing ("Stream 2 depends on Stream 1"). This seeds `/pair-promote` so it doesn't re-derive the breakdown brainstorming already established.
 
 ## Transition to Implementation
 
-- **Pair mode**: set `waiting_for = "plan-detail"` (not `"plan"` — sketch is already written). Signal.
-  ```bash
-  tmp="$(mktemp)" && jq '.waiting_for = "plan-detail"' .pair/status.json > "$tmp" && mv "$tmp" .pair/status.json
-  jq -r '.dispatch_id' .pair/status.json > .pair/.ready
-  ```
-- **Generic mode**: invoke `planner`.
-- Both: do NOT invoke implementation skills as immediate next step.
+- **Pair mode**: run `/pair-promote` — it reads `.pair/spec.md`, explores the codebase, and writes the implementable `.pair/plan.md` (task checkboxes, file paths, Implementation Context), validated by `validate-plan.sh`.
+- **Generic mode**: hand the spec to plan mode, or use `/pair-promote` if the work should run gate-protected.
+- Both: do NOT start implementing as the immediate next step — the spec must be promoted to a plan first.
 
 ## Visual Companion
 

@@ -356,7 +356,13 @@ function formatReport(report: TrafficReport): string {
 
 const parsed = parseArgs(process.argv);
 const esIndex = resolveIndex(parsed.index);
-const auth = getEsAuth(parsed.env);
+let auth: string;
+try {
+  auth = await getEsAuth(parsed.env);
+} catch (err) {
+  console.error(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
 const timeFilter = { range: { '@timestamp': { gte: parsed.from, ...(parsed.to ? { lte: parsed.to } : {}) } } };
 
 const broadQuery: Record<string, unknown> = {

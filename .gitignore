@@ -24,6 +24,16 @@ __pycache__/
 # Pair protocol state
 .pair/
 
+# Machine-local settings (never shareable; also skipped by the leak checker)
+.claude/settings.local.json
+
+# Eval workspaces (run artifacts, may contain work data)
+module-deepening-workspace/
+kibana-analyst-workspace/
+
+# observability-index run/test artifacts
+.observability/
+
 # Temporary
 *.tmp
 tasks/

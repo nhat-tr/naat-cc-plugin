@@ -10,13 +10,15 @@
  *   aspire-traces --resource RG-Core --min-duration 500ms
  */
 import { parseArgs } from "node:util";
+import { join } from "node:path";
 import {
   readJsonlLines, fmtTimestamp, fmtDuration,
   parseDuration, attrsToMap, getResourceName,
   type OtlpResource, type OtlpKeyValue,
 } from "./otlp.ts";
 
-const DEFAULT_FILE = "/tmp/aspire-telemetry/traces.jsonl";
+const SCRATCH_DIR = process.env.CLAUDE_SCRATCH_DIR || process.env.TMPDIR || "/tmp";
+const DEFAULT_FILE = join(SCRATCH_DIR, "aspire-telemetry", "traces.jsonl");
 
 // ── Args ──────────────────────────────────────────────────────────────────────
 

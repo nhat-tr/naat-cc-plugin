@@ -1,7 +1,6 @@
 ---
 name: ubiquitous-language
 description: Extract a glossary of domain terms from the current conversation, flagging ambiguities and proposing canonical names. Saves to UBIQUITOUS_LANGUAGE.md. Use when the user wants to define domain terms, build a glossary, harden terminology, or align on a ubiquitous language. Also trigger when the user mentions "domain model", "DDD", "we keep using X and Y interchangeably", "what should we call this?", "align on terminology", or when there's clear synonym/ambiguity confusion in the conversation.
-disable-model-invocation: true
 ---
 
 # Ubiquitous Language

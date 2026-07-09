@@ -17,4 +17,6 @@ validate-sync:
 	fi
 	@echo "OK"
 
-validate: validate-agents validate-commands validate-skills validate-sync
+validate:
+	npm run validate
+	$(MAKE) validate-sync

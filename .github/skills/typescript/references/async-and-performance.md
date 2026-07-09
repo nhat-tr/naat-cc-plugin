@@ -47,6 +47,40 @@ Prefer `AbortController` and timeout wrappers for network-bound operations.
 
 Prefer immutable updates for state correctness, but avoid unnecessary copies in hot loops.
 
+## Module-Level Singleton for Shared Fetches
+
+When multiple component instances need the same expensive fetch, deduplicate by caching the in-flight promise at module level. All instances share one request and one result:
+
+```ts
+let _promise: Promise<ServiceOption[]> | null = null;
+
+function getSharedData(): Promise<ServiceOption[]> {
+    if (!_promise) {
+        _promise = fetchData()
+            .catch((err) => {
+                _promise = null; // allow retry on next mount if the request failed
+                return Promise.reject(err) as Promise<ServiceOption[]>;
+            });
+    }
+    return _promise;
+}
+
+export function useSharedData(): ServiceOption[] {
+    const [data, setData] = useState<ServiceOption[]>([]);
+    useEffect(() => {
+        let active = true;
+        void getSharedData().then((d) => { if (active) setData(d); });
+        return () => { active = false; }; // unmount guard — prevents setState after unmount
+    }, []);
+    return data;
+}
+```
+
+Key invariants:
+- Clear the module variable in `.catch()` so a transient failure doesn't permanently block retries.
+- The `active` flag in the effect prevents a resolved promise from updating state on an already-unmounted component.
+- Export a `reset` function (`_promise = null`) for test isolation.
+
 ## Measure Before Optimizing
 
 Profile before adding memoization, virtualization, or custom caching logic.

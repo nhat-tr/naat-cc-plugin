@@ -22,6 +22,10 @@ function validateCommands() {
   let hasErrors = false;
 
   const validCommands = new Set(files.map(f => f.replace(/\.md$/, '')));
+  // Claude Code built-ins are valid reference targets even though no
+  // commands/<name>.md exists in this repo (checked only for references,
+  // never required in the manifest).
+  const builtinCommands = new Set(['loop', 'compact', 'clear', 'resume', 'model', 'effort']);
   const manifest = loadManifest();
   const commandAssets = getAssetEntries(manifest).filter(asset => asset.type === 'command');
   const manifestCommands = new Set(
@@ -60,7 +64,7 @@ function validateCommands() {
     for (const line of stripped.split('\n')) {
       if (/creates:|would create:/i.test(line)) continue;
       for (const match of line.matchAll(/`\/([a-z][-a-z0-9]*)`/g)) {
-        if (!validCommands.has(match[1])) {
+        if (!validCommands.has(match[1]) && !builtinCommands.has(match[1])) {
           console.error(`ERROR: ${file} - references non-existent command /${match[1]}`);
           hasErrors = true;
         }

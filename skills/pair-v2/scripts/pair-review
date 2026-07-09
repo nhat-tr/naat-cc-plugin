@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+# pair-review — headless, one-shot code reviewer (pair v2).
+#
+# Runs `claude -p` with a fresh context against the working-tree diff plus the
+# plan, writes .pair/review.md (human) and .pair/review.json (machine), and
+# appends BLOCKER findings to .pair/plan.md as unchecked tasks so the
+# stop-gate keeps the doer session going until they are fixed.
+#
+# Usage: pair-review [--plan] [--eco] [--base <ref>] [--no-plan-update] [--dry-run]
+#   --plan            challenge the PLAN itself (plan.md vs spec.md) instead of
+#                     reviewing the code diff — run this BEFORE implementing
+#   --eco             diff-only review on a cheaper model (S-complexity changes)
+#   --base <ref>      diff base (default: origin/HEAD -> origin/main -> ... -> HEAD)
+#   --no-plan-update  do not append BLOCKERs to .pair/plan.md
+#   --dry-run         print the prompt and command, do not invoke claude
+#
+# Env: PAIR_REVIEW_MODEL (default: settings default; eco default: sonnet)
+#      PAIR_REVIEW_TIMEOUT seconds (default: 900)
+set -uo pipefail
+
+ECO=0
+BASE=""
+PLAN_UPDATE=1
+DRY_RUN=0
+PLAN_MODE=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --plan) PLAN_MODE=1 ;;
+    --eco) ECO=1 ;;
+    --base)
+      shift
+      BASE="${1:-}"
+      ;;
+    --no-plan-update) PLAN_UPDATE=0 ;;
+    --dry-run) DRY_RUN=1 ;;
+    *)
+      echo "pair-review: unknown flag $1" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+root=$(git rev-parse --show-toplevel 2> /dev/null) || {
+  echo "pair-review: not in a git repository" >&2
+  exit 1
+}
+cd "$root"
+
+# --- Resolve diff base (mirrors nvim pair.lua default_diff_base) -------------
+resolve_base() {
+  local remote_head
+  remote_head=$(git rev-parse --abbrev-ref origin/HEAD 2> /dev/null)
+  if [[ -n "$remote_head" && "$remote_head" != "origin/HEAD" ]]; then
+    echo "$remote_head"
+    return
+  fi
+  local ref
+  for ref in origin/main origin/master main master; do
+    if git rev-parse --verify --quiet "$ref" > /dev/null; then
+      echo "$ref"
+      return
+    fi
+  done
+  echo "HEAD"
+}
+[[ -z "$BASE" ]] && BASE=$(resolve_base)
+
+scratch="${CLAUDE_SCRATCH_DIR:-${TMPDIR:-/tmp}}/$(basename "$root")"
+mkdir -p "$scratch"
+plan_file="$root/.pair/plan.md"
+
+if [[ "$PLAN_MODE" -eq 1 ]]; then
+  # --- Plan-challenge mode: critique the plan itself, before any code ---------
+  if [[ ! -f "$plan_file" ]]; then
+    echo "pair-review: no .pair/plan.md to challenge — run /pair-promote first" >&2
+    exit 1
+  fi
+  spec_note="No .pair/spec.md exists — challenge the plan on its own merits."
+  [[ -f "$root/.pair/spec.md" ]] && spec_note="The spec it must satisfy is at: $root/.pair/spec.md — check the plan covers every acceptance criterion."
+
+  prompt="You are an independent senior plan reviewer (challenge role). You did NOT write this plan. Challenge it adversarially BEFORE any implementation starts — a bad plan is far cheaper to fix now.
+
+The plan under challenge is: $plan_file
+$spec_note
+
+Check, in order:
+- Acceptance-criteria coverage: every spec AC maps to at least one task; every task serves an AC (YAGNI — flag work no AC requires).
+- TDD compliance: every stream's FIRST task is a failing-test task; an integration-test task exercising the ACs end-to-end exists. Missing = BLOCKER.
+- Decomposition: streams independent where claimed, sized honestly (S/M/L), review boundaries at sensible points, dependency order sound.
+- Grounding: spot-check that the file paths tasks reference actually exist (or are plausibly new); Implementation Context names real patterns from this repo (verify with 1-3 targeted reads, not a sweep).
+- Risks: name what is most likely to go wrong and whether the plan mitigates it.
+- Severity: BLOCKER = plan cannot work as written / AC uncovered / TDD violation; MAJOR = will cause rework; MINOR = polish.
+
+Output, in order:
+1. A concise markdown review: ## Summary, ## Findings (each referencing the plan section/task), ## Verdict.
+2. Then EXACTLY this machine block (valid JSON, findings may be []; use \"file\":\".pair/plan.md\" and the plan line number):
+===FINDINGS_JSON===
+{\"verdict\":\"approve|fix-needed\",\"findings\":[{\"severity\":\"BLOCKER|MAJOR|MINOR\",\"file\":\".pair/plan.md\",\"line\":123,\"title\":\"short title\",\"detail\":\"what and why\",\"suggestion\":\"concrete fix\"}]}
+===END_FINDINGS_JSON==="
+else
+# --- Code-review mode: stage the diff in the scratch dir ----------------------
+diff_file="$scratch/pair-review-diff.patch"
+git diff "$BASE" > "$diff_file"
+if [[ ! -s "$diff_file" ]]; then
+  echo "pair-review: no changes vs $BASE — nothing to review (use --plan to challenge the plan itself)"
+  exit 0
+fi
+diff_lines=$(wc -l < "$diff_file" | tr -d ' ')
+
+plan_note="No plan file exists; review the diff on its own merits."
+if [[ -f "$plan_file" ]]; then
+  plan_note="The plan (with acceptance criteria) is at: $plan_file — check the diff satisfies it."
+fi
+
+eco_note=""
+if [[ "$ECO" -eq 1 ]]; then
+  eco_note="ECO MODE: review the diff only. Do not open other files unless a BLOCKER-level suspicion requires exactly one targeted read."
+fi
+
+prompt="You are an independent senior code reviewer. You did NOT write this change. Review it adversarially and verify every finding against the actual code before reporting it.
+
+Diff under review (base: $BASE, $diff_lines lines): read $diff_file
+$plan_note
+$eco_note
+
+Rules:
+- Read the diff first; then open only the files needed to verify a suspicion (targeted reads, not whole-file sweeps).
+- Report only findings you verified in code. No speculation, no style nitpicks dressed as bugs.
+- If UBIQUITOUS_LANGUAGE.md exists in the repo, treat names that diverge from it as correctness issues.
+- Severity: BLOCKER = correctness/data-loss/security/broken contract, unmet acceptance criteria, or MISSING INTEGRATION TESTS for the acceptance criteria — integration tests are mandatory in this workflow (C#: async void, sync-over-async, captive DI, resource leaks, N+1 EF queries, missing CancellationToken); MAJOR = bug-prone, missing unit tests for changed behavior, plan deviation (C#: missing AsNoTracking, logging violations; TS: any abuse); MINOR = simplification/clarity.
+- TDD check: the plan schedules tests before implementation — verify the diff actually contains the tests for each implemented behavior. Implementation present without its tests = BLOCKER. Tests that were weakened/edited to pass = BLOCKER.
+- Only flag issues you are >80% confident are real; infer repo conventions before flagging style; consolidate similar issues into one finding.
+- If a plan exists, explicitly check each acceptance criterion.
+
+Output, in order:
+1. A concise markdown review: ## Summary, ## Findings (each with file:line), ## Verdict.
+2. Then EXACTLY this machine block (valid JSON, findings may be []):
+===FINDINGS_JSON===
+{\"verdict\":\"approve|fix-needed\",\"findings\":[{\"severity\":\"BLOCKER|MAJOR|MINOR\",\"file\":\"relative/path\",\"line\":123,\"title\":\"short title\",\"detail\":\"what and why\",\"suggestion\":\"concrete fix\"}]}
+===END_FINDINGS_JSON==="
+fi
+
+model="${PAIR_REVIEW_MODEL:-}"
+[[ "$ECO" -eq 1 && -z "$model" ]] && model="sonnet"
+
+cmd=(claude -p "$prompt" --disallowedTools "Edit,Write,MultiEdit,NotebookEdit,Task")
+[[ -n "$model" ]] && cmd+=(--model "$model")
+
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "--- prompt ---"
+  echo "$prompt"
+  echo "--- command ---"
+  printf '%q ' "${cmd[@]}"
+  echo
+  exit 0
+fi
+
+timeout_cmd=()
+if command -v gtimeout > /dev/null 2>&1; then
+  timeout_cmd=(gtimeout "${PAIR_REVIEW_TIMEOUT:-900}")
+elif command -v timeout > /dev/null 2>&1; then
+  timeout_cmd=(timeout "${PAIR_REVIEW_TIMEOUT:-900}")
+fi
+
+if [[ "$PLAN_MODE" -eq 1 ]]; then
+  echo "pair-review: challenging .pair/plan.md (model: ${model:-settings default})..."
+else
+  echo "pair-review: reviewing $diff_lines diff lines vs $BASE (model: ${model:-settings default})..."
+fi
+raw_file="$scratch/pair-review-raw.txt"
+# CLAUDE_STOP_GATE=off: the reviewer session runs in a repo whose plan.md has
+# unchecked tasks BY DESIGN — without this, the global stop-gate hook blocks
+# the reviewer from finishing, it burns 5 rounds refusing to implement tasks,
+# and `claude -p` then prints the argument with the gate instead of the review.
+# ${arr[@]+...} guards empty-array expansion under `set -u` on macOS bash 3.2
+${timeout_cmd[@]+"${timeout_cmd[@]}"} env CLAUDE_STOP_GATE=off "${cmd[@]}" > "$raw_file" 2> "$scratch/pair-review-err.txt" &
+review_pid=$!
+# Cancellation: forward TERM/INT to the claude child (gtimeout forwards onward),
+# so :PairReviewCancel / Ctrl-C never leaves an orphaned reviewer burning tokens.
+trap 'kill "$review_pid" 2>/dev/null; wait "$review_pid" 2>/dev/null; echo "pair-review: cancelled" >&2; exit 130' TERM INT
+wait "$review_pid"
+status=$?
+trap - TERM INT
+if [[ "$status" -ne 0 ]]; then
+  echo "pair-review: claude -p failed:" >&2
+  tail -5 "$scratch/pair-review-err.txt" >&2
+  exit 1
+fi
+
+mkdir -p "$root/.pair"
+
+# --- Extract + validate the machine block FIRST ------------------------------
+# review.md/review.json are only written once a valid findings block exists, so
+# a disrupted reviewer run can never clobber the previous good review.
+review_md="$root/.pair/review.md"
+review_json="$root/.pair/review.json"
+awk '/^===FINDINGS_JSON===$/{f=1;next} /^===END_FINDINGS_JSON===$/{f=0} f' "$raw_file" > "$review_json.tmp"
+
+if [[ -s "$review_json.tmp" ]] && jq empty "$review_json.tmp" 2> /dev/null; then
+  mv "$review_json.tmp" "$review_json"
+else
+  rm -f "$review_json.tmp"
+  echo "pair-review: reviewer output contained no valid FINDINGS_JSON block — existing review files left untouched." >&2
+  echo "pair-review: raw output kept at $raw_file (tail follows):" >&2
+  tail -5 "$raw_file" >&2
+  exit 1
+fi
+
+sed '/^===FINDINGS_JSON===$/,/^===END_FINDINGS_JSON===$/d' "$raw_file" > "$review_md"
+
+verdict=$(jq -r '.verdict // "unknown"' "$review_json")
+blockers=$(jq '[.findings[] | select(.severity == "BLOCKER")] | length' "$review_json")
+majors=$(jq '[.findings[] | select(.severity == "MAJOR")] | length' "$review_json")
+minors=$(jq '[.findings[] | select(.severity == "MINOR")] | length' "$review_json")
+
+# --- Feed BLOCKERs into the plan so the stop-gate holds the doer --------------
+if [[ "$PLAN_UPDATE" -eq 1 && -f "$plan_file" && "$blockers" -gt 0 ]]; then
+  appended=0
+  while IFS=$'\t' read -r title file line; do
+    task="- [ ] BLOCKER: $title ($file:$line)"
+    if ! grep -qF "BLOCKER: $title" "$plan_file"; then
+      if ! grep -q '^## Review Fixes' "$plan_file"; then
+        printf '\n## Review Fixes\n' >> "$plan_file"
+      fi
+      printf '%s\n' "$task" >> "$plan_file"
+      appended=$((appended + 1))
+    fi
+  done < <(jq -r '.findings[] | select(.severity == "BLOCKER") | [.title, .file, (.line // 0 | tostring)] | @tsv' "$review_json")
+  [[ "$appended" -gt 0 ]] && echo "pair-review: appended $appended BLOCKER task(s) to .pair/plan.md (stop-gate will hold until fixed)"
+fi
+
+echo "pair-review: verdict=$verdict  BLOCKER=$blockers MAJOR=$majors MINOR=$minors"
+echo "pair-review: review  -> $review_md"
+echo "pair-review: findings-> $review_json  (import in nvim: <leader>ni)"

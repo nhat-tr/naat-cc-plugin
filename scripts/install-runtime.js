@@ -202,6 +202,13 @@ function installClaudeGlobal(manifest, pluginDir, dryRun, operations) {
       installSymlink(source, path.join(commandsDir, `${skillName}.md`), dryRun, operations);
     }
   }
+
+  installCliTools(manifest, 'claude', dryRun, operations);
+  pruneDanglingSymlinks(
+    [agentsDir, commandsDir, path.join(home, '.local', 'bin')],
+    dryRun,
+    operations
+  );
 }
 
 function uninstallClaudeGlobal(manifest, dryRun, operations) {
@@ -239,6 +246,79 @@ function uninstallClaudeGlobal(manifest, dryRun, operations) {
       removeManagedPath(path.join(commandsDir, `${skillName}.md`), dryRun, operations);
     }
   }
+
+  uninstallCliTools(manifest, 'claude', dryRun, operations);
+}
+
+// Remove symlinks that point into this repo but no longer resolve — assets get
+// renamed/archived and neither installer previously garbage-collected the old
+// links (21 dangling entries had accumulated in the live install).
+function pruneDanglingSymlinks(dirs, dryRun, operations) {
+  for (const dir of dirs) {
+    if (!fs.existsSync(dir)) {
+      continue;
+    }
+
+    for (const entry of fs.readdirSync(dir)) {
+      const full = path.join(dir, entry);
+      let stat;
+      try {
+        stat = fs.lstatSync(full);
+      } catch {
+        continue;
+      }
+      if (!stat.isSymbolicLink()) {
+        continue;
+      }
+
+      let target;
+      try {
+        target = fs.readlinkSync(full);
+      } catch {
+        continue;
+      }
+      const resolved = path.isAbsolute(target) ? target : path.resolve(dir, target);
+      if (!resolved.startsWith(ROOT_DIR + path.sep)) {
+        continue; // only manage links into this repo
+      }
+      if (fs.existsSync(full)) {
+        continue; // target still resolves
+      }
+
+      operations.push({ action: 'prune', target: full });
+      if (!dryRun) {
+        fs.unlinkSync(full);
+      }
+    }
+  }
+}
+
+function installCliTools(manifest, runtime, dryRun, operations) {
+  const home = os.homedir();
+  const localBinDir = path.join(home, '.local', 'bin');
+  ensureDir(localBinDir, dryRun, operations);
+
+  for (const asset of getAssetEntries(manifest)) {
+    if (asset.type !== 'cli' || !asset.supported_runtimes.includes(runtime)) {
+      continue;
+    }
+
+    const source = path.join(ROOT_DIR, asset.canonical_file);
+    installSymlink(source, path.join(localBinDir, path.basename(asset.canonical_file)), dryRun, operations);
+  }
+}
+
+function uninstallCliTools(manifest, runtime, dryRun, operations) {
+  const home = os.homedir();
+  const localBinDir = path.join(home, '.local', 'bin');
+
+  for (const asset of getAssetEntries(manifest)) {
+    if (asset.type !== 'cli' || !asset.supported_runtimes.includes(runtime)) {
+      continue;
+    }
+
+    removeManagedPath(path.join(localBinDir, path.basename(asset.canonical_file)), dryRun, operations);
+  }
 }
 
 function installCodexGlobal(manifest, pluginDir, dryRun, operations) {
@@ -269,6 +349,8 @@ function installCodexGlobal(manifest, pluginDir, dryRun, operations) {
       installSymlink(sourceDir, path.join(skillDir, skillName), dryRun, operations);
     }
   }
+
+  installCliTools(manifest, 'codex', dryRun, operations);
 }
 
 function uninstallCodexGlobal(manifest, dryRun, operations) {
@@ -295,6 +377,8 @@ function uninstallCodexGlobal(manifest, dryRun, operations) {
       removeManagedPath(path.join(skillDir, skillName), dryRun, operations);
     }
   }
+
+  uninstallCliTools(manifest, 'codex', dryRun, operations);
 }
 
 function installCopilotGlobal(manifest, dryRun, operations) {
@@ -359,8 +443,8 @@ function doctor(manifest) {
   }));
 
   return {
-    manifest: 'metadata/runtime-asset-map.yaml',
-    manifest_exists: fs.existsSync(path.join(ROOT_DIR, 'metadata/runtime-asset-map.yaml')),
+    manifest: 'metadata/runtime-asset-map.json',
+    manifest_exists: fs.existsSync(path.join(ROOT_DIR, 'metadata/runtime-asset-map.json')),
     generated_outputs: generatedOutputs,
   };
 }
@@ -391,6 +475,11 @@ function main() {
       console.error('Repo-scope uninstall is not supported for generated files.');
       process.exit(1);
     }
+    runGenerator('--write', args.dryRun, operations);
+  } else if (scopes.includes('global') && !args.uninstall) {
+    // Global installs render CLAUDE.md / AGENTS.md / codex-global.md from the
+    // generated outputs — regenerate them first so template or manifest edits
+    // can never ship stale instruction files (install.*.sh all land here).
     runGenerator('--write', args.dryRun, operations);
   }
 

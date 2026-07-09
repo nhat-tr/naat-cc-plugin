@@ -489,8 +489,11 @@ try {
   const auth = await getEsAuth(ENV);
   const result = await esSearch(ENV, INDEX, query, auth);
 
-  const outfile = `/tmp/kibana-logs-${Math.floor(Date.now() / 1000)}.json`;
-  const { writeFile } = await import('node:fs/promises');
+  const scratchDir = process.env.CLAUDE_SCRATCH_DIR || process.env.TMPDIR || '/tmp';
+  const { mkdir, writeFile } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  await mkdir(scratchDir, { recursive: true });
+  const outfile = join(scratchDir, `kibana-logs-${Math.floor(Date.now() / 1000)}.json`);
   await writeFile(outfile, JSON.stringify(result));
 
   formatResults(result, outfile);

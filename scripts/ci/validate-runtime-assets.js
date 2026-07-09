@@ -72,11 +72,6 @@ function validateRuntimeAssets() {
       hasErrors = true;
     }
 
-    if (!Array.isArray(asset.requires)) {
-      console.error(`ERROR: ${asset.id} missing requires array`);
-      hasErrors = true;
-    }
-
     for (const runtime of asset.supported_runtimes || []) {
       if (!KNOWN_RUNTIMES.has(runtime)) {
         console.error(`ERROR: ${asset.id} declares unknown runtime ${runtime}`);
@@ -135,6 +130,12 @@ function validateRuntimeAssets() {
     (filePath) =>
       !filePath.includes(`${path.sep}.git${path.sep}`) &&
       !filePath.includes(`${path.sep}node_modules${path.sep}`) &&
+      // *.local.json is machine-local by convention (gitignored, never shipped),
+      // so author-home paths inside it are not leaks.
+      !filePath.endsWith('.local.json') &&
+      // .observability/ dirs are generated run/test artifacts of the
+      // observability-index tool — local paths inside them are expected.
+      !filePath.includes(`${path.sep}.observability${path.sep}`) &&
       !filePath.endsWith('.png') &&
       !filePath.endsWith('.jpg') &&
       !filePath.endsWith('.jpeg') &&

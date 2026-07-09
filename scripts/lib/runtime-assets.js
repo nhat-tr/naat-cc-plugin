@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT_DIR = path.join(__dirname, '../..');
-const MANIFEST_FILE = path.join(ROOT_DIR, 'metadata/runtime-asset-map.yaml');
+const MANIFEST_FILE = path.join(ROOT_DIR, 'metadata/runtime-asset-map.json');
 const GENERATED_MARKER = '<!-- GENERATED: do not edit directly. Run `node scripts/generate-runtime-assets.js --write`. -->';
 const AUTHOR_HOME_PATTERNS = [
   /\/Users\/[^/\s`'"]+/g,

@@ -1,6 +1,6 @@
 ---
 name: kube-vuln
-description: "Use this skill WHENEVER the user wants to check, inspect, triage, or understand container image vulnerabilities in a Kubernetes namespace — even if they don't say 'vulnerability' or 'CVE'. Trigger phrases: 'check vulns', 'what CVEs do we have', 'security scan results', 'which services have HIGH issues', 'fix the vulnerabilities in <namespace>', 'what's vulnerable in <env>', 'show me the security report', 'trivy report', 'vuln report', 'are we clean on CVEs'. Always delegate to a subagent with model=sonnet. The subagent runs the bundled get-vulns.ts script, then analyzes the output and produces an actionable triage report."
+description: "Use this skill WHENEVER the user wants to check, inspect, triage, or understand container image vulnerabilities in a Kubernetes namespace — even if they don't say 'vulnerability' or 'CVE'. Trigger phrases: 'check vulns', 'what CVEs do we have', 'security scan results', 'which services have HIGH issues', 'fix the vulnerabilities in <namespace>', 'what's vulnerable in <env>', 'show me the security report', 'trivy report', 'vuln report', 'are we clean on CVEs'. Always delegate to a subagent with model=haiku. The subagent runs the bundled get-vulns.ts script, then analyzes the output and produces an actionable triage report."
 ---
 
 # Kube Vulnerability Skill

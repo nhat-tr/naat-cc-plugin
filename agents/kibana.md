@@ -1,6 +1,6 @@
 ---
 name: kibana-analyst
-description: Search and filter service logs from Elasticsearch. Translates natural language queries to ES Query DSL and displays results.
+description: Search Elasticsearch/Kibana service logs AND investigate production errors — 500s, exceptions, stack traces, missing orders/serials, per-pod outages, "why did X fail in QSS/prod". Returns verbatim raw log evidence with hypotheses clearly separated from facts. Delegate here for any log lookup or log-based root-cause question, not just explicit "search kibana" requests.
 tools: ["Bash", "Read"]
 model: opus
 ---

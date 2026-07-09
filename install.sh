@@ -81,6 +81,16 @@ with open(hooks_file) as f:
 with open(settings_file) as f:
     settings = json.load(f)
 settings.setdefault("hooks", {})
+
+# Replace-by-marker: strip every previously-managed entry first, so hooks
+# removed/renamed in hooks.json can never strand stale copies in settings
+# (an orphaned disabled guard-read.sh hook once ran on every Read this way).
+MARKERS = ("my-claude-code", "⚠ VERIFY before done")
+def managed(entry):
+    return any(m in hook.get("command", "") for hook in entry.get("hooks", []) for m in MARKERS)
+for event in list(settings["hooks"].keys()):
+    settings["hooks"][event] = [e for e in settings["hooks"][event] if not managed(e)]
+
 for event, matchers in plugin_hooks.items():
     settings["hooks"].setdefault(event, [])
     existing = settings["hooks"][event]
@@ -121,21 +131,6 @@ with open(settings_file, "w") as f:
 EOF
 }
 
-link_cli_tools() {
-  mkdir -p "$LOCAL_BIN"
-  for file in bin/*; do
-    [[ -f "$file" ]] || continue
-    ln -snf "$PWD/$file" "$LOCAL_BIN/$(basename "$file")"
-  done
-}
-
-unlink_cli_tools() {
-  for file in bin/*; do
-    [[ -f "$file" ]] || continue
-    rm -f "$LOCAL_BIN/$(basename "$file")"
-  done
-}
-
 check_prerequisites() {
   local missing=0
   for cmd in node npm kubectl; do
@@ -162,7 +157,6 @@ install_infra_deps() {
 
 if [[ "${1:-}" == "--uninstall" ]]; then
   node scripts/install-runtime.js --runtime claude --scope global --uninstall "${@:2}"
-  unlink_cli_tools
   uninstall_permissions
   uninstall_hooks
   exit 0
@@ -171,8 +165,8 @@ fi
 echo -e "${BOLD}Installing nhat-dev-toolkit${NC}"
 check_prerequisites
 install_infra_deps
+# CLI tools are manifest-driven inside install-runtime.js (installCliTools)
 node scripts/install-runtime.js --runtime claude --scope global "$@"
-link_cli_tools
 install_permissions
 install_hooks
 info "Claude runtime install complete"

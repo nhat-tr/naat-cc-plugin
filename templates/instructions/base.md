@@ -56,11 +56,18 @@ When a user reports a UI or DOM bug (focus, rendering, styling, missing element)
 - Optimize for readability, then maintainability, then correctness patterns, then performance.
 - Make minimal focused changes. Do not refactor unrelated code without a reason.
 - Preserve repo conventions.
+- Implementation plans follow TDD: schedule failing tests before the implementation they verify, and include integration tests covering the acceptance criteria — integration tests are mandatory, not optional.
 
 ## Secrets
 
 - Never decode, print, or reveal secret values.
 - Only inspect secret metadata or key names when necessary.
+
+## Scratch & Temp Files
+
+- All temporary/scratch files (logs, diffs, screenshots, throwaway scripts, intermediate data) go to `$CLAUDE_SCRATCH_DIR` (`~/.claude-scratch/`), organized as `<repo-name>/<purpose>`. It is a pre-approved write root.
+- Never write to `/tmp` or `/private/tmp` directly, and never write throwaway diagnostic files (e.g. `tmp-*.spec.ts`) into the repo tree.
+- Invoke helper tools by bare name on PATH (`aspire-logs`, `kibana-logs`, `az-pr-comments`, …), not by absolute script path.
 
 {{RUNTIME_SECTION}}
 

@@ -1,0 +1,299 @@
+{
+  "version": 2,
+  "runtimes": {
+    "claude": {
+      "display_name": "Claude Code",
+      "global_instruction_path": "~/.claude/CLAUDE.md",
+      "agents_dir": "~/.claude/agents",
+      "commands_dir": "~/.claude/commands",
+      "contexts_dir": "~/.claude/contexts"
+    },
+    "codex": {
+      "display_name": "Codex",
+      "global_instruction_paths": [
+        "~/.codex/AGENTS.md",
+        "~/.agents/AGENTS.md"
+      ],
+      "skill_dirs": [
+        "~/.codex/skills",
+        "~/.agents/skills"
+      ]
+    },
+    "copilot": {
+      "display_name": "GitHub Copilot",
+      "repo_instruction_path": ".github/copilot-instructions.md",
+      "repo_instruction_dir": ".github/instructions",
+      "repo_skills_dir": ".github/skills",
+      "global_skill_dir": "~/.copilot/skills"
+    }
+  },
+  "generated_outputs": {
+    "repo_agents": {
+      "template": "repo-agents",
+      "output": "AGENTS.md"
+    },
+    "claude_global": {
+      "template": "claude",
+      "output": "CLAUDE.md"
+    },
+    "codex_global": {
+      "template": "codex",
+      "output": "generated/instructions/codex-global.md"
+    },
+    "copilot_repo": {
+      "template": "copilot",
+      "output": ".github/copilot-instructions.md"
+    },
+    "copilot_csharp": {
+      "template": "copilot-csharp",
+      "output": ".github/instructions/csharp.instructions.md"
+    },
+    "copilot_typescript": {
+      "template": "copilot-typescript",
+      "output": ".github/instructions/typescript.instructions.md"
+    }
+  },
+  "assets": {
+    "command.az-pr-review": {
+      "type": "command",
+      "canonical_file": "commands/az-pr-review.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "command.az-review-response": {
+      "type": "command",
+      "canonical_file": "commands/az-review-response.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "command.codediscover": {
+      "type": "command",
+      "canonical_file": "commands/codediscover.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "command.generate-index": {
+      "type": "command",
+      "canonical_file": "commands/generate-index.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "command.kibana-logs": {
+      "type": "command",
+      "canonical_file": "commands/kibana-logs.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "command.loop-plan": {
+      "type": "command",
+      "canonical_file": "commands/loop-plan.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "command.pair-promote": {
+      "type": "command",
+      "canonical_file": "commands/pair-promote.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "command.verify": {
+      "type": "command",
+      "canonical_file": "commands/verify.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "agent.az-pr-review": {
+      "type": "agent",
+      "canonical_file": "agents/az-pr-review.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "agent.az-review-response": {
+      "type": "agent",
+      "canonical_file": "agents/az-review-response.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "agent.kibana-analyst": {
+      "type": "agent",
+      "canonical_file": "agents/kibana.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "skill.aspire": {
+      "type": "skill",
+      "canonical_file": "skills/aspire/SKILL.md",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
+    "skill.brainstorming": {
+      "type": "skill",
+      "canonical_file": "skills/brainstorming/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "skill.csharp-dotnet": {
+      "type": "skill",
+      "canonical_file": "skills/csharp-dotnet/SKILL.md",
+      "supported_runtimes": [
+        "claude",
+        "codex",
+        "copilot"
+      ],
+      "publish": {
+        "copilot": {
+          "kind": "repo_skill_copy",
+          "path": ".github/skills/csharp-dotnet"
+        }
+      }
+    },
+    "skill.kube-vuln": {
+      "type": "skill",
+      "canonical_file": "skills/kube-vuln/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "skill.module-deepening": {
+      "type": "skill",
+      "canonical_file": "skills/module-deepening/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "skill.pair-v2": {
+      "type": "workflow_skill",
+      "canonical_file": "skills/pair-v2/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "skill.session-replay-note": {
+      "type": "skill",
+      "canonical_file": "skills/session-replay-note/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "skill.typescript": {
+      "type": "skill",
+      "canonical_file": "skills/typescript/SKILL.md",
+      "supported_runtimes": [
+        "claude",
+        "codex",
+        "copilot"
+      ],
+      "publish": {
+        "copilot": {
+          "kind": "repo_skill_copy",
+          "path": ".github/skills/typescript"
+        }
+      }
+    },
+    "skill.ubiquitous-language": {
+      "type": "skill",
+      "canonical_file": "skills/ubiquitous-language/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "skill.web-design-guidelines": {
+      "type": "skill",
+      "canonical_file": "skills/web-design-guidelines/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "cli.aspire-logs": {
+      "type": "cli",
+      "canonical_file": "bin/aspire-logs",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
+    "cli.aspire-traces": {
+      "type": "cli",
+      "canonical_file": "bin/aspire-traces",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
+    "cli.az-pr-comments": {
+      "type": "cli",
+      "canonical_file": "bin/az-pr-comments",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
+    "cli.kibana-logs": {
+      "type": "cli",
+      "canonical_file": "bin/kibana-logs",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
+    "cli.kibana-traffic": {
+      "type": "cli",
+      "canonical_file": "bin/kibana-traffic",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
+    "cli.observability-index": {
+      "type": "cli",
+      "canonical_file": "bin/observability-index",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
+    "cli.validate-mermaid": {
+      "type": "cli",
+      "canonical_file": "bin/validate-mermaid",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
+    "skill.mermaid-validate": {
+      "type": "skill",
+      "canonical_file": "skills/mermaid-validate/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "agent.az-pr-reviewer": {
+      "type": "agent",
+      "canonical_file": "agents/az-pr-reviewer.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "agent.pair-reviewer": {
+      "type": "agent",
+      "canonical_file": "agents/pair-reviewer.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    }
+  }
+}

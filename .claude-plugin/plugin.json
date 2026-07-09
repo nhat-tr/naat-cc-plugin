@@ -1,7 +1,7 @@
 {
   "name": "nhat-dev-toolkit",
   "version": "0.1.0",
-  "description": "Claude Code plugin for senior developer workflow: code review, planning, architecture, pair programming, and troubleshooting across C#/.NET, TypeScript, Rust, and Python",
+  "description": "Claude Code plugin for senior developer workflow: code review, planning, pair programming, and troubleshooting across C#/.NET and TypeScript",
   "author": {
     "name": "Nhat Tran"
   },
@@ -12,19 +12,13 @@
     "architecture",
     "dotnet",
     "csharp",
-    "typescript",
-    "rust",
-    "python"
+    "typescript"
   ],
   "skills": ["./skills/"],
   "commands": ["./commands/"],
   "agents": [
-    "./agents/architect.md",
-    "./agents/code-reviewer.md",
-    "./agents/discovery.md",
-    "./agents/pair-programmer.md",
-    "./agents/planner.md",
-    "./agents/troubleshooter.md",
-    "./agents/sonar-analyst.md"
+    "./agents/az-pr-review.md",
+    "./agents/az-review-response.md",
+    "./agents/kibana.md"
   ]
 }

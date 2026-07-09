@@ -37,10 +37,6 @@ function renderInstruction(templateName, title) {
     .replace('{{LANGUAGE_ROUTING_SECTION}}', languageRoutingSection)}\n`;
 }
 
-function renderCopilotInstruction() {
-  return `${GENERATED_MARKER}\n${readTemplate('copilot')}\n`;
-}
-
 function renderPathInstruction(templateName) {
   return `${GENERATED_MARKER}\n${readTemplate(templateName)}\n`;
 }
@@ -77,14 +73,14 @@ function renderRuntimeSupportTable(manifest) {
     '<!-- END GENERATED:runtime-support -->',
     '',
     'Runtime/asset mapping source of truth:',
-    '- `metadata/runtime-asset-map.yaml`',
+    '- `metadata/runtime-asset-map.json`',
   ].join('\n');
 }
 
 function updateReadme(content, manifest) {
   const block = renderRuntimeSupportTable(manifest);
   return content.replace(
-    /## Runtime Support[\s\S]*?Runtime\/asset mapping source of truth:\n- `metadata\/runtime-asset-map\.yaml`/,
+    /## Runtime Support[\s\S]*?Runtime\/asset mapping source of truth:\n- `metadata\/runtime-asset-map\.(?:yaml|json)`/,
     block,
   );
 }
@@ -121,7 +117,9 @@ function buildOutputs() {
   );
   outputs.set(
     path.join(ROOT_DIR, '.github/copilot-instructions.md'),
-    renderCopilotInstruction()
+    // Copilot inherits the full base discipline (Read-Before-Answer, Evidence
+    // Discipline, Bug Diagnosis Gate, ...) instead of a stripped 7-bullet file.
+    renderInstruction('copilot', 'How I Work')
   );
   outputs.set(
     path.join(ROOT_DIR, '.github/instructions/csharp.instructions.md'),

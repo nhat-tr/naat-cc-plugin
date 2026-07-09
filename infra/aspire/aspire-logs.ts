@@ -12,13 +12,15 @@
  */
 import { parseArgs } from "node:util";
 import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   readJsonlLines, followFile, nanosToDate, fmtTimestamp,
   parseDuration, attrsToMap, getResourceName, matchesAnyGlob,
   type OtlpResource, type OtlpKeyValue,
 } from "./otlp.ts";
 
-const DEFAULT_FILE = "/tmp/aspire-telemetry/logs.jsonl";
+const SCRATCH_DIR = process.env.CLAUDE_SCRATCH_DIR || process.env.TMPDIR || "/tmp";
+const DEFAULT_FILE = join(SCRATCH_DIR, "aspire-telemetry", "logs.jsonl");
 const DEFAULT_EXCLUDES = [
   "Microsoft.AspNetCore.Hosting.*",
   "Microsoft.AspNetCore.Routing.*",

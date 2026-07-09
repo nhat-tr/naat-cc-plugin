@@ -106,7 +106,7 @@ Confirm the highlight list + grouping back to the user in one message before bui
 
 The notes are dark/plain text without the snippet. Before writing notes:
 
-1. Confirm the vault path (default `/Users/nhat.tran/Vaults/N8W`; ask if unsure).
+1. Confirm the vault path (default `~/Vaults/N8W`; ask if unsure).
 2. If `<vault>/.obsidian/snippets/claude-session.css` does not exist, copy this skill's
    `assets/claude-session.css` there.
 3. Read `<vault>/.obsidian/appearance.json`. If `enabledCssSnippets` does not contain

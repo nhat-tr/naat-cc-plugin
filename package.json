@@ -5,6 +5,6 @@
   "description": "Claude Code plugin for senior developer workflow",
   "scripts": {
     "generate:runtime-assets": "node scripts/generate-runtime-assets.js --write",
-    "validate": "node scripts/generate-runtime-assets.js --check && node scripts/ci/validate-runtime-assets.js && node scripts/ci/validate-agents.js && node scripts/ci/validate-commands.js && node scripts/ci/validate-skills.js && node scripts/ci/validate-contexts.js && node scripts/ci/validate-global-instructions.js && node scripts/ci/validate-hooks.js"
+    "validate": "node scripts/generate-runtime-assets.js --check && node scripts/ci/validate-runtime-assets.js && node scripts/ci/validate-agents.js && node scripts/ci/validate-commands.js && node scripts/ci/validate-skills.js && node scripts/ci/validate-contexts.js && node scripts/ci/validate-global-instructions.js && node scripts/ci/validate-hooks.js && npm --prefix infra run typecheck && npm --prefix infra/observability-index run test && node scripts/ci/validate-bin-smoke.js"
   }
 }

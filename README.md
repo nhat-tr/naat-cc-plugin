@@ -1,6 +1,6 @@
 # nhat-dev-toolkit
 
-Multi-runtime developer toolkit for **Claude Code**, **Codex**, and **GitHub Copilot** across C#/.NET, TypeScript, Rust, and Python.
+Multi-runtime developer toolkit for **Claude Code**, **Codex**, and **GitHub Copilot** across C#/.NET and TypeScript.
 
 ## Runtime Support
 
@@ -13,7 +13,7 @@ Multi-runtime developer toolkit for **Claude Code**, **Codex**, and **GitHub Cop
 <!-- END GENERATED:runtime-support -->
 
 Runtime/asset mapping source of truth:
-- `metadata/runtime-asset-map.yaml`
+- `metadata/runtime-asset-map.json`
 
 ## Install
 
@@ -26,12 +26,12 @@ cd ~/.local/share/my-claude-code
 ```
 
 The installer handles everything:
-- **Prerequisites** — checks for node >= 20, npm, kubectl (fails fast with install hints)
+- **Prerequisites** — checks that `node`, `npm`, and `kubectl` are on `PATH` (existence only, no version check); exits if any are missing
 - **Infra deps** — installs `tsx` globally, `@types/node` in `infra/`
-- **Claude Code integration** — installs generated global instructions plus manifest-driven agents, commands, and skills into `~/.claude/`
-- **CLI tools** — symlinks bundled wrappers like `aspire-logs`, `aspire-traces`, `az-pr-comments`, `kibana-logs`, `kibana-traffic`, and `observability-index` into `~/.local/bin/`
-- **CLAUDE.md** — installs the full global instruction file with repo-path substitution
-- **Post-install checks** — warns if `~/.local/bin` is not in PATH or kubectl has no cluster
+- **Claude Code integration** — renders the global `CLAUDE.md` (with repo-path substitution) and installs manifest-driven agents, commands, and skills into `~/.claude/`
+- **CLI tools** — symlinks bundled wrappers like `aspire-logs`, `aspire-traces`, `az-pr-comments`, `kibana-logs`, `kibana-traffic`, `observability-index`, and `validate-mermaid` into `~/.local/bin/`
+- **Permissions** — merges `permissions/allow.json` into `~/.claude/settings.json`
+- **Hooks** — merges `hooks/hooks.json` into `~/.claude/settings.json`, installing the Stop-hook completion gate (`stop-gate.sh`)
 
 Uninstall:
 
@@ -80,34 +80,112 @@ Notes:
 
 | Agent | Model | Command | Purpose |
 |-------|-------|---------|---------|
-| az-pr-review | sonnet | `/az-pr-review` | Set up an Azure DevOps PR locally and prepare a focused review prompt |
-| az-review-response | sonnet | `/az-review-response` | Triage PR comment threads and draft evidence-backed responses |
-| discovery | haiku | `/discover` | Use-case discovery across repos with evidence + confidence scoring |
-| kibana-analyst | sonnet | `/kibana-logs` | Search Elasticsearch logs with trace correlation guidance |
-| pair-sketcher | opus | `/pair-plan` | Write the high-level sketch phase of `.pair/plan.md` |
-| pair-planner | opus | `/pair-plan` | Expand an approved sketch into a detailed pair plan |
+| az-pr-review | sonnet | `/az-pr-review` | Set up an Azure DevOps PR locally in a git worktree and prepare a focused review prompt |
+| az-review-response | sonnet | `/az-review-response` | Fetch PR comment threads, give an overview, then draft evidence-backed responses per thread |
+| kibana-analyst | opus | `/kibana-logs` | Search Elasticsearch logs, quoting evidence verbatim with trace correlation guidance |
 
 ### Claude Code Commands
 
 | Command | What It Does |
 |---------|-------------|
-| `/architect` | System design session — components, tradeoffs, ADRs/decision notes |
-| `/az-pr-review` | Prepare an Azure DevOps PR worktree and review prompt |
-| `/az-review-response` | Analyze PR comment threads and draft responses |
-| `/codediscover` | Codebase search-heavy discovery workflow for unfamiliar areas |
-| `/discover` | Trace a use case end-to-end across repos — evidence-backed, confidence-scored |
+| `/az-pr-review` | Set up an Azure DevOps PR worktree and generate a focused review prompt |
+| `/az-review-response` | Analyze PR comment threads and draft a response for each |
+| `/codediscover` | Fast codebase entry-point discovery — outputs a navigable quickfix list |
 | `/generate-index` | Generate `.observability/logs.json` + `traces.json` for the current project |
-| `/kibana-logs` | Search Elasticsearch logs — natural language to ES Query DSL |
-| `/pair` | Pair-programming entrypoint for the `.pair/` workflow |
-| `/pair-implement` | Implement the active pair stream from `.pair/plan.md` |
-| `/pair-plan` | Draft or expand `.pair/plan.md` |
-| `/pair-plan-challenge` | Challenge the current `.pair/plan.md` before implementation |
-| `/pair-review` | Review the current pair stream against the plan |
-| `/pair-review-eco` | Lightweight pair review at a review boundary |
-| `/pair-simplify` | Simplify the active pair context before continuing |
-| `/planner` | Create phased implementation plans — never writes code until confirmed |
-| `/review` | Review uncommitted changes — security, correctness, quality |
+| `/kibana-logs` | Search Elasticsearch logs — natural language to ES Query DSL (delegates to `kibana-analyst`) |
+| `/loop-plan` | Seed `.claude-loop.md` (goal, acceptance criteria, tasks) so the stop-gate guards a long `/loop` run |
+| `/pair-promote` | Promote a spec (or plan-mode output) into an implementable `.pair/plan.md` |
 | `/verify` | Cross-language build/lint/test gate — PASS/FAIL report |
+
+### Claude Code Skills
+
+| Skill | Purpose |
+|-------|---------|
+| `aspire` | Aspire local-dev diagnostics — logs, traces, state, DB queries for a running AppHost |
+| `brainstorming` | Turn a vague idea into an approved spec before any implementation |
+| `csharp-dotnet` | C#/.NET implementation guidance (.NET 10, C# 14, EF Core 10, ASP.NET Core 10, NUnit) |
+| `kube-vuln` | Triage container-image vulnerabilities (Trivy reports) in a Kubernetes namespace |
+| `mermaid-validate` | Validate Mermaid diagram blocks right after they're written or edited |
+| `module-deepening` | Tactical refactoring heuristics — deletion test, depth-as-leverage, two-adapter rule |
+| `pair-v2` | Headless doer/reviewer pair-programming workflow; `.pair/` state, stop-gate enforced |
+| `session-replay-note` | Turn a coding-agent session into a teaching-oriented Obsidian demo (notes + Canvas) |
+| `typescript` | TypeScript implementation guidance — React/Next.js, Node, type safety, testing |
+| `ubiquitous-language` | Extract a domain-term glossary from the conversation into `UBIQUITOUS_LANGUAGE.md` |
+| `web-design-guidelines` | Review UI code for Web Interface Guidelines compliance |
+
+#### Pair v2 workflow
+
+`pair-v2` is a `workflow_skill`, not a plain guidance skill — it ships executable
+scripts under `skills/pair-v2/scripts/`:
+
+- `pair-review` — headless, one-shot reviewer. Runs `claude -p` with a fresh
+  context against the working-tree diff + plan, writes `.pair/review.md` /
+  `.pair/review.json`, and appends BLOCKER findings back into `.pair/plan.md`
+  as unchecked tasks. Use `/pair-promote` first to produce the plan it reviews.
+- `validate-plan.sh` — preflight check that `.pair/plan.md` is an implementable
+  plan (not a sketch or a spec); exit 0 = implementable.
+- `workflow-metrics` — measures agent-workflow friction (interrupts, tool
+  rejections, stop-gate blocks, pair-review runs, etc.) from Claude Code
+  session JSONLs, so a workflow change can be judged on evidence.
+- `pair-loop [interval] [--auto]` — one-command overnight loop: validates the
+  plan, then launches a FRESH claude session (cheap fixed context per wakeup)
+  on sonnet/medium with `/loop <interval>` working `.pair/plan.md` (or
+  `.claude-loop.md`). Interval ticks ride out token-limit outages. `--auto`
+  uses permission-mode auto so an unattended run can never stall on an
+  approval prompt. Run it in a cmux/tmux pane and leave the pane open.
+
+##### How to run it (end to end)
+
+1. **Spec** — in nvim, `<leader>pi` creates `.pair/spec.md` from a skeleton
+   (or let the `brainstorming` skill write it). Fill in Purpose + Acceptance
+   Criteria; optionally list Suggested Streams.
+2. **Promote** — in the Claude Code session for that repo (terminal, not nvim),
+   type `/pair-promote` (optionally `/pair-promote path/to/spec.md`, or right
+   after plan mode to promote that plan). It reads the spec, explores the
+   codebase, and writes `.pair/plan.md` — TDD-shaped (failing-test task first
+   per stream, integration test mandatory) and validated by `validate-plan.sh`
+   before it reports done. (`<leader>pc` re-runs the validator any time.)
+3. **Challenge (optional but cheap)** — `<leader>pC` runs the reviewer in
+   `--plan` mode: it critiques the plan itself against the spec (AC coverage,
+   TDD compliance, decomposition, grounding) before any code exists. Plan
+   BLOCKERs append to `plan.md` like code ones do.
+4. **Implement** — work the plan in the normal Claude session (or a `/loop`
+   seeded by `/loop-plan`), tests first. The Stop-hook gate blocks premature
+   "done" while unchecked tasks remain or `.pair/verify.sh` fails.
+5. **Review** — `<leader>pv` in nvim (or run `pair-review` in a terminal).
+   The reviewer runs in a fresh context, BLOCKERs land in `.pair/plan.md`
+   (the gate holds the doer until they're fixed), and findings auto-import
+   into the nvim notes list as `[rv]` entries. `<leader>pV` = eco mode
+   (diff-only, cheaper model — S-complexity changes only).
+   Mid-session alternative: delegate to the `pair-reviewer` agent.
+6. **Triage** — reply to a finding note with `@cc ...` and hit `A` (or
+   `<leader>nA` for all) to dispatch questions back to the doer session.
+7. **Done** — all boxes checked, verify passes, verdict `approve`.
+   `<leader>pD` archives `.pair/` → `.pair-archive/<timestamp>` for the next feature.
+
+##### Nvim keymaps (dotfiles `nhat/pair.lua` — v2 driver)
+
+| Key | Action |
+|-----|--------|
+| `<leader>pi` | Init — create `.pair/spec.md` skeleton |
+| `<leader>ps` / `pp` / `pr` | Open spec / plan / review.md |
+| `<leader>pl` | Open `.claude-loop.md` (loop state file) |
+| `<leader>pv` / `pV` | Run headless code reviewer (full / eco) + auto-import findings |
+| `<leader>pC` | Challenge the plan itself (`pair-review --plan`) before implementing |
+| `<leader>px` | Cancel the running review (kills the claude child too) |
+| `<leader>pc` | Validate plan structure (`validate-plan.sh`, instant) |
+| `<leader>pd` | Diff working tree vs base (Diffview) |
+| `<leader>pD` | Done — archive `.pair/` |
+| `<leader>ni` | Re-import `.pair/review.json` findings as notes |
+
+### Hooks
+
+`hooks/stop-gate.sh` is the Stop-hook completion gate installed by
+`install.sh` (via `hooks/hooks.json`). While `.pair/plan.md` or
+`.claude-loop.md` has unchecked `- [ ]` tasks — or `.pair/verify.sh` exists and
+fails — it blocks the agent from ending its turn as "done". Opt out per-run
+with `CLAUDE_STOP_GATE=off`; the no-progress iteration cap defaults to 5 and
+is tunable with `CLAUDE_STOP_GATE_MAX`.
 
 ### Codex-Compatible Skills
 
@@ -115,24 +193,7 @@ Notes:
 |-------|---------|
 | `aspire` | Aspire local-development and diagnostics guidance |
 | `csharp-dotnet` | C#/.NET implementation guidance |
-| `discovery-workflow` | Evidence-first use-case discovery workflow |
-| `evidence-discipline` | Evidence, correction, and test discipline |
-| `python` | Python implementation guidance |
-| `review-workflow` | Uncommitted-diff code review workflow |
-| `rust` | Rust implementation guidance |
-| `security-review` | Cross-language security checklist |
 | `typescript` | TypeScript implementation guidance |
-
-### Shared Language Skills
-
-| Skill | Coverage |
-|-------|----------|
-| `csharp-dotnet` | .NET 10, C# 14, EF Core 10, ASP.NET Core 10, NUnit, Testcontainers |
-| `typescript` | Type safety, React/Next.js, Node patterns, async/perf, testing |
-| `rust` | thiserror/anyhow, ownership patterns, Tokio, clippy, cargo workspaces |
-| `python` | Type hints, Pydantic, FastAPI, httpx, pytest |
-| `security-review` | 10-category cross-language security checklist |
-| `observability-index` | Generate `.observability/logs.json` + `traces.json`; optional Tier 2 caller/callee enrichment via embedcode |
 
 ### Bundled CLI Tools
 
@@ -169,6 +230,13 @@ aspire-traces --resource RG-Core --min-duration 500ms
 observability-index --root .
 ```
 
+**Docs**
+
+```bash
+validate-mermaid                # scan every Mermaid block under docs/**/*.md
+validate-mermaid README.md      # or check specific files (requires mmdc)
+```
+
 ## Validation
 
 ```bash
@@ -184,21 +252,25 @@ nhat-dev-toolkit/
 ├── .claude-plugin/
 │   └── plugin.json
 ├── agents/                     Claude agent prompts that still ship in-repo
+├── archive/                    Retired agents/commands/skills/hooks (pair-v1 suite, discovery, etc.) — kept for reference, not installed
 ├── bin/                        CLI wrappers (symlinked to ~/.local/bin/)
 │   ├── aspire-logs
 │   ├── aspire-traces
 │   ├── az-pr-comments
 │   ├── kibana-logs
 │   ├── kibana-traffic
-│   └── observability-index
+│   ├── observability-index
+│   └── validate-mermaid
 ├── commands/
 ├── generated/
+├── hooks/                      Stop-hook completion gate (stop-gate.sh) + hooks.json manifest
 ├── infra/
 │   ├── aspire/                 Aspire structured log + trace scripts
 │   ├── azure-devops/           Azure DevOps helpers
 │   ├── kibana/                 Elasticsearch log + traffic scripts
 │   └── observability-index/    Index extractor (produces .observability/*.json)
 ├── metadata/
+├── permissions/                allow.json — pre-approved tool permissions merged into ~/.claude/settings.json
 ├── scripts/ci/
 ├── skills/
 ├── templates/instructions/

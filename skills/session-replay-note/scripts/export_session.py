@@ -22,7 +22,7 @@ Usage:
   export_session.py --into <demo-slug>   # write into <vault>/Notes/<demo-slug>/_session.md
   export_session.py --out <path>         # explicit output path
 Flags:
-  --vault <path>      Obsidian vault root (default: /Users/nhat.tran/Vaults/N8W)
+  --vault <path>      Obsidian vault root (default: ~/Vaults/N8W)
   --with-thinking     include [thinking] blocks (default: off)
   --no-tools          omit tool calls / results entirely
   --full              don't truncate long tool results (default: cap ~30 lines)
@@ -36,7 +36,7 @@ import sys
 from datetime import datetime
 
 PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
-DEFAULT_VAULT = "/Users/nhat.tran/Vaults/N8W"
+DEFAULT_VAULT = os.path.expanduser("~/Vaults/N8W")
 RESULT_CAP = 30
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[@-_]")

@@ -79,16 +79,18 @@ export interface EsResult {
 // ── Credentials ──────────────────────────────────────────────────────────────
 
 /**
- * Get Elasticsearch auth header from Azure Key Vault or environment variables.
- * Tries KV first, falls back to env vars.
+ * Get Elasticsearch auth header from environment variables or Azure Key Vault.
+ * Tries the env var first (for CI/CD), falls back to KV.
+ * Env is normalized here so callers may pass 'prod' or 'PROD' alike.
  */
 export async function getEsAuth(env: string): Promise<string> {
+  env = env.toUpperCase();
   // Try env var first (for CI/CD environments)
-  const envVar = `${env.toUpperCase()}_POS_ELASTIC_USER_PASSWORD`;
+  const envVar = `${env}_POS_ELASTIC_USER_PASSWORD`;
   const envPassword = process.env[envVar];
-  // if (envPassword) {
-  //   return Buffer.from(`elastic:${envPassword}`).toString('base64');
-  // }
+  if (envPassword) {
+    return Buffer.from(`elastic:${envPassword}`).toString('base64');
+  }
 
   // Fall back to Azure Key Vault
   const { exec } = await import('child_process');

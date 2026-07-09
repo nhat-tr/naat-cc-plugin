@@ -44,16 +44,30 @@ When a user reports a bug or unexpected behavior — before writing any code:
 3. **State the architecture impact** — does the fix address root cause or symptom? What contract does it rely on? Is that contract guaranteed? Does it introduce coupling?
 4. **Hold code until the diagnosis is stable** — do not write, edit, or commit any code (including logs or instrumentation) until the root cause is confirmed. Label unverified hypotheses explicitly.
 
+## UI / DOM Bug Triage
+
+When a user reports a UI or DOM bug (focus, rendering, styling, missing element) — before editing any UI code:
+
+1. **Identify the actually-rendered file via DOM evidence, not the user's stated path.** Frontends often have near-identical sibling components in different feature folders that share translation keys and layouts; users routinely point at the wrong twin. Ask for one of: `document.activeElement?.outerHTML?.slice(0,200)`, a container DOM id (antd Tabs format `rc-tabs-N-tab-<key>` — the key disambiguates copy-pasted siblings), or a unique class / `data-*` attribute. Grep for that distinctive token to pin down the file.
+2. **For DOM effects inside conditionally-rendered children, put the effect in the child.** Wrappers that return `null` on first render (auth gates, URL-param wrappers, Suspense / lazy, feature-flag gates) defer mount by one effect cycle, so a parent's `setTimeout(0) + querySelector` races the deferred mount and `?.focus()` / `?.scrollIntoView()` silently no-ops. Use a ref + `useEffect` inside the wrapped component; reserve parent-driven DOM queries for re-entry where the child is already mounted.
+
 ## Code Changes
 
 - Optimize for readability, then maintainability, then correctness patterns, then performance.
 - Make minimal focused changes. Do not refactor unrelated code without a reason.
 - Preserve repo conventions.
+- Implementation plans follow TDD: schedule failing tests before the implementation they verify, and include integration tests covering the acceptance criteria — integration tests are mandatory, not optional.
 
 ## Secrets
 
 - Never decode, print, or reveal secret values.
 - Only inspect secret metadata or key names when necessary.
+
+## Scratch & Temp Files
+
+- All temporary/scratch files (logs, diffs, screenshots, throwaway scripts, intermediate data) go to `$CLAUDE_SCRATCH_DIR` (`~/.claude-scratch/`), organized as `<repo-name>/<purpose>`. It is a pre-approved write root.
+- Never write to `/tmp` or `/private/tmp` directly, and never write throwaway diagnostic files (e.g. `tmp-*.spec.ts`) into the repo tree.
+- Invoke helper tools by bare name on PATH (`aspire-logs`, `kibana-logs`, `az-pr-comments`, …), not by absolute script path.
 
 ## Tools & Environment
 

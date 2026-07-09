@@ -17,6 +17,7 @@ Pure code samples for runtime patterns defined in SKILL.md. No rules here — se
 - [Group-Level Authorization](#group-level-authorization)
 - [Policy-Based Authorization Setup](#policy-based-authorization-setup)
 - [Global JsonSerializerOptions](#global-jsonserializeroptions)
+- [Braces / Control-Flow Style](#braces--control-flow-style)
 
 ## LoggerMessage Source Generator
 
@@ -343,4 +344,22 @@ var jsonOptions = new JsonSerializerOptions
     PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     PropertyNameCaseInsensitive = true,
 };
+```
+
+## Braces / Control-Flow Style
+
+Demonstrates: SKILL.md § Code Style
+
+Always use braces for control-flow blocks — even single-statement `if`, `else`, `for`, `foreach`, `while`, `using`. Omitting braces is a common source of bugs when statements are added later and the indentation-only scoping is silently wrong. Use Allman style: opening brace on its own line.
+
+```csharp
+// BAD
+if (x > 0)
+    DoSomething();
+
+// GOOD
+if (x > 0)
+{
+    DoSomething();
+}
 ```
