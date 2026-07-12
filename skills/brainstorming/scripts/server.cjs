@@ -1,354 +1,405 @@
-const crypto = require('crypto');
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const http = require('node:http');
+const os = require('node:os');
+const path = require('node:path');
 
-// ========== WebSocket Protocol (RFC 6455) ==========
+const { SessionStore } = require('./session-store.cjs');
+const { renderStandalone } = require('./standalone.cjs');
+const { normalizeVisualDocument } = require('./visual-document.cjs');
 
-const OPCODES = { TEXT: 0x01, CLOSE: 0x08, PING: 0x09, PONG: 0x0A };
-const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
-
-function computeAcceptKey(clientKey) {
-  return crypto.createHash('sha1').update(clientKey + WS_MAGIC).digest('base64');
-}
-
-function encodeFrame(opcode, payload) {
-  const fin = 0x80;
-  const len = payload.length;
-  let header;
-
-  if (len < 126) {
-    header = Buffer.alloc(2);
-    header[0] = fin | opcode;
-    header[1] = len;
-  } else if (len < 65536) {
-    header = Buffer.alloc(4);
-    header[0] = fin | opcode;
-    header[1] = 126;
-    header.writeUInt16BE(len, 2);
-  } else {
-    header = Buffer.alloc(10);
-    header[0] = fin | opcode;
-    header[1] = 127;
-    header.writeBigUInt64BE(BigInt(len), 2);
-  }
-
-  return Buffer.concat([header, payload]);
-}
-
-function decodeFrame(buffer) {
-  if (buffer.length < 2) return null;
-
-  const secondByte = buffer[1];
-  const opcode = buffer[0] & 0x0F;
-  const masked = (secondByte & 0x80) !== 0;
-  let payloadLen = secondByte & 0x7F;
-  let offset = 2;
-
-  if (!masked) throw new Error('Client frames must be masked');
-
-  if (payloadLen === 126) {
-    if (buffer.length < 4) return null;
-    payloadLen = buffer.readUInt16BE(2);
-    offset = 4;
-  } else if (payloadLen === 127) {
-    if (buffer.length < 10) return null;
-    payloadLen = Number(buffer.readBigUInt64BE(2));
-    offset = 10;
-  }
-
-  const maskOffset = offset;
-  const dataOffset = offset + 4;
-  const totalLen = dataOffset + payloadLen;
-  if (buffer.length < totalLen) return null;
-
-  const mask = buffer.slice(maskOffset, dataOffset);
-  const data = Buffer.alloc(payloadLen);
-  for (let i = 0; i < payloadLen; i++) {
-    data[i] = buffer[dataOffset + i] ^ mask[i % 4];
-  }
-
-  return { opcode, payload: data, bytesConsumed: totalLen };
-}
-
-// ========== Configuration ==========
-
-const PORT = process.env.BRAINSTORM_PORT || (49152 + Math.floor(Math.random() * 16383));
-const HOST = process.env.BRAINSTORM_HOST || '127.0.0.1';
-const URL_HOST = process.env.BRAINSTORM_URL_HOST || (HOST === '127.0.0.1' ? 'localhost' : HOST);
-const SESSION_DIR = process.env.BRAINSTORM_DIR || path.join(process.env.CLAUDE_SCRATCH_DIR || process.env.TMPDIR || '/tmp', 'brainstorm');
-const CONTENT_DIR = path.join(SESSION_DIR, 'content');
-const STATE_DIR = path.join(SESSION_DIR, 'state');
-let ownerPid = process.env.BRAINSTORM_OWNER_PID ? Number(process.env.BRAINSTORM_OWNER_PID) : null;
-
-const MIME_TYPES = {
-  '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
-  '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml'
+const COOKIE_NAME = 'brainstorm_session';
+const MAX_REQUEST_BYTES = 64 * 1024;
+const SHELL_DIR = path.resolve(__dirname, '../assets/visual-shell');
+const SECURITY_HEADERS = {
+  'Cache-Control': 'no-store',
+  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+  'Referrer-Policy': 'no-referrer',
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
 };
+const WAITING_DOCUMENT = normalizeVisualDocument({
+  profile: 'technical',
+  audience: 'Brainstorming participants',
+  title: 'Visual session ready',
+  summary: 'Waiting for the agent to publish screen.json.',
+  sections: [{
+    kind: 'callout',
+    id: 'waiting-for-screen',
+    title: 'No visual published yet',
+    body: 'Return to the agent after it publishes the first visual document.',
+    tone: 'accent',
+  }],
+});
 
-// ========== Templates and Constants ==========
-
-const WAITING_PAGE = `<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Brainstorm Companion</title>
-<style>body { font-family: system-ui, sans-serif; padding: 2rem; max-width: 800px; margin: 0 auto; }
-h1 { color: #333; } p { color: #666; }</style>
-</head>
-<body><h1>Brainstorm Companion</h1>
-<p>Waiting for the agent to push a screen...</p></body></html>`;
-
-const frameTemplate = fs.readFileSync(path.join(__dirname, 'frame-template.html'), 'utf-8');
-const helperScript = fs.readFileSync(path.join(__dirname, 'helper.js'), 'utf-8');
-const helperInjection = '<script>\n' + helperScript + '\n</script>';
-
-// ========== Helper Functions ==========
-
-function isFullDocument(html) {
-  const trimmed = html.trimStart().toLowerCase();
-  return trimmed.startsWith('<!doctype') || trimmed.startsWith('<html');
+function constantTimeEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left || ''));
+  const rightBuffer = Buffer.from(String(right || ''));
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
-function wrapInFrame(content) {
-  return frameTemplate.replace('<!-- CONTENT -->', content);
-}
-
-function getNewestScreen() {
-  const files = fs.readdirSync(CONTENT_DIR)
-    .filter(f => f.endsWith('.html'))
-    .map(f => {
-      const fp = path.join(CONTENT_DIR, f);
-      return { path: fp, mtime: fs.statSync(fp).mtime.getTime() };
-    })
-    .sort((a, b) => b.mtime - a.mtime);
-  return files.length > 0 ? files[0].path : null;
-}
-
-// ========== HTTP Request Handler ==========
-
-function handleRequest(req, res) {
-  touchActivity();
-  if (req.method === 'GET' && req.url === '/') {
-    const screenFile = getNewestScreen();
-    let html = screenFile
-      ? (raw => isFullDocument(raw) ? raw : wrapInFrame(raw))(fs.readFileSync(screenFile, 'utf-8'))
-      : WAITING_PAGE;
-
-    if (html.includes('</body>')) {
-      html = html.replace('</body>', helperInjection + '\n</body>');
-    } else {
-      html += helperInjection;
+function cookieValue(request, name) {
+  for (const cookie of String(request.headers.cookie || '').split(';')) {
+    const separator = cookie.indexOf('=');
+    if (separator < 0 || cookie.slice(0, separator).trim() !== name) continue;
+    try {
+      return decodeURIComponent(cookie.slice(separator + 1).trim());
+    } catch {
+      return '';
     }
-
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(html);
-  } else if (req.method === 'GET' && req.url.startsWith('/files/')) {
-    const fileName = req.url.slice(7);
-    const filePath = path.join(CONTENT_DIR, path.basename(fileName));
-    if (!fs.existsSync(filePath)) {
-      res.writeHead(404);
-      res.end('Not found');
-      return;
-    }
-    const ext = path.extname(filePath).toLowerCase();
-    const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': contentType });
-    res.end(fs.readFileSync(filePath));
-  } else {
-    res.writeHead(404);
-    res.end('Not found');
   }
+  return '';
 }
 
-// ========== WebSocket Connection Handling ==========
+function isAuthorized(request, requestUrl, token) {
+  return constantTimeEqual(requestUrl.searchParams.get('token'), token)
+    || constantTimeEqual(cookieValue(request, COOKIE_NAME), token);
+}
 
-const clients = new Set();
+function sendJson(response, status, value, headers = {}) {
+  response.writeHead(status, {
+    ...SECURITY_HEADERS,
+    'Content-Type': 'application/json; charset=utf-8',
+    ...headers,
+  });
+  response.end(`${JSON.stringify(value)}\n`);
+}
 
-function handleUpgrade(req, socket) {
-  const key = req.headers['sec-websocket-key'];
-  if (!key) { socket.destroy(); return; }
+function sendText(response, status, value, contentType, headers = {}) {
+  response.writeHead(status, {
+    ...SECURITY_HEADERS,
+    'Content-Type': contentType,
+    ...headers,
+  });
+  response.end(value);
+}
 
-  const accept = computeAcceptKey(key);
-  socket.write(
-    'HTTP/1.1 101 Switching Protocols\r\n' +
-    'Upgrade: websocket\r\n' +
-    'Connection: Upgrade\r\n' +
-    'Sec-WebSocket-Accept: ' + accept + '\r\n\r\n'
-  );
-
-  let buffer = Buffer.alloc(0);
-  clients.add(socket);
-
-  socket.on('data', (chunk) => {
-    buffer = Buffer.concat([buffer, chunk]);
-    while (buffer.length > 0) {
-      let result;
-      try {
-        result = decodeFrame(buffer);
-      } catch (e) {
-        socket.end(encodeFrame(OPCODES.CLOSE, Buffer.alloc(0)));
-        clients.delete(socket);
+function readJsonBody(request) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let length = 0;
+    let settled = false;
+    request.on('data', chunk => {
+      if (settled) return;
+      length += chunk.length;
+      if (length > MAX_REQUEST_BYTES) {
+        settled = true;
+        reject(new RangeError('request body exceeds 64 KiB'));
         return;
       }
-      if (!result) break;
-      buffer = buffer.slice(result.bytesConsumed);
+      chunks.push(chunk);
+    });
+    request.on('end', () => {
+      if (settled) return;
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'));
+      } catch (error) {
+        reject(new SyntaxError(`invalid JSON: ${error.message}`));
+      }
+    });
+    request.on('error', reject);
+  });
+}
 
-      switch (result.opcode) {
-        case OPCODES.TEXT:
-          handleMessage(result.payload.toString());
-          break;
-        case OPCODES.CLOSE:
-          socket.end(encodeFrame(OPCODES.CLOSE, Buffer.alloc(0)));
-          clients.delete(socket);
-          return;
-        case OPCODES.PING:
-          socket.write(encodeFrame(OPCODES.PONG, result.payload));
-          break;
-        case OPCODES.PONG:
-          break;
-        default: {
-          const closeBuf = Buffer.alloc(2);
-          closeBuf.writeUInt16BE(1003);
-          socket.end(encodeFrame(OPCODES.CLOSE, closeBuf));
-          clients.delete(socket);
-          return;
-        }
+function sameOrigin(request) {
+  if (!request.headers.origin) return true;
+  try {
+    return new URL(request.headers.origin).host === request.headers.host;
+  } catch {
+    return false;
+  }
+}
+
+function createBrainstormServer(options = {}) {
+  const host = options.host || '127.0.0.1';
+  const port = options.port ?? 0;
+  const urlHost = options.urlHost || (host === '127.0.0.1' ? 'localhost' : host);
+  const loopbackHost = ['127.0.0.1', 'localhost', '::1'].includes(host);
+  const allowInsecureRemote = options.allowInsecureRemote === true
+    || process.env.BRAINSTORM_ALLOW_INSECURE_REMOTE === '1';
+  if (!loopbackHost && !allowInsecureRemote) {
+    throw new Error('refusing plaintext non-loopback visual session; use a trusted tunnel or explicitly accept the risk');
+  }
+
+  const sessionDir = path.resolve(options.sessionDir
+    || process.env.BRAINSTORM_DIR
+    || path.join(process.env.CLAUDE_SCRATCH_DIR || path.join(os.homedir(), '.claude-scratch'), 'brainstorm'));
+  const contentDir = path.join(sessionDir, 'content');
+  const stateDir = path.join(sessionDir, 'state');
+  const screenPath = path.join(contentDir, 'screen.json');
+  // Artifacts live in the working repo (<repo>/.artifacts/brainstorm/<session>) by default so
+  // they are a normal, discoverable by-product of the session — not buried in scratch. The
+  // rolling visual.html is refreshed on every screen and feedback change; the Save button pins
+  // numbered snapshots the user chooses to keep. Falls back to sessionDir when no artifactDir
+  // is supplied (in-process tests).
+  const artifactDir = options.artifactDir ? path.resolve(options.artifactDir) : sessionDir;
+  const exportPath = path.join(artifactDir, 'visual.html');
+  const token = options.token || crypto.randomBytes(24).toString('hex');
+  const sessionId = options.sessionId || crypto.randomBytes(12).toString('hex');
+  const ownerPid = options.ownerPid ?? null;
+  const idleTimeoutMs = options.idleTimeoutMs ?? 30 * 60 * 1_000;
+  if (!/^[a-zA-Z0-9_-]{8,128}$/.test(sessionId)) throw new TypeError('sessionId must be a URL-safe identifier');
+
+  const basePath = `/session/${sessionId}/`;
+  fs.mkdirSync(contentDir, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  for (const directory of [sessionDir, contentDir, stateDir]) fs.chmodSync(directory, 0o700);
+
+  const shell = fs.readFileSync(path.join(SHELL_DIR, 'index.html'), 'utf8');
+  const shellScript = fs.readFileSync(path.join(SHELL_DIR, 'app.js'));
+  const shellStyles = fs.readFileSync(path.join(SHELL_DIR, 'styles.css'));
+  const store = new SessionStore(stateDir);
+  const eventClients = new Set();
+  const debounceTimers = new Map();
+  let lastActivity = Date.now();
+  let closing = false;
+
+  function touchActivity() {
+    lastActivity = Date.now();
+  }
+
+  function readScreen() {
+    if (!fs.existsSync(screenPath)) return WAITING_DOCUMENT;
+    return normalizeVisualDocument(JSON.parse(fs.readFileSync(screenPath, 'utf8')));
+  }
+
+  function shellHtml() {
+    return shell.replace('__BRAINSTORM_BASE_PATH_ATTR__', basePath);
+  }
+
+  function ensureArtifactDir() {
+    fs.mkdirSync(artifactDir, { recursive: true });
+    // Keep the artifacts out of version control by default without touching the repo's root
+    // .gitignore; the user can `git add -f` a snapshot they want to commit.
+    const ignoreFile = path.join(artifactDir, '.gitignore');
+    if (!fs.existsSync(ignoreFile)) fs.writeFileSync(ignoreFile, '*\n', { mode: 0o600 });
+  }
+
+  function renderCurrent() {
+    return renderStandalone({
+      shell,
+      styles: shellStyles,
+      script: shellScript,
+      screen: readScreen(),
+      session: store.snapshot(),
+    });
+  }
+
+  function writeLiveExport() {
+    try {
+      ensureArtifactDir();
+      fs.writeFileSync(exportPath, renderCurrent(), { mode: 0o600 });
+    } catch (error) {
+      // A write failure (or an invalid screen.json) must never break the live session; the
+      // previous good artifact stays in place until the next successful refresh.
+      console.error(`brainstorm live export failed: ${error.message}`);
+    }
+  }
+
+  function saveSnapshot() {
+    ensureArtifactDir();
+    const existing = fs.readdirSync(artifactDir).filter(name => /^visual-\d+\.html$/.test(name)).length;
+    const file = path.join(artifactDir, `visual-${String(existing + 1).padStart(3, '0')}.html`);
+    fs.writeFileSync(file, renderCurrent(), { mode: 0o600 });
+    return file;
+  }
+
+  function sendEvent(event, value = {}) {
+    const payload = `event: ${event}\ndata: ${JSON.stringify(value)}\n\n`;
+    for (const response of eventClients) {
+      try {
+        response.write(payload);
+      } catch {
+        eventClients.delete(response);
       }
     }
-  });
-
-  socket.on('close', () => clients.delete(socket));
-  socket.on('error', () => clients.delete(socket));
-}
-
-function handleMessage(text) {
-  let event;
-  try {
-    event = JSON.parse(text);
-  } catch (e) {
-    console.error('Failed to parse WebSocket message:', e.message);
-    return;
   }
-  touchActivity();
-  console.log(JSON.stringify({ source: 'user-event', ...event }));
-  if (event.choice) {
-    const eventsFile = path.join(STATE_DIR, 'events');
-    fs.appendFileSync(eventsFile, JSON.stringify(event) + '\n');
-  }
-}
 
-function broadcast(msg) {
-  const frame = encodeFrame(OPCODES.TEXT, Buffer.from(JSON.stringify(msg)));
-  for (const socket of clients) {
-    try { socket.write(frame); } catch (e) { clients.delete(socket); }
-  }
-}
+  async function handleRequest(request, response) {
+    touchActivity();
+    const requestUrl = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
+    if (!isAuthorized(request, requestUrl, token)) {
+      sendJson(response, 401, { error: 'unauthorized visual session' });
+      return;
+    }
+    if (!requestUrl.pathname.startsWith(basePath)) {
+      sendJson(response, 404, { error: 'not found' });
+      return;
+    }
 
-// ========== Activity Tracking ==========
+    const relativePath = requestUrl.pathname.slice(basePath.length);
+    const cookieHeaders = requestUrl.searchParams.has('token')
+      ? { 'Set-Cookie': `${COOKIE_NAME}=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=${basePath}` }
+      : {};
 
-const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
-let lastActivity = Date.now();
-
-function touchActivity() {
-  lastActivity = Date.now();
-}
-
-// ========== File Watching ==========
-
-const debounceTimers = new Map();
-
-// ========== Server Startup ==========
-
-function startServer() {
-  if (!fs.existsSync(CONTENT_DIR)) fs.mkdirSync(CONTENT_DIR, { recursive: true });
-  if (!fs.existsSync(STATE_DIR)) fs.mkdirSync(STATE_DIR, { recursive: true });
-
-  // Track known files to distinguish new screens from updates.
-  // macOS fs.watch reports 'rename' for both new files and overwrites,
-  // so we can't rely on eventType alone.
-  const knownFiles = new Set(
-    fs.readdirSync(CONTENT_DIR).filter(f => f.endsWith('.html'))
-  );
-
-  const server = http.createServer(handleRequest);
-  server.on('upgrade', handleUpgrade);
-
-  const watcher = fs.watch(CONTENT_DIR, (eventType, filename) => {
-    if (!filename || !filename.endsWith('.html')) return;
-
-    if (debounceTimers.has(filename)) clearTimeout(debounceTimers.get(filename));
-    debounceTimers.set(filename, setTimeout(() => {
-      debounceTimers.delete(filename);
-      const filePath = path.join(CONTENT_DIR, filename);
-
-      if (!fs.existsSync(filePath)) return; // file was deleted
-      touchActivity();
-
-      if (!knownFiles.has(filename)) {
-        knownFiles.add(filename);
-        const eventsFile = path.join(STATE_DIR, 'events');
-        if (fs.existsSync(eventsFile)) fs.unlinkSync(eventsFile);
-        console.log(JSON.stringify({ type: 'screen-added', file: filePath }));
-      } else {
-        console.log(JSON.stringify({ type: 'screen-updated', file: filePath }));
+    if (request.method === 'GET' && relativePath === '') {
+      sendText(response, 200, shellHtml(), 'text/html; charset=utf-8', cookieHeaders);
+      return;
+    }
+    if (request.method === 'GET' && relativePath === 'assets/app.js') {
+      sendText(response, 200, shellScript, 'application/javascript; charset=utf-8', cookieHeaders);
+      return;
+    }
+    if (request.method === 'GET' && relativePath === 'assets/styles.css') {
+      sendText(response, 200, shellStyles, 'text/css; charset=utf-8', cookieHeaders);
+      return;
+    }
+    if (request.method === 'GET' && relativePath === 'api/screen') {
+      try {
+        sendJson(response, 200, readScreen(), cookieHeaders);
+      } catch (error) {
+        sendJson(response, 422, { error: `invalid screen.json: ${error.message}` }, cookieHeaders);
       }
-
-      broadcast({ type: 'reload' });
-    }, 100));
-  });
-  watcher.on('error', (err) => console.error('fs.watch error:', err.message));
-
-  function shutdown(reason) {
-    console.log(JSON.stringify({ type: 'server-stopped', reason }));
-    const infoFile = path.join(STATE_DIR, 'server-info');
-    if (fs.existsSync(infoFile)) fs.unlinkSync(infoFile);
-    fs.writeFileSync(
-      path.join(STATE_DIR, 'server-stopped'),
-      JSON.stringify({ reason, timestamp: Date.now() }) + '\n'
-    );
-    watcher.close();
-    clearInterval(lifecycleCheck);
-    server.close(() => process.exit(0));
+      return;
+    }
+    if (request.method === 'GET' && relativePath === 'api/session') {
+      sendJson(response, 200, store.snapshot(), cookieHeaders);
+      return;
+    }
+    if (request.method === 'GET' && relativePath === 'api/events') {
+      response.writeHead(200, {
+        ...SECURITY_HEADERS,
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        Connection: 'keep-alive',
+        ...cookieHeaders,
+      });
+      response.write(': connected\n\n');
+      eventClients.add(response);
+      request.on('close', () => eventClients.delete(response));
+      return;
+    }
+    if (request.method === 'POST' && relativePath === 'api/save') {
+      if (!sameOrigin(request)) {
+        sendJson(response, 403, { error: 'cross-origin save rejected' }, cookieHeaders);
+        return;
+      }
+      try {
+        const file = saveSnapshot();
+        sendJson(response, 201, { saved: true, file: path.basename(file), path: file }, cookieHeaders);
+      } catch (error) {
+        sendJson(response, 500, { error: error.message }, cookieHeaders);
+      }
+      return;
+    }
+    if (request.method === 'POST' && relativePath === 'api/feedback') {
+      if (!sameOrigin(request)) {
+        sendJson(response, 403, { error: 'cross-origin feedback rejected' }, cookieHeaders);
+        return;
+      }
+      try {
+        const record = store.appendBrowserTurn(await readJsonBody(request));
+        sendJson(response, 201, record, cookieHeaders);
+        sendEvent('session', { seq: record.seq });
+      } catch (error) {
+        sendJson(response, error instanceof RangeError ? 413 : 400, { error: error.message }, cookieHeaders);
+      }
+      return;
+    }
+    sendJson(response, 404, { error: 'not found' }, cookieHeaders);
   }
+
+  const server = http.createServer((request, response) => {
+    handleRequest(request, response).catch(error => {
+      console.error(`brainstorm request failed: ${error.message}`);
+      if (!response.headersSent) sendJson(response, 500, { error: 'internal server error' });
+      else response.end();
+    });
+  });
+
+  const contentWatcher = fs.watch(contentDir, (_eventType, filename) => {
+    // Some platforms report a null filename; fall through rather than miss the refresh.
+    if (filename != null && String(filename) !== 'screen.json') return;
+    if (debounceTimers.has('screen')) clearTimeout(debounceTimers.get('screen'));
+    debounceTimers.set('screen', setTimeout(() => {
+      debounceTimers.delete('screen');
+      touchActivity();
+      sendEvent('screen');
+      writeLiveExport();
+    }, 60));
+  });
+  contentWatcher.on('error', error => console.error(`brainstorm content watcher failed: ${error.message}`));
+
+  const stateWatcher = fs.watch(stateDir, (_eventType, filename) => {
+    if (filename != null && !['session.jsonl', 'agent-cursor.json'].includes(String(filename))) return;
+    if (debounceTimers.has('session')) clearTimeout(debounceTimers.get('session'));
+    debounceTimers.set('session', setTimeout(() => {
+      debounceTimers.delete('session');
+      sendEvent('session');
+      writeLiveExport();
+    }, 40));
+  });
+  stateWatcher.on('error', error => console.error(`brainstorm state watcher failed: ${error.message}`));
 
   function ownerAlive() {
     if (!ownerPid) return true;
-    try { process.kill(ownerPid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
-  }
-
-  // Check every 60s: exit if owner process died or idle for 30 minutes
-  const lifecycleCheck = setInterval(() => {
-    if (!ownerAlive()) shutdown('owner process exited');
-    else if (Date.now() - lastActivity > IDLE_TIMEOUT_MS) shutdown('idle timeout');
-  }, 60 * 1000);
-  lifecycleCheck.unref();
-
-  // Validate owner PID at startup. If it's already dead, the PID resolution
-  // was wrong (common on WSL, Tailscale SSH, and cross-user scenarios).
-  // Disable monitoring and rely on the idle timeout instead.
-  if (ownerPid) {
-    try { process.kill(ownerPid, 0); }
-    catch (e) {
-      if (e.code !== 'EPERM') {
-        console.log(JSON.stringify({ type: 'owner-pid-invalid', pid: ownerPid, reason: 'dead at startup' }));
-        ownerPid = null;
-      }
+    try {
+      process.kill(ownerPid, 0);
+      return true;
+    } catch (error) {
+      return error.code === 'EPERM';
     }
   }
 
-  server.listen(PORT, HOST, () => {
-    const info = JSON.stringify({
-      type: 'server-started', port: Number(PORT), host: HOST,
-      url_host: URL_HOST, url: 'http://' + URL_HOST + ':' + PORT,
-      screen_dir: CONTENT_DIR, state_dir: STATE_DIR
+  const lifecycleCheck = setInterval(() => {
+    if (!ownerAlive()) close('owner process exited');
+    // An open browser tab (live SSE connection) counts as presence: never time out a
+    // user who is reviewing at their own pace. Owner-death monitoring handles orphans.
+    else if (idleTimeoutMs > 0 && eventClients.size === 0 && Date.now() - lastActivity > idleTimeoutMs) {
+      close('idle timeout');
+    }
+  }, Math.min(60_000, Math.max(1_000, Math.floor((idleTimeoutMs || 60_000) / 2))));
+  lifecycleCheck.unref();
+
+  function listen() {
+    return new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(port, host, () => {
+        server.off('error', reject);
+        const actualPort = server.address().port;
+        const displayHost = urlHost.includes(':') ? `[${urlHost}]` : urlHost;
+        const url = `http://${displayHost}:${actualPort}`;
+        const info = {
+          type: 'server-started',
+          port: actualPort,
+          host,
+          url_host: urlHost,
+          url,
+          base_path: basePath,
+          connection_url: `${url}${basePath}?token=${encodeURIComponent(token)}`,
+          screen_dir: contentDir,
+          state_dir: stateDir,
+          visual_file: exportPath,
+        };
+        const { connection_url: _connectionUrl, ...safeInfo } = info;
+        fs.writeFileSync(path.join(stateDir, 'server-info'), `${JSON.stringify(safeInfo)}\n`, { mode: 0o600 });
+        writeLiveExport();
+        resolve(info);
+      });
     });
-    console.log(info);
-    fs.writeFileSync(path.join(STATE_DIR, 'server-info'), info + '\n');
-  });
+  }
+
+  function close(reason = 'closed') {
+    if (closing) return Promise.resolve();
+    closing = true;
+    clearInterval(lifecycleCheck);
+    for (const timer of debounceTimers.values()) clearTimeout(timer);
+    contentWatcher.close();
+    stateWatcher.close();
+    for (const response of eventClients) response.end();
+    eventClients.clear();
+    const infoFile = path.join(stateDir, 'server-info');
+    if (fs.existsSync(infoFile)) fs.rmSync(infoFile, { force: true });
+    if (fs.existsSync(stateDir)) {
+      fs.writeFileSync(path.join(stateDir, 'server-stopped'), `${JSON.stringify({ reason, timestamp: Date.now() })}\n`, { mode: 0o600 });
+    }
+    if (!server.listening) return Promise.resolve();
+    return new Promise(resolve => {
+      server.close(resolve);
+      server.closeAllConnections?.();
+    });
+  }
+
+  return { close, contentDir, listen, readScreen, screenPath, server, stateDir, store, token };
 }
 
-if (require.main === module) {
-  startServer();
-}
-
-module.exports = { computeAcceptKey, encodeFrame, decodeFrame, OPCODES };
+module.exports = { COOKIE_NAME, createBrainstormServer };

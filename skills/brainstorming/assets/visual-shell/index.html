@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Visual Brainstorm</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body data-base-path="__BRAINSTORM_BASE_PATH_ATTR__">
+  <div id="visual-shell-root">
+    <header class="page-header">
+      <div class="page-heading">
+        <div class="eyebrow"><span id="profile">Visual</span><span id="audience"></span></div>
+        <h1 id="document-title">Loading visual…</h1>
+        <p id="document-summary"></p>
+      </div>
+      <div class="title-block" aria-label="Document status">
+        <span id="revision" class="title-block-rev">rev —</span>
+        <span id="doc-meta" class="title-block-meta"></span>
+        <button id="save" class="quiet-button" type="button">Save to repo</button>
+        <button id="refresh" class="quiet-button" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <div id="screen-error" class="screen-error" role="alert" hidden></div>
+    <p id="save-status" class="save-status" role="status" hidden></p>
+    <p id="annotate-hint" class="annotate-hint" hidden>Annotation mode — click any outlined component to attach a note. Press Esc to exit.</p>
+    <p id="changes" class="changes-strip" role="status" hidden></p>
+
+    <div class="workspace">
+      <main id="canvas" aria-live="polite"></main>
+      <aside class="feedback-panel" aria-label="Feedback batch">
+        <header>
+          <div>
+            <div class="eyebrow">Feedback batch</div>
+            <h2>Review notes</h2>
+          </div>
+          <span id="connection" class="connection">Connecting</span>
+        </header>
+        <div class="feedback-tools">
+          <button id="annotate" type="button" aria-pressed="false">Annotate</button>
+          <button id="clear" type="button">Clear</button>
+        </div>
+        <div id="pending" class="pending"></div>
+        <div id="history" class="history"></div>
+        <footer>
+          <textarea id="message" maxlength="10000" placeholder="Add one summary note…"></textarea>
+          <p id="handoff" class="handoff">Submit once after reviewing the full visual.</p>
+          <button id="submit" class="primary-button" type="button">Save feedback batch</button>
+        </footer>
+      </aside>
+    </div>
+  </div>
+
+  <div id="highlight" class="highlight" hidden><span id="highlight-label"></span></div>
+  <dialog id="annotation-dialog">
+    <form method="dialog">
+      <div class="eyebrow">Annotate component</div>
+      <h2 id="annotation-target"></h2>
+      <textarea id="annotation-comment" maxlength="4000" placeholder="What should change or be clarified?"></textarea>
+      <div class="dialog-actions">
+        <button value="cancel" class="quiet-button">Cancel</button>
+        <button id="queue-annotation" value="default" class="primary-button">Queue note</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>

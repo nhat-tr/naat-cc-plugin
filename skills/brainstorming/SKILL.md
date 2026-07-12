@@ -1,182 +1,159 @@
 ---
 name: brainstorming
-description: "Turn a vague idea into an approved spec before any implementation. Trigger phrases: 'design a feature', 'think through the requirements', 'let's spec this out', 'before we build X', 'I have an idea', 'help me think about'. Explores intent via one-question-at-a-time dialogue, produces a spec (.pair/spec.md for pair-v2 work, docs/specs/ otherwise) ready for /pair-promote or plan mode."
+description: Turn a vague idea into an approved, evidence-grounded design before implementation. Use for feature design, requirement exploration, specification, architectural choices, requests such as "I have an idea" or "before we build", and explicitly requested live visual interviews with selectable, annotatable visual documents including UI screen prototypes (typed mockup elements). Any visual, mockup, or UI-prototype need during brainstorming is served by this skill's own visual companion — never by artifact-design or frontend-design. Produces `.pair/spec.md` for pair-v3 work or a generic design doc otherwise.
 ---
 
-# Brainstorming Ideas Into Designs
+# Brainstorm Ideas Into an Approved Design
 
-Turn ideas into designs through collaborative dialogue. Understand context, ask questions one at a time, present the design, get user approval.
+Protect intent without turning ordinary developer work into a long approval ceremony.
 
 <HARD-GATE>
-Do NOT invoke any implementation skill, write code, scaffold, or take implementation action until the design is presented and approved. Applies to every project — no "too simple" exception. The design can be a few sentences for trivial work, but it must be presented and approved.
+Do not write code, scaffold, install dependencies, or invoke implementation until the design is approved. Read-only repository and dependency reconnaissance is allowed and required when it can answer a design question.
+
+When the user explicitly requests a live visual interview, the reusable visual shell and disposable `screen.json` documents under `$CLAUDE_SCRATCH_DIR` are allowed before approval. They are discussion instruments, not implementation, and must not introduce project dependencies.
+
+Every visual during brainstorming — including UI screen proposals — goes through `visual-companion.md` and its validated `screen.json` grammar (`mockup` sections with typed UI elements are the prototype channel). Never invoke artifact-design, frontend-design, or dataviz for a brainstorming visual, and never hand-build HTML/React for one.
 </HARD-GATE>
 
-## Core Anchor Protocol
+## Workflow
 
-A persistent artifact that prevents and detects intent drift. Establish BEFORE clarifying questions. Reference DURING exploration. Re-verify BEFORE writing the spec. Never silently change.
+1. Inspect relevant repository context, instructions, dependencies, callers, tests, and recent decisions.
+2. Ask only the discovery questions needed to draft a trustworthy Core Anchor.
+3. Confirm the Core Anchor once.
+4. Resolve remaining decisions in dependency order.
+5. Compare only viable approaches, beginning with the framework-native baseline.
+6. Present one integrated design and obtain approval.
+7. Write and self-review the specification.
+8. Reconfirm only semantic changes, then hand pair work to `pair-promote`.
 
-### The Three Fields
+## Core Anchor
 
-**1. Purpose** — 2–3 sentences in user's domain language, NO solution language. Current state, desired state, why it matters.
+Keep three fields stable throughout the discussion and copy them verbatim to the specification.
 
-> Bad: "Add caching to the API."
-> Good: "Product data is served from the primary DB on every request. It changes at most once a day. Serve it faster without changing the API contract."
+### Purpose
 
-**2. Rejection Criteria** (1–3 bullets) — what would make this wrong EVEN IF all tests pass? Hidden acceptance tests.
+Write 2–3 sentences in the user's domain language without solution language: current state, desired state, and why it matters.
 
-> Examples: "If consumers must change how they call the API → wrong." "If invalidation needs manual ops → wrong."
+### Rejection Criteria
 
-If the user can't articulate any, intent isn't stable — ask more questions. Do NOT invent criteria for them.
+Record 0–3 conditions that make the result wrong even if tests pass. Explicitly accepting "none beyond the acceptance criteria" is valid for small, stable work.
 
-**3. Contrasts** (1–3 bullets, "this is NOT X, because Y") — plausible sibling interpretations this is NOT. Hardest field to fake-confirm.
+Do not invent user preferences. You may propose a repository- or framework-derived criterion as `[evidence-derived]` with its source and let the user veto it.
 
-> Example: "NOT a read-through cache in the DB driver, because we don't want caching coupled to DB access."
+### Contrasts
 
-### Anchor Vocabulary
+Record 0–3 plausible sibling interpretations in the form "not X, because Y." Use these to prevent a familiar but incorrect solution from replacing the requested one.
 
-When drafting Purpose, Rejection Criteria, and Contrasts, prefer canonical terms from `UBIQUITOUS_LANGUAGE.md` (if present). If you reach for a synonym (e.g., "user" when the project says **Customer**, "order" when it says **Purchase**), flag it explicitly:
-- Adopt the canonical term, OR
-- If the canonical term is genuinely wrong for this context, note the new distinction so the spec can capture it for `ubiquitous-language` to update later.
+### Vocabulary
 
-Drift here propagates downstream — the Purpose seeds the spec, plan, and code.
+If `UBIQUITOUS_LANGUAGE.md` exists, use its canonical terms. Surface a new distinction rather than silently replacing a canonical term.
 
-### Confirmation Gate (blocking)
+### Confirmation and Re-anchoring
 
-Emit all three fields in one message. User confirms or corrects each explicitly. On correction: emit revised anchor, re-confirm. **Do NOT silently patch** — delta must be visible.
+Emit all three fields together. Ask the user to confirm or correct the anchor. On a material correction, show the delta and reconfirm. Do not require another confirmation when wording changes but meaning does not.
 
-### Persistence and Cross-Checks
+For discussions longer than roughly five Q&A turns, emit a short pulse: Purpose, emerging direction, anchor tension, and the next unresolved upstream decision.
 
-Once confirmed, anchor is persistent. Reference at three checkpoints:
+## Ask Efficient Questions
 
-1. **Direction-setting proposals** — state *"Serves Purpose because X. Does not violate R1/R2/R3."* Only on directional moments, not every question.
-2. **Pulse every ~5 Q&A turns** — 4 bullets: Purpose one-liner, emerging direction (max 3), any anchor tension, any unresolved upstream decision blocking the current branch. 15-second read.
-3. **Pre-spec re-verification (blocking)** — re-emit current anchor, show delta if any field changed, require explicit re-approval before spec is written.
+- Never ask for information that repository evidence can answer.
+- Ask dependent questions one at a time because an earlier answer changes the later branch.
+- Batch up to three independent questions when the user can answer them in one reply.
+- Provide a recommended default and its evidence when a choice is low risk and reversible.
+- If a decision remains load-bearing and ambiguous, ask; do not silently pick one during self-review.
 
-### Re-Anchoring Rule
+## Bound Repository Reconnaissance
 
-If a user correction reveals a field is materially wrong (semantic shift, not wording): STOP. Emit full anchor restatement, re-confirm all three, resume. No mid-flight patching.
+- Search symbols first, then read exact ranges. Do not inject whole source files, generated metadata, package XML, or broad multi-file dumps into the main conversation.
+- Before the Core Anchor, use at most one main-model reconnaissance batch and keep returned text near 12 KB or less. Defer evidence that matters only to an unchosen branch.
+- Group independent read-only checks before reasoning so each small result does not wake the expensive coordinator separately.
+- Do not reread a skill reference or repository range already observed in the same logical turn.
+- For small work, inspect directly; a model handoff costs more than it saves.
+- For unfamiliar frameworks, more than roughly six relevant files, or evidence likely to exceed the main-context budget, read `evidence-scout.md` and run one bounded scout. Do not perform the same broad reconnaissance before and after scouting.
 
-### In the Spec
+The scout extracts evidence only. The coordinator owns the Core Anchor, verifies every load-bearing citation, resolves framework capability, compares approaches, and writes the design. Never delegate architecture or treat a scout observation as verified merely because it is structured.
 
-Anchor copied verbatim to top of spec (`## Purpose`, `## Rejection Criteria`, `## Contrasts`) before any other content. Spec body must read as "implementing this anchor."
+## Explore Approaches Without Inventing Architecture
 
-## Checklist
+When dependencies or frameworks are involved, start with the **framework-native baseline**: the smallest design that composes existing repository and dependency capabilities directly.
 
-Complete in order:
+Offer 2–3 approaches only when at least two are genuinely viable and differ in boundary, ownership, or execution model. One well-supported approach plus explicitly rejected alternatives is sufficient when evidence removes the other options.
 
-1. **Explore project context** — files, docs, recent commits; if `UBIQUITOUS_LANGUAGE.md` exists, partial-read the clusters relevant to the topic
-2. **Offer visual companion** (if visual questions ahead) — own message, no other content. See Visual Companion below.
-3. **Establish Core Anchor** — hard gate, before Q&A
-4. **Ask clarifying questions** — one at a time; pulse every ~5 turns; cross-check on direction-setting
-5. **Propose 2–3 approaches** — trade-offs + recommendation. Each must state how it serves Purpose without violating any RC.
-6. **Present design** — sections scaled to complexity; approval per section
-7. **Re-verify Core Anchor** — hard gate, before writing spec
-8. **Write design doc** — detect mode (see Documentation below)
-9. **Spec self-review** — anchor alignment first, then placeholders, contradictions, ambiguity, scope
-10. **User reviews written spec**
-11. **Stream sketch** (pair mode only) — propose streams (name + one-liner, no file paths, max 6); user approves; write Phase 1 draft to `.pair/plan.md`. Skip in generic mode.
-12. **Transition to implementation** — pair mode: set `waiting_for = "plan-detail"`, signal; generic mode: invoke `planner`. Do NOT invoke implementation skills (`frontend-design`, `csharp-dotnet`, etc.) directly — that skips planning.
+For each viable option:
 
-## Flow
+- Score it from 1–10 and explain the tradeoff.
+- State how it serves Purpose and respects every Rejection Criterion and Contrast.
+- Separate observed repository/framework capability from assumptions.
+- Mark an unverified load-bearing capability as an open question, not a custom module.
 
+## Design for Readability and Leverage
+
+Prefer direct composition and **deep modules**: small interfaces that hide meaningful application-owned behavior. Apply the deletion test before proposing a new module—if deleting it and calling the dependency directly removes complexity without spreading it across callers, do not add it.
+
+Treat a seam as real only when it has at least two adapters or crosses a true external ownership boundary. Do not introduce pass-through wrappers, speculative factories, registries, ports, or interfaces for hypothetical reuse. File size alone is not a reason to extract.
+
+Organize the design around observable behavior and data flow, not layers. Cover only affected concerns: architecture, UI/API contracts, state, error handling, security, compatibility, observability, and testing.
+
+Consult applicable language or framework skills read-only during design. This does not violate the implementation hard gate.
+
+## Approval Policy
+
+- Low/medium-risk work: present the integrated design in one message and request one approval.
+- High/critical-risk or disputed work: request approval by load-bearing section.
+- Reconfirm before writing only when the design changed the Core Anchor.
+- After writing, show any semantic delta from the approved design. If there is no delta, do not add a redundant approval gate unless the work is high/critical risk.
+
+## Specification Contract
+
+Use this structure, scaled to the work:
+
+```markdown
+# Spec: <title>
+
+## Purpose
+## Rejection Criteria
+## Contrasts
+## Constraints
+## Decisions
+## Acceptance Criteria
+- [ ] AC-1: <observable outcome>
+## Verification
+- AC-1: <test, command, endpoint, or UI action proving the outcome>
+## Out of Scope
 ```
-explore → [offer visual] → establish anchor → ask Qs (pulse + cross-check)
-  → propose approaches → present design → re-verify anchor
-  → write spec (detect pair/generic) → self-review → user review
-  → stream sketch + plan.md (pair) → signal pair-plan | planner (generic)
-```
 
-Any mid-flow anchor correction → re-establish round, not silent patch.
+Every acceptance criterion must have a stable ID and a matching verification entry. Do not leave TODO/TBD placeholders.
 
-## Understanding the idea
+### Destination
 
-- Scope-check first: if the request describes multiple independent subsystems (chat + billing + analytics), flag immediately and decompose. Don't refine details of a project that needs splitting.
-- One question per message. Multiple choice preferred when it fits.
-- Focus: purpose, constraints, success criteria.
-- **Walk down each branch of the design tree, resolving dependencies between decisions one-by-one.** If decision B depends on A, resolve A first — exploring B's branches before A is settled produces speculative answers and forces rework.
+- Pair-v3 work explicitly requested by the user or already active: write `.pair/spec.md` and do not commit workflow state.
+- Generic work: write `docs/specs/YYYY-MM-DD-<topic>-design.md` or the user's requested location. Leave it uncommitted unless the user asks for a commit.
 
-## Exploring approaches
+Do not infer pair mode merely because a stale `.pair/` directory exists. Do not design or approve implementation streams here; `pair-promote` owns code-grounded decomposition.
 
-Propose 2–3 options with trade-offs. Lead with your recommendation and reasoning.
+If terminology needs updating, propose the glossary change. Invoke `ubiquitous-language` only with the user's approval or when their request already includes glossary maintenance.
 
-Options must differ in **fundamental approach** — different layer, different paradigm, different boundary — not surface parameters. Three minor variants of the same idea is one option, not three. If you can't articulate what fundamentally distinguishes each option, the spread is too narrow — go back to the design tree.
+## Self-Review
 
-## Presenting the design
+1. Trace every requirement to Purpose.
+2. Verify nothing violates a Rejection Criterion or implements a Contrast.
+3. Verify every AC has observable proof.
+4. Remove unsupported architecture, placeholders, contradictions, and scope not requested.
+5. Reopen substantive ambiguity with the user; fix editorial ambiguity inline.
+6. Confirm the design starts from existing capabilities and justifies every custom module.
 
-Cover architecture, components, data flow, error handling, testing. Scale each section to complexity (one sentence for straightforward, up to ~250 words if nuanced). Ask per section whether it looks right.
+## Transition
 
-**Design for isolation**: smaller well-bounded units are easier to review, test, and reason about. If a file is doing too much, it usually is — include targeted cleanup as part of the design. Don't add unrelated refactoring.
-
-## Documentation
-
-- **Detect mode**: `.pair/` directory exists, or the work will run through the pair-v2 workflow? → pair mode. Else generic.
-- **Pair mode**: write to `.pair/spec.md` using the approved anchor plus explicit AC IDs and verification entries — this is the spec `/pair-promote` consumes to build an implementable `.pair/plan.md`. Do NOT git-commit (`.pair/` is workflow state).
-- **Generic mode**: write to `docs/specs/YYYY-MM-DD-<topic>-design.md` (user location overrides). Git-commit.
-- Anchor verbatim at top in both modes (`## Purpose`, `## Rejection Criteria`, `## Contrasts`) before mode-specific content.
-- **Glossary write-back**: if the conversation surfaced new domain terms not yet in `UBIQUITOUS_LANGUAGE.md`, invoke the `ubiquitous-language` skill before finalizing the spec — keeps the glossary current and prevents decay.
-
-## Spec Self-Review
-
-1. **Anchor alignment** (first): every requirement traces to Purpose; nothing violates an RC; nothing implements a Contrast. If alignment breaks, fix the spec — do not weaken the anchor.
-2. Placeholders (TBD/TODO) — fix
-3. Internal consistency — fix
-4. Scope — focused enough for one plan?
-5. Ambiguity — any requirement interpretable two ways? pick one.
-
-Fix inline. No re-review.
-
-## User Review Gate
-
-> "Spec written to `<path>`. Review it and tell me what to change before we plan."
-
-On changes: fix, re-run review loop. Proceed only once approved.
-
-## Suggested Streams (pair mode only)
-
-After the spec is approved, append a `## Suggested Streams` section to `.pair/spec.md`: stream names + one-liner each (no file paths, max 6) and any obvious sequencing ("Stream 2 depends on Stream 1"). This seeds `/pair-promote` so it doesn't re-derive the breakdown brainstorming already established.
-
-## Transition to Implementation
-
-- **Pair mode**: run `/pair-promote` — it reads `.pair/spec.md`, explores the codebase, and writes the implementable `.pair/plan.md` (task checkboxes, file paths, Implementation Context), validated by `validate-plan.sh`.
-- **Generic mode**: hand the spec to plan mode, or use `/pair-promote` if the work should run gate-protected.
-- Both: do NOT start implementing as the immediate next step — the spec must be promoted to a plan first.
+For pair-v3 work, invoke `pair-promote` after the specification is approved. Do not implement directly from the specification.
 
 ## Visual Companion
 
-Browser-based tool for rendering **UI mockups only**. It is NOT a general-purpose "show options nicely" surface. The default answer to "should I use the browser for this?" is **no**.
+Default to terminal dialogue. When the user explicitly requests a **live visual interview**, use the visual companion for selectable UI prototypes, architecture/data-flow canvases, option matrices, or other concepts whose spatial presentation improves the decision.
 
-### Gating test (apply PER QUESTION, before writing any HTML)
+Treat any of these as that explicit request: the word `visually` or `visual` in the brainstorming invocation (for example `/brainstorming visually <target>`), "show me a visual", or "I want to see it". Route directly to this companion — do not load artifact or design skills for it, and do not search the filesystem: `visual-companion.md` lives beside this SKILL.md in the same skill directory.
 
-Ask: *"Am I about to render a picture of an actual UI — buttons, panels, a layout the user would see in the product? Or am I about to render text (paragraphs, bullets, pros/cons, comparison tables)?"*
+Read `visual-companion.md` only when starting a visual interview. Scaffold and edit only the small validated `screen.json`; the reusable shell owns HTML, layout, annotation, chat history, and stable `data-brainstorm-id` rendering. Choose the profile from purpose and audience: dense `technical` views for developers, target-user-oriented `product` views for app UI, and narrative `business` views for propositions and journeys. Visual polish must serve the decision, not compete with it.
 
-- Picture of actual UI → **browser**
-- Text, even pretty text → **terminal**
+Keep the server in the foreground. Browser feedback is one persisted batch; after sharing the visual URL, run one blocking `visual-session.cjs wait --timeout-ms 900000` from this same conversation. The browser persists feedback, the wait command returns the oldest pending batch once, and you respond in the same active agent turn. Use zero agent polling: never repeat drain/status on a timer, and never spawn or resume another agent and call it the same session.
 
-A UI-related topic does NOT make the question visual. "Should Add Expense be a modal, a drawer, or inline?" is a **conceptual choice expressed in text** → terminal, even though the subject is UI.
-
-### Use the browser ONLY for
-
-- Wireframes / layout mockups of actual pages or components
-- Side-by-side visual comparisons of rendered UI designs
-- Interactive component sketches the user would see in the product
-
-### Use the terminal for everything else
-
-Including (but not limited to):
-- Approach / architecture comparisons — even for UI features
-- Pros/cons lists, tradeoff tables, A/B/C choices
-- Requirements, scope, conceptual questions
-- Diagrams that are text (ASCII, mermaid)
-
-### Negative example (what NOT to do)
-
-Question: *"How should Add Expense work from the sidebar?"*
-Options: A (Navigate + auto-focus), B (Global slide-over drawer), C (Inline mini-form) — each with a description and pros/cons.
-
-This is a **conceptual choice in text**. Render in the terminal. Using the browser here wastes tokens (HTML round-trip, server overhead) and delivers no visual value — the user reads bullets either way. Same rule applies to any "here are 2–3 approaches, each with tradeoffs" question: terminal.
-
-### Offering (one-time, own message)
-
-> "Some of this might be easier to show in a browser — UI mockups and wireframes only. Token-intensive. Want to try? (Local URL.)"
-
-If accepted, read `skills/brainstorming/visual-companion.md` before using.
+Without an explicit visual request, offer the companion inline only when the first concrete visual decision appears. Do not spend a separate turn on speculative opt-in.
