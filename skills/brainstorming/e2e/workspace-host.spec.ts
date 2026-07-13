@@ -371,6 +371,132 @@ test("shared host supports keyboard frame navigation, visible focus, and session
   await expectNoPairOverlap([intent, constraints, handoff]);
 });
 
+test("shared host exposes an accessible desktop splitter that resizes both panes and persists", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1_280, height: 800 });
+  await openWorkspace(page, testInfo);
+
+  const canvas = page.locator(".workspace-canvas");
+  const feedback = page.getByRole("complementary", { name: "Feedback batch" });
+  const splitter = page.getByRole("separator", { name: "Workspace canvas width" });
+  await expect(splitter).toBeVisible();
+  await expect(splitter).toHaveAttribute("aria-controls", "workspace-canvas");
+  await expect(splitter).toHaveAttribute("aria-orientation", "vertical");
+  await expect(splitter).toHaveAttribute("aria-valuemin", /^\d+$/u);
+  await expect(splitter).toHaveAttribute("aria-valuemax", /^\d+$/u);
+  await expect(splitter).toHaveAttribute("aria-valuenow", /^\d+$/u);
+  await expect(splitter).toHaveAttribute("aria-valuetext", /Workspace canvas .*Feedback panel/iu);
+
+  const beforeCanvas = await canvas.boundingBox();
+  const beforeFeedback = await feedback.boundingBox();
+  const beforeSplitter = await splitter.boundingBox();
+  expect(beforeCanvas).not.toBeNull();
+  expect(beforeFeedback).not.toBeNull();
+  expect(beforeSplitter).not.toBeNull();
+  expect(beforeCanvas!.x + beforeCanvas!.width).toBeLessThanOrEqual(beforeSplitter!.x + 1);
+  expect(beforeSplitter!.x + beforeSplitter!.width).toBeLessThanOrEqual(beforeFeedback!.x + 1);
+
+  await splitter.focus();
+  await expect(splitter).toBeFocused();
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowLeft");
+
+  const resizedCanvas = await canvas.boundingBox();
+  const resizedFeedback = await feedback.boundingBox();
+  expect(resizedCanvas).not.toBeNull();
+  expect(resizedFeedback).not.toBeNull();
+  expect(resizedCanvas!.width).toBeLessThan(beforeCanvas!.width - 1);
+  expect(resizedFeedback!.width).toBeGreaterThan(beforeFeedback!.width + 1);
+
+  const resizedSplitter = await splitter.boundingBox();
+  expect(resizedSplitter).not.toBeNull();
+  await page.mouse.move(
+    resizedSplitter!.x + resizedSplitter!.width / 2,
+    resizedSplitter!.y + Math.min(resizedSplitter!.height / 2, 200),
+  );
+  await page.mouse.down();
+  await page.mouse.move(resizedSplitter!.x - 48, resizedSplitter!.y + Math.min(resizedSplitter!.height / 2, 200));
+  await page.mouse.up();
+
+  const pointerCanvas = await canvas.boundingBox();
+  const pointerFeedback = await feedback.boundingBox();
+  expect(pointerCanvas).not.toBeNull();
+  expect(pointerFeedback).not.toBeNull();
+  expect(pointerCanvas!.width).toBeLessThan(resizedCanvas!.width - 20);
+  expect(pointerFeedback!.width).toBeGreaterThan(resizedFeedback!.width + 20);
+  const persistedCanvasWidth = pointerCanvas!.width;
+  const persistedFeedbackWidth = pointerFeedback!.width;
+
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Shared host behavior" })).toBeVisible();
+  await expect(page.getByRole("separator", { name: "Workspace canvas width" })).toBeVisible();
+  const reloadedCanvas = await canvas.boundingBox();
+  const reloadedFeedback = await feedback.boundingBox();
+  expect(reloadedCanvas).not.toBeNull();
+  expect(reloadedFeedback).not.toBeNull();
+  expect(Math.abs(reloadedCanvas!.width - persistedCanvasWidth)).toBeLessThanOrEqual(1);
+  expect(Math.abs(reloadedFeedback!.width - persistedFeedbackWidth)).toBeLessThanOrEqual(1);
+});
+
+test("shared host keeps coarse-pointer splitter hit geometry out of layout bounds", async ({ browser }, testInfo) => {
+  const context = await browser.newContext({
+    hasTouch: true,
+    viewport: { width: 1_280, height: 800 },
+  });
+  const page = await context.newPage();
+
+  try {
+    await openWorkspace(page, testInfo);
+    const splitter = page.getByRole("separator", { name: "Workspace canvas width" });
+    const canvas = page.locator(".workspace-canvas");
+    const feedback = page.getByRole("complementary", { name: "Feedback batch" });
+
+    await expect(splitter).toBeVisible();
+    await splitter.focus();
+    await page.keyboard.press("End");
+
+    const splitterBox = await splitter.boundingBox();
+    const canvasBox = await canvas.boundingBox();
+    const feedbackBox = await feedback.boundingBox();
+    expect(splitterBox).not.toBeNull();
+    expect(canvasBox).not.toBeNull();
+    expect(feedbackBox).not.toBeNull();
+    expect(splitterBox!.width).toBeLessThanOrEqual(16);
+    expect(feedbackBox!.width).toBeGreaterThanOrEqual(256);
+    expect(canvasBox!.x + canvasBox!.width).toBeLessThanOrEqual(splitterBox!.x + 1);
+    expect(splitterBox!.x + splitterBox!.width).toBeLessThanOrEqual(feedbackBox!.x + 1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  } finally {
+    await context.close();
+  }
+});
+
+test("shared host removes the desktop splitter and ignores its persisted size in stacked mobile flow", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1_280, height: 800 });
+  await openWorkspace(page, testInfo);
+
+  const splitter = page.getByRole("separator", { name: "Workspace canvas width" });
+  await expect(splitter).toBeVisible();
+  await splitter.focus();
+  await page.keyboard.press("End");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Shared host behavior" })).toBeVisible();
+  await expect(page.getByRole("separator", { name: "Workspace canvas width" })).toHaveCount(0);
+
+  const canvas = page.locator(".workspace-canvas");
+  const feedback = page.getByRole("complementary", { name: "Feedback batch" });
+  const canvasBox = await canvas.boundingBox();
+  const feedbackBox = await feedback.boundingBox();
+  expect(canvasBox).not.toBeNull();
+  expect(feedbackBox).not.toBeNull();
+  expect(canvasBox!.width).toBeGreaterThanOrEqual(389);
+  expect(feedbackBox!.width).toBeGreaterThanOrEqual(389);
+  expect(feedbackBox!.y).toBeGreaterThanOrEqual(canvasBox!.y + canvasBox!.height - 1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+});
+
 test("live delivery status follows durable server and adapter evidence", async ({ page }, testInfo) => {
   const app = createBrainstormServer({
     sessionDir: testInfo.outputPath("live-delivery-session"),

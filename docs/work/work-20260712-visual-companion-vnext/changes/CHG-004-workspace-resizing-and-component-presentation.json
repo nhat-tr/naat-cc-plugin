@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "id": "CHG-004-workspace-resizing-and-component-presentation",
+  "work_id": "work-20260712-visual-companion-vnext",
+  "acceptance_criteria": [
+    "AC-3",
+    "AC-7",
+    "AC-20",
+    "AC-21",
+    "AC-24"
+  ],
+  "decision_record_ids": [
+    "DR-001-visual-companion-vnext"
+  ],
+  "summary": "Aligned Feedback Panel Component options with each renderer's presented Components across all Workspace Kinds; added directed Architecture edges and explicit Scenario Path Start and End semantics; added accessible, persistent resizing for the Architecture viewport and shared Canvas/Feedback split; and made every Workspace reflow against actual Canvas width, including Product compact rendering and coarse-pointer bounds.",
+  "files": [
+    "skills/brainstorming/assets/visual-shell/app.js",
+    "skills/brainstorming/assets/visual-shell/styles.css",
+    "skills/brainstorming/e2e/all-workspaces.visual.spec.ts",
+    "skills/brainstorming/e2e/architecture-canvas.spec.ts",
+    "skills/brainstorming/e2e/architecture-canvas.visual.spec.ts",
+    "skills/brainstorming/e2e/feedback-component-presentation.spec.ts",
+    "skills/brainstorming/e2e/product-concept-studio.visual.spec.ts",
+    "skills/brainstorming/e2e/workspace-host.spec.ts",
+    "skills/brainstorming/scripts/workspace-content.cjs",
+    "skills/brainstorming/tests/architecture-workspace.test.js",
+    "skills/brainstorming/ui/app/VisualCompanionApp.tsx",
+    "skills/brainstorming/ui/app/WorkspaceHost.tsx",
+    "skills/brainstorming/ui/app/workspace-map.ts",
+    "skills/brainstorming/ui/shared/PaneSeparator.tsx",
+    "skills/brainstorming/ui/styles/shell.css",
+    "skills/brainstorming/ui/workspaces/architecture/ArchitectureCanvas.tsx",
+    "skills/brainstorming/ui/workspaces/architecture/architecture-nodes.tsx",
+    "skills/brainstorming/ui/workspaces/architecture/architecture.css",
+    "skills/brainstorming/ui/workspaces/business/BusinessReasoningCanvas.tsx",
+    "skills/brainstorming/ui/workspaces/business/business.css",
+    "skills/brainstorming/ui/workspaces/product/ConceptWall.tsx",
+    "skills/brainstorming/ui/workspaces/product/ProductConceptStudio.tsx",
+    "skills/brainstorming/ui/workspaces/product/product.css",
+    "skills/brainstorming/ui/workspaces/research/ResearchEvidenceBoard.tsx",
+    "skills/brainstorming/ui/workspaces/research/research.css",
+    "skills/brainstorming/ui/workspaces/review/FeatureReviewWorkbench.tsx",
+    "skills/brainstorming/ui/workspaces/review/ReviewNavigator.tsx",
+    "skills/brainstorming/ui/workspaces/review/SourceEvidencePanel.tsx",
+    "skills/brainstorming/ui/workspaces/review/review.css",
+    "docs/work/work-20260712-visual-companion-vnext/evidence/EVD-007-workspace-resizing-and-component-presentation.json",
+    "docs/work/work-20260712-visual-companion-vnext/work.json"
+  ],
+  "recorded_at": "2026-07-13T13:42:14Z"
+}

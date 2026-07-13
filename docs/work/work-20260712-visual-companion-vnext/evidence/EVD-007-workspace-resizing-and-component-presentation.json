@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "id": "EVD-007-workspace-resizing-and-component-presentation",
+  "work_id": "work-20260712-visual-companion-vnext",
+  "kind": "workspace-resizing-and-component-presentation",
+  "acceptance_criteria": [
+    "AC-3",
+    "AC-7",
+    "AC-20",
+    "AC-21",
+    "AC-24"
+  ],
+  "decision_record_ids": [
+    "DR-001-visual-companion-vnext"
+  ],
+  "source": "Node tests and Playwright Chromium interaction, visual, accessibility, touch, and performance suites",
+  "recorded_at": "2026-07-13T13:42:14Z",
+  "result": {
+    "status": "passed_with_residual_risks",
+    "observed_contracts": {
+      "component_presentation": "Product, Architecture, Research, Business, and Review renderers explicitly report the Components presented by the active Frame, mode, or filter; the v2 compatibility renderer preserves active-Frame fallback behavior.",
+      "architecture_direction": "Runtime validation rejects unresolved or unordered Scenario Paths, every rendered edge has a directed marker, and both Current and Proposed modes expose labeled Scenario Path Start and End nodes plus a readable toolbar summary.",
+      "resizing": "The shared Canvas/Feedback separator and Architecture viewport separator support pointer and keyboard operation, bounded ARIA values, persistence, mobile stacking, touch hit geometry, and Canvas-width-aware Workspace reflow."
+    },
+    "verification": {
+      "typecheck": {
+        "command": "npm run typecheck:brainstorming",
+        "status": "passed"
+      },
+      "unit": {
+        "command": "npm run test:brainstorming",
+        "passed": 241,
+        "failed": 0
+      },
+      "browser_interaction": {
+        "command": "npm run test:brainstorming:e2e",
+        "passed": 43,
+        "failed": 0
+      },
+      "visual": {
+        "command": "npm run test:brainstorming:visual",
+        "passed": 17,
+        "failed": 0,
+        "workspace_kinds": 5,
+        "narrow_canvas_screenshots_inspected": 5
+      },
+      "accessibility": {
+        "command": "npm run test:brainstorming:a11y",
+        "passed": 5,
+        "failed": 0
+      },
+      "performance": {
+        "command": "npm run test:brainstorming:performance",
+        "passed": 8,
+        "failed": 0
+      },
+      "repository": {
+        "command": "npm run validate",
+        "status": "passed",
+        "generated_runtime_assets": 21,
+        "brainstorming_tests": 241,
+        "pair_tests": 61,
+        "observability_index_tests": 26,
+        "bin_wrappers": 4
+      },
+      "diff_check": {
+        "command": "git diff --check",
+        "status": "passed"
+      }
+    },
+    "residual_risks": [
+      "Manual screenshot inspection and browser automation covered Chromium; Firefox and WebKit were not manually exercised.",
+      "Coarse-pointer layout was verified with Chromium touch emulation rather than a physical tablet.",
+      "No real screen-reader speech or touch assistive technology session was exercised."
+    ]
+  }
+}

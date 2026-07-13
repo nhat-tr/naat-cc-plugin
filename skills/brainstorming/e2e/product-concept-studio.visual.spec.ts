@@ -136,6 +136,7 @@ async function expectNoClippedProductText(scope: Locator): Promise<void> {
   const clipped = await scope.locator("h1, h2, h3, h4, p, li, button, [role='tab']").evaluateAll(elements => elements
     .filter(element => {
       if (!(element instanceof HTMLElement)) return false;
+      if (element.closest(".sr-only")) return false;
       const style = getComputedStyle(element);
       if (style.display === "none" || style.visibility === "hidden" || element.getClientRects().length === 0) {
         return false;

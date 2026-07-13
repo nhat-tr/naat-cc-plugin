@@ -10,7 +10,7 @@ import {
   Smartphone,
   Sparkles,
 } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import type { WorkspaceDecision } from "../../app/WorkspaceHost";
 import type { Choice } from "../../app/feedback-store";
@@ -55,8 +55,17 @@ interface ProductConceptStudioProps {
   decisions: WorkspaceDecision[];
   onChoice: (choice: Choice, selected: boolean, multiselect: boolean) => void;
   onFrameSelect: (frameId: string) => void;
+  onPresentedComponentIdsChange: (componentIds: string[]) => void;
   readOnly: boolean;
 }
+
+const PRODUCT_FOCUS_COMPONENT_IDS = [
+  "focus-states",
+  "focus-responsive",
+  "focus-accessibility",
+  "focus-handoff",
+];
+const PRODUCT_COMPACT_WIDTH = 620;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -68,20 +77,6 @@ function productContent(value: Record<string, unknown>): ProductWorkspaceContent
   if (!value.concepts.every(concept => isRecord(concept) && typeof concept.id === "string" && typeof concept.title === "string")) return null;
   if (!Array.isArray(value.difference_lens.dimensions)) return null;
   return value as unknown as ProductWorkspaceContent;
-}
-
-function subscribeToMobileLayout(onChange: () => void): () => void {
-  const query = globalThis.matchMedia("(max-width: 620px)");
-  query.addEventListener("change", onChange);
-  return () => query.removeEventListener("change", onChange);
-}
-
-function mobileLayoutSnapshot(): boolean {
-  return globalThis.matchMedia("(max-width: 620px)").matches;
-}
-
-function serverMobileLayoutSnapshot(): boolean {
-  return false;
 }
 
 function DetailList({ items }: { items: string[] }) {
@@ -240,16 +235,45 @@ export function ProductConceptStudio({
   decisions,
   onChoice,
   onFrameSelect,
+  onPresentedComponentIdsChange,
   readOnly,
 }: ProductConceptStudioProps) {
   const parsed = productContent(content);
-  const mobile = useSyncExternalStore(subscribeToMobileLayout, mobileLayoutSnapshot, serverMobileLayoutSnapshot);
+  const studioRoot = useRef<HTMLDivElement>(null);
+  const [compact, setCompact] = useState(false);
   const [focusedConceptId, setFocusedConceptId] = useState<string | null>(null);
   const [inspectedConceptIds, setInspectedConceptIds] = useState<Set<string>>(() => new Set());
   const [inspectFocusRequest, setInspectFocusRequest] = useState(0);
   const inspectOrigin = useRef<HTMLButtonElement | null>(null);
   const restoreInspectFocus = useRef(false);
   const showFocus = activeFrameId === "focus";
+
+  useEffect(() => {
+    const element = studioRoot.current;
+    if (!element) return;
+
+    const update = (width: number): void => {
+      setCompact(width <= PRODUCT_COMPACT_WIDTH);
+    };
+    update(element.getBoundingClientRect().width);
+
+    const observer = new ResizeObserver(entries => {
+      update(entries[0]?.contentRect.width ?? element.getBoundingClientRect().width);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [Boolean(parsed)]);
+
+  const presentedComponentIds = useMemo(() => {
+    if (!parsed) return [];
+    return showFocus
+      ? PRODUCT_FOCUS_COMPONENT_IDS
+      : [...parsed.concepts.map(concept => concept.id), ...(compact ? [] : ["difference-lens"])];
+  }, [compact, parsed, showFocus]);
+
+  useEffect(() => {
+    onPresentedComponentIdsChange(presentedComponentIds);
+  }, [onPresentedComponentIdsChange, presentedComponentIds]);
 
   useEffect(() => {
     if (showFocus || !restoreInspectFocus.current) return;
@@ -284,7 +308,7 @@ export function ProductConceptStudio({
   };
 
   return (
-    <div className="product-concept-studio" data-product-concept-studio="">
+    <div className="product-concept-studio" data-product-concept-studio="" ref={studioRoot}>
       <section
         aria-labelledby="frame-tab-compare"
         hidden={showFocus}
@@ -296,7 +320,7 @@ export function ProductConceptStudio({
           concepts={parsed.concepts}
           decisionId={decisionId}
           differenceLens={parsed.difference_lens}
-          layout={mobile ? "mobile-three-up" : "desktop-stacked"}
+          layout={compact ? "mobile-three-up" : "desktop-stacked"}
           onChoice={onChoice}
           onInspect={inspectConcept}
           readOnly={readOnly}

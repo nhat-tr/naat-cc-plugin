@@ -18,6 +18,8 @@ export interface ArchitectureNodeData extends Record<string, unknown> {
   focused: boolean;
   scenario: boolean;
   scenarioId: string | null;
+  scenarioEnd: boolean;
+  scenarioStart: boolean;
 }
 
 export interface OwnershipBoundaryData extends Record<string, unknown> {
@@ -41,8 +43,16 @@ export type ArchitectureFlowEdge = Edge<ArchitectureEdgeData, "architectureEdge"
 
 export function ArchitectureNodeView({ data }: NodeProps<ArchitectureFlowNode>) {
   const { node } = data;
+  const endpointLabel = data.scenarioStart && data.scenarioEnd
+    ? "Scenario start and end"
+    : data.scenarioStart
+      ? "Scenario start"
+      : data.scenarioEnd
+        ? "Scenario end"
+        : null;
   return (
     <article
+      aria-label={[node.label, node.type.replaceAll("_", " "), endpointLabel].filter(Boolean).join(", ")}
       className={`architecture-node architecture-node-${node.type} change-${node.change}`}
       data-architecture-node=""
       data-brainstorm-id={node.component_id}
@@ -54,6 +64,7 @@ export function ArchitectureNodeView({ data }: NodeProps<ArchitectureFlowNode>) 
       data-owner-id={node.owner_id}
       data-scenario-id={data.scenario ? data.scenarioId ?? undefined : undefined}
       data-scenario-active={data.scenario ? "" : undefined}
+      data-scenario-endpoint={data.scenarioStart ? "start" : data.scenarioEnd ? "end" : undefined}
     >
       {node.ports.map(port => (
         <Handle
@@ -73,6 +84,12 @@ export function ArchitectureNodeView({ data }: NodeProps<ArchitectureFlowNode>) 
       <div className="architecture-node-heading">
         <span aria-hidden="true" className="architecture-type-mark" />
         <strong>{node.label}</strong>
+        {data.scenarioStart || data.scenarioEnd ? (
+          <span className="architecture-scenario-endpoints">
+            {data.scenarioStart ? <span data-scenario-endpoint-badge="start">Start</span> : null}
+            {data.scenarioEnd ? <span data-scenario-endpoint-badge="end">End</span> : null}
+          </span>
+        ) : null}
       </div>
       <div className="architecture-node-meta">
         <span>{node.type.replaceAll("_", " ")}</span>
@@ -99,7 +116,7 @@ export function OwnershipBoundaryView({ data }: NodeProps<OwnershipBoundaryFlowN
   );
 }
 
-export function ArchitectureEdgeView({ data }: EdgeProps<ArchitectureFlowEdge>) {
+export function ArchitectureEdgeView({ data, markerEnd }: EdgeProps<ArchitectureFlowEdge>) {
   if (!data || data.path.length === 0) return null;
   return (
     <g
@@ -114,7 +131,7 @@ export function ArchitectureEdgeView({ data }: EdgeProps<ArchitectureFlowEdge>) 
       data-scenario-path={data.scenarioPathIdentity ? "" : undefined}
     >
       <path className="architecture-edge-hit" d={data.path} />
-      <path className="architecture-edge-path" d={data.path} />
+      <path className="architecture-edge-path" d={data.path} markerEnd={markerEnd} />
     </g>
   );
 }

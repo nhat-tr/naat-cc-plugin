@@ -29,7 +29,12 @@ export function SourceEvidencePanel({
   const unmapped = unmappedPaths.includes(selectedPath);
 
   return (
-    <section className="review-source-pane" data-review-source="">
+    <section
+      className="review-source-pane"
+      data-brainstorm-id={source?.componentId}
+      data-brainstorm-label={source ? `Actual change: ${source.path}` : undefined}
+      data-review-source=""
+    >
       <header className="review-pane-heading review-source-heading" data-source-path={selectedPath}>
         <span className="review-pane-icon"><FileDiff aria-hidden="true" size={16} /></span>
         <div>

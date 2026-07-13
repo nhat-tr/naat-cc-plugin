@@ -181,6 +181,7 @@ async function expectNoClippedText(root: Locator, kind: string): Promise<void> {
     elements.filter(element => {
       if (!(element instanceof HTMLElement)) return false;
       if (element.closest("[data-architecture-viewport]")) return false;
+      if (element.closest(".sr-only")) return false;
       const style = getComputedStyle(element);
       if (style.display === "none" || style.visibility === "hidden" || element.getClientRects().length === 0) {
         return false;
@@ -273,3 +274,76 @@ for (const workspace of WORKSPACES) {
     expect(pixelStats[0]!.naturalWidth).toBeGreaterThan(pixelStats[1]!.naturalWidth);
   });
 }
+
+test("maximized desktop Feedback Panel keeps every Workspace Kind within its resizable canvas", async ({ page }, testInfo) => {
+  const desktop = VIEWPORTS[0];
+
+  for (const workspace of WORKSPACES) {
+    const screen = fixture(workspace.fixture);
+    const pageErrors = await mount(page, testInfo, screen, desktop);
+    const canvas = page.locator(".workspace-canvas");
+    const feedback = page.getByRole("complementary", { name: "Feedback batch" });
+    const splitter = page.getByRole("separator", { name: "Workspace canvas width" });
+    const root = page.locator(workspace.root);
+
+    await expect(root).toBeVisible();
+    if (workspace.kind === "architecture") {
+      await expect(root).toHaveAttribute("data-layout-status", "ready");
+    }
+    await expect(splitter).toBeVisible();
+    await splitter.focus();
+    await page.keyboard.press("End");
+    const beforeCanvas = await canvas.boundingBox();
+    const beforeFeedback = await feedback.boundingBox();
+    expect(beforeCanvas).not.toBeNull();
+    expect(beforeFeedback).not.toBeNull();
+
+    await page.keyboard.press("Home");
+
+    if (workspace.kind === "product") {
+      await expect(root.locator("[data-product-concept-wall]"))
+        .toHaveAttribute("data-layout", "mobile-three-up");
+      await expect(root.locator("[data-product-difference-lens]"))
+        .toBeHidden();
+    }
+
+    const canvasBox = await canvas.boundingBox();
+    const feedbackBox = await feedback.boundingBox();
+    const rootBox = await root.boundingBox();
+    expect(canvasBox).not.toBeNull();
+    expect(feedbackBox).not.toBeNull();
+    expect(rootBox).not.toBeNull();
+    expect(canvasBox!.width, `${workspace.kind} canvas must shrink`).toBeLessThan(beforeCanvas!.width - 1);
+    expect(feedbackBox!.width, `${workspace.kind} Feedback Panel must grow`).toBeGreaterThan(beforeFeedback!.width + 1);
+    expect(overlapArea(canvasBox!, feedbackBox!), `${workspace.kind} canvas and Feedback Panel overlap`).toBe(0);
+    expect(rootBox!.x, `${workspace.kind} root escapes the canvas on the left`).toBeGreaterThanOrEqual(canvasBox!.x - 1);
+    expect(
+      rootBox!.x + rootBox!.width,
+      `${workspace.kind} root escapes the canvas on the right`,
+    ).toBeLessThanOrEqual(canvasBox!.x + canvasBox!.width + 1);
+
+    const regions = root.locator(workspace.regions);
+    await expectPurposeGeometry(page, regions, workspace.kind);
+    for (let index = 0; index < await regions.count(); index += 1) {
+      const regionBox = await regions.nth(index).boundingBox();
+      expect(regionBox, `${workspace.kind} region ${index + 1} must have geometry`).not.toBeNull();
+      expect(
+        regionBox!.x,
+        `${workspace.kind} region ${index + 1} escapes the canvas on the left`,
+      ).toBeGreaterThanOrEqual(canvasBox!.x - 1);
+      expect(
+        regionBox!.x + regionBox!.width,
+        `${workspace.kind} region ${index + 1} escapes the canvas on the right`,
+      ).toBeLessThanOrEqual(canvasBox!.x + canvasBox!.width + 1);
+    }
+
+    await expectNoClippedText(root, workspace.kind);
+    expect(
+      await canvas.evaluate(element => element.scrollWidth <= element.clientWidth + 1),
+      `${workspace.kind} canvas has horizontal overflow`,
+    ).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    await pixelEvidence(page, root, testInfo, `${workspace.kind}-max-feedback.png`);
+    expect(pageErrors).toEqual([]);
+  }
+});

@@ -184,7 +184,7 @@ ul {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(16rem, 22rem);
+  grid-template-columns: minmax(0, var(--workspace-canvas-width, calc(100vw - 23rem))) auto minmax(16rem, 1fr);
   align-items: start;
   min-width: 0;
   min-height: calc(100vh - 6rem);
@@ -199,8 +199,87 @@ ul {
 }
 
 .workspace-canvas {
+  container: workspace-canvas / inline-size;
+  grid-column: 1;
   min-width: 0;
   padding: var(--vc-section-space) clamp(var(--vc-space-3), 2.5vw, var(--vc-space-8));
+}
+
+.workspace-pane-separator {
+  position: sticky;
+  top: 0;
+  grid-column: 2;
+  height: 100vh;
+}
+
+.pane-separator {
+  position: relative;
+  z-index: 2;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  touch-action: none;
+  user-select: none;
+}
+
+.pane-separator::before {
+  position: absolute;
+  content: "";
+  background: var(--vc-line-strong);
+}
+
+.pane-separator-vertical {
+  width: var(--vc-space-3);
+  cursor: col-resize;
+}
+
+.pane-separator-vertical::before {
+  inset: 0 auto 0 50%;
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+.pane-separator-horizontal {
+  width: 100%;
+  height: var(--vc-space-3);
+  cursor: row-resize;
+}
+
+.pane-separator-horizontal::before {
+  inset: 50% 0 auto;
+  height: 1px;
+  transform: translateY(-50%);
+}
+
+.pane-separator:hover::before,
+.pane-separator[data-resizing]::before {
+  background: var(--vc-accent);
+}
+
+.pane-separator:focus-visible {
+  outline: 3px solid var(--vc-focus);
+  outline-offset: -3px;
+}
+
+@media (pointer: coarse) {
+  .pane-separator-vertical::after {
+    position: absolute;
+    inset: 0 auto 0 50%;
+    width: var(--vc-control-height);
+    content: "";
+    transform: translateX(-50%);
+  }
+
+  .pane-separator-horizontal::after {
+    position: absolute;
+    inset: 50% 0 auto;
+    height: var(--vc-control-height);
+    content: "";
+    transform: translateY(-50%);
+  }
 }
 
 .workspace-host > .decisions,
@@ -949,6 +1028,7 @@ ul {
   position: sticky;
   top: 0;
   display: grid;
+  grid-column: 3;
   grid-template-rows: auto minmax(0, auto) auto minmax(0, 1fr);
   min-width: 0;
   height: 100vh;
@@ -1273,6 +1353,11 @@ body[data-profile="business"] {
 @media (max-width: 980px) {
   .workspace {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace-canvas,
+  .feedback-panel {
+    grid-column: 1;
   }
 
   .workspace-host {

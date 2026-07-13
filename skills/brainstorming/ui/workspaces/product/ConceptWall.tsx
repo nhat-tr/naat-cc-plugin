@@ -34,7 +34,7 @@ export function ConceptWall({
   readOnly,
 }: ConceptWallProps) {
   return (
-    <div className="product-compare">
+    <div className="product-compare" data-layout={layout}>
       <h2 className="sr-only">Compare product concepts</h2>
       <div className="product-equal-fixture" data-product-equal-fixture="">
         <Scale aria-hidden="true" size={16} />
@@ -76,7 +76,12 @@ export function ConceptWall({
         ))}
       </div>
 
-      <section className="product-difference-lens" data-product-difference-lens="">
+      <section
+        className="product-difference-lens"
+        data-brainstorm-id="difference-lens"
+        data-brainstorm-label={differenceLens.title}
+        data-product-difference-lens=""
+      >
         <header>
           <h3>{differenceLens.title}</h3>
           <p>Compare interaction and information structure without changing the fixture.</p>

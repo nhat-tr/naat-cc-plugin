@@ -726,7 +726,66 @@
   }
 }
 
+@container workspace-canvas (max-width: 820px) {
+  .review-status-bar,
+  .review-three-pane,
+  .review-ac-context {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-patch-state,
+  .review-progress-state {
+    width: 100%;
+  }
+
+  .review-progress-state > div {
+    flex: 1 1 50%;
+  }
+
+  .review-ac-context .review-ac-panel,
+  .review-source-pane,
+  .review-evidence-pane {
+    border-top: 1px solid var(--vc-line);
+    border-left: 0;
+  }
+
+  .review-source-tree {
+    max-height: 65vh;
+  }
+
+  .review-evidence-pane {
+    max-height: none;
+  }
+}
+
 @media (max-width: 420px) {
+  .review-status-bar,
+  .review-pane-heading,
+  .review-source-section,
+  .review-evidence-section {
+    padding-inline: var(--vc-space-3);
+  }
+
+  .review-progress-state {
+    display: grid;
+  }
+
+  .review-progress-state > div + div {
+    border-top: 1px solid var(--vc-line);
+    border-left: 0;
+  }
+
+  .review-source-tree [role="treeitem"] {
+    grid-template-columns: 1rem minmax(0, 1fr);
+  }
+
+  .review-source-tree .review-viewed-state,
+  .review-source-tree .review-tree-count {
+    grid-column: 2;
+  }
+}
+
+@container workspace-canvas (max-width: 420px) {
   .review-status-bar,
   .review-pane-heading,
   .review-source-section,

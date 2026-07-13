@@ -3,6 +3,8 @@
   gap: var(--vc-space-3);
   min-width: 0;
   color: var(--vc-ink);
+  container-name: architecture-canvas;
+  container-type: inline-size;
 }
 
 .architecture-canvas-header {
@@ -114,9 +116,45 @@
   font: inherit;
 }
 
+.architecture-scenario-direction {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  flex: 1 1 20rem;
+  align-items: center;
+  gap: var(--vc-space-2);
+  min-width: min(100%, 18rem);
+  max-width: 34rem;
+  color: var(--vc-body);
+}
+
+.architecture-scenario-direction > span {
+  display: grid;
+  min-width: 0;
+}
+
+.architecture-scenario-direction strong {
+  color: #8a5700;
+  font-family: var(--vc-font-mono);
+  font-size: 0.625rem;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.architecture-scenario-direction > span > span {
+  overflow: hidden;
+  font-size: var(--vc-font-size-xs);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.architecture-scenario-direction > svg {
+  color: #8a5700;
+}
+
 .architecture-camera-controls {
   display: inline-grid;
-  grid-template-columns: repeat(3, var(--vc-control-height));
+  grid-template-columns: repeat(4, var(--vc-control-height));
   flex: 0 0 auto;
   border: 1px solid var(--vc-line-strong);
   border-radius: var(--vc-radius-sm);
@@ -182,11 +220,17 @@
   min-width: 0;
 }
 
+.architecture-viewport-stack {
+  display: grid;
+  grid-template-rows: auto auto;
+  align-self: start;
+  min-width: 0;
+}
+
 .architecture-viewport {
   position: relative;
   min-width: 0;
-  height: min(62vh, 39rem);
-  min-height: 31rem;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid var(--vc-line-strong);
   border-radius: var(--vc-radius-sm);
@@ -301,10 +345,32 @@
 
 .architecture-node-heading {
   display: grid;
-  grid-template-columns: 0.55rem minmax(0, 1fr);
+  grid-template-columns: 0.55rem minmax(0, 1fr) auto;
   align-items: start;
   gap: 0.4rem;
   min-width: 0;
+}
+
+.architecture-scenario-endpoints {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: end;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.architecture-scenario-endpoints > span {
+  border: 1px solid #a86c00;
+  border-radius: var(--vc-radius-sm);
+  background: #fff4cf;
+  color: #714700;
+  padding: 0.08rem 0.25rem;
+  font-family: var(--vc-font-mono);
+  font-size: 0.48rem;
+  font-weight: 900;
+  line-height: 1.1;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .architecture-type-mark {
@@ -497,9 +563,21 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .architecture-viewport {
-    height: 26rem;
-    min-height: 26rem;
+  .architecture-inspector {
+    min-height: 9rem;
+    border-top: 1px solid var(--vc-line);
+    border-left: 0;
+    padding: var(--vc-space-3) 0 0;
+  }
+
+  .architecture-scenario-summary {
+    margin-top: 0;
+  }
+}
+
+@container architecture-canvas (max-width: 760px) {
+  .architecture-stage {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .architecture-inspector {
@@ -511,6 +589,47 @@
 
   .architecture-scenario-summary {
     margin-top: 0;
+  }
+}
+
+@container architecture-canvas (max-width: 460px) {
+  .architecture-canvas-header {
+    align-items: stretch;
+  }
+
+  .architecture-state-tabs {
+    width: 100%;
+  }
+
+  .architecture-scenario {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    flex-basis: 100%;
+  }
+
+  .architecture-scenario select {
+    grid-column: 1 / -1;
+    width: 100%;
+    max-width: none;
+  }
+
+  .architecture-camera-controls {
+    margin-left: 0;
+  }
+
+  .architecture-scenario-direction {
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  .architecture-focus-targets button {
+    flex: 1 1 9rem;
+    justify-content: center;
+  }
+
+  .architecture-viewport .react-flow__minimap {
+    width: 6.25rem;
+    height: 4.25rem;
   }
 }
 
@@ -537,6 +656,11 @@
 
   .architecture-camera-controls {
     margin-left: 0;
+  }
+
+  .architecture-scenario-direction {
+    flex-basis: 100%;
+    max-width: none;
   }
 
   .architecture-focus-targets button {

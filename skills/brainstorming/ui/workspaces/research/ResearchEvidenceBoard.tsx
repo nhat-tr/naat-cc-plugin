@@ -6,7 +6,7 @@ import {
   Scale,
   ShieldCheck,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import type { EvidenceReference, WorkspaceComponent } from "../../app/WorkspaceHost";
 
@@ -36,6 +36,7 @@ interface ResearchEvidenceBoardProps {
   components: WorkspaceComponent[];
   content: Record<string, unknown>;
   evidenceRefs: EvidenceReference[];
+  onPresentedComponentIdsChange: (componentIds: string[]) => void;
 }
 
 interface ConfidenceDefinition {
@@ -94,9 +95,31 @@ export function ResearchEvidenceBoard({
   components,
   content,
   evidenceRefs,
+  onPresentedComponentIdsChange,
 }: ResearchEvidenceBoardProps) {
   const parsed = researchContent(content);
   const [relevance, setRelevance] = useState("All decisions");
+  const options = useMemo(
+    () => relevanceOptions(parsed?.decision_relevance_options),
+    [parsed],
+  );
+  const selectedRelevance = options.includes(relevance) ? relevance : options[0] ?? "All decisions";
+  const claims = useMemo(
+    () => parsed?.claims.filter(claim => relevanceMatches(claim.decision_relevance, selectedRelevance)) ?? [],
+    [parsed, selectedRelevance],
+  );
+  const unknowns = useMemo(
+    () => (parsed?.unknowns ?? []).filter(unknown => relevanceMatches(unknown.decision_relevance, selectedRelevance)),
+    [parsed, selectedRelevance],
+  );
+  const presentedComponentIds = useMemo(
+    () => [...claims.map(claim => claim.component_id), ...unknowns.map(unknown => unknown.component_id)],
+    [claims, unknowns],
+  );
+
+  useEffect(() => {
+    onPresentedComponentIdsChange(presentedComponentIds);
+  }, [onPresentedComponentIdsChange, presentedComponentIds]);
 
   if (!parsed) {
     return <p className="workspace-error" role="alert">Research Workspace content is invalid.</p>;
@@ -104,12 +127,6 @@ export function ResearchEvidenceBoard({
 
   const componentById = new Map(components.map(component => [component.id, component]));
   const evidenceById = new Map(evidenceRefs.map(reference => [reference.id, reference]));
-  const options = relevanceOptions(parsed.decision_relevance_options);
-  const selectedRelevance = options.includes(relevance) ? relevance : options[0] ?? "All decisions";
-  const claims = parsed.claims.filter(claim => relevanceMatches(claim.decision_relevance, selectedRelevance));
-  const unknowns = (parsed.unknowns ?? []).filter(unknown => (
-    relevanceMatches(unknown.decision_relevance, selectedRelevance)
-  ));
 
   return (
     <section className="research-evidence-board" data-research-evidence-board="">

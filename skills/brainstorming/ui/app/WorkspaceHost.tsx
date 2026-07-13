@@ -58,6 +58,7 @@ interface WorkspaceHostProps {
   documentValue: WorkspaceEnvelope | LegacyVisualDocument;
   onChoice: (choice: Choice, selected: boolean, multiselect: boolean) => void;
   onFrameSelect: (frameId: string) => void;
+  onPresentedComponentIdsChange: (componentIds: string[]) => void;
   readOnly: boolean;
 }
 
@@ -401,6 +402,7 @@ export function WorkspaceHost({
   documentValue,
   onChoice,
   onFrameSelect,
+  onPresentedComponentIdsChange,
   readOnly,
 }: WorkspaceHostProps) {
   const legacy = embeddedLegacyDocument(documentValue);
@@ -448,6 +450,7 @@ export function WorkspaceHost({
       documentValue,
       onChoice,
       onFrameSelect,
+      onPresentedComponentIdsChange,
       readOnly,
     });
     return (

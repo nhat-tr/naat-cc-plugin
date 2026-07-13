@@ -10,7 +10,7 @@
   "active_pair_mirror": ".pair/spec.md",
   "plan": {
     "path": ".pair/plan.md",
-    "sha256": "b5c72af73056006a1b4a42b9536184e936a9dedc6eb823aa15e2265cfd221b19",
+    "sha256": "0254083471b06082f74ec65fd559f1640463f721382dabab680afb400af5c219",
     "status": "validated",
     "independent_review": "no-blockers"
   },
@@ -27,7 +27,8 @@
   "changes": [
     "docs/work/work-20260712-visual-companion-vnext/changes/CHG-001-implementation.json",
     "docs/work/work-20260712-visual-companion-vnext/changes/CHG-002-persistent-session-hygiene.json",
-    "docs/work/work-20260712-visual-companion-vnext/changes/CHG-003-fresh-session-lifecycle.json"
+    "docs/work/work-20260712-visual-companion-vnext/changes/CHG-003-fresh-session-lifecycle.json",
+    "docs/work/work-20260712-visual-companion-vnext/changes/CHG-004-workspace-resizing-and-component-presentation.json"
   ],
   "outcomes": [],
   "evidence_records": [
@@ -36,6 +37,7 @@
     "docs/work/work-20260712-visual-companion-vnext/evidence/EVD-003-performance.json",
     "docs/work/work-20260712-visual-companion-vnext/evidence/EVD-004-accessibility-review.json",
     "docs/work/work-20260712-visual-companion-vnext/evidence/EVD-005-compatibility-backout.json",
-    "docs/work/work-20260712-visual-companion-vnext/evidence/EVD-006-accessibility-review.json"
+    "docs/work/work-20260712-visual-companion-vnext/evidence/EVD-006-accessibility-review.json",
+    "docs/work/work-20260712-visual-companion-vnext/evidence/EVD-007-workspace-resizing-and-component-presentation.json"
   ]
 }

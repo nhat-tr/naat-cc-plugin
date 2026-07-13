@@ -16,6 +16,7 @@ export interface WorkspaceCompositionContext {
   documentValue: WorkspaceEnvelope;
   onChoice: (choice: Choice, selected: boolean, multiselect: boolean) => void;
   onFrameSelect: (frameId: string) => void;
+  onPresentedComponentIdsChange: (componentIds: string[]) => void;
   readOnly: boolean;
 }
 
@@ -29,22 +30,27 @@ export const workspaceCompositionMap = {
     decisions: context.documentValue.decisions,
     onChoice: context.onChoice,
     onFrameSelect: context.onFrameSelect,
+    onPresentedComponentIdsChange: context.onPresentedComponentIdsChange,
     readOnly: context.readOnly,
   }),
   architecture: context => createElement(ArchitectureCanvas, {
     content: context.documentValue.content,
+    onPresentedComponentIdsChange: context.onPresentedComponentIdsChange,
   }),
   research: context => createElement(ResearchEvidenceBoard, {
     components: context.documentValue.components,
     content: context.documentValue.content,
     evidenceRefs: context.documentValue.evidence_refs,
+    onPresentedComponentIdsChange: context.onPresentedComponentIdsChange,
   }),
   business: context => createElement(BusinessReasoningCanvas, {
     components: context.documentValue.components,
     content: context.documentValue.content,
     evidenceRefs: context.documentValue.evidence_refs,
+    onPresentedComponentIdsChange: context.onPresentedComponentIdsChange,
   }),
   review: context => createElement(FeatureReviewWorkbench, {
     content: context.documentValue.content,
+    onPresentedComponentIdsChange: context.onPresentedComponentIdsChange,
   }),
 } satisfies Record<WorkspaceKind, WorkspaceComposition>;

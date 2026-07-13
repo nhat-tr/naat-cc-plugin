@@ -1,11 +1,13 @@
 import {
   Background,
   BackgroundVariant,
+  MarkerType,
   MiniMap,
   ReactFlow,
   type ReactFlowInstance,
 } from "@xyflow/react";
 import {
+  ArrowRight,
   Focus,
   Minus,
   Route,
@@ -20,6 +22,8 @@ import {
   type KeyboardEvent,
 } from "react";
 
+import { PaneSeparator } from "../../shared/PaneSeparator";
+
 import {
   ArchitectureEdgeView,
   ArchitectureNodeView,
@@ -31,11 +35,13 @@ import {
   layoutArchitecture,
   type ArchitectureLayoutResult,
   type ArchitectureMode,
+  type ArchitectureEdgeType,
   type ArchitectureWorkspaceContent,
 } from "./architecture-layout";
 
 interface ArchitectureCanvasProps {
   content: Record<string, unknown>;
+  onPresentedComponentIdsChange?: (componentIds: string[]) => void;
 }
 
 interface LayoutState {
@@ -52,6 +58,76 @@ const NODE_TYPES = {
 const EDGE_TYPES = {
   architectureEdge: ArchitectureEdgeView,
 };
+
+const EDGE_COLORS: Record<ArchitectureEdgeType, string> = {
+  command: "#356494",
+  control: "#87517e",
+  data: "#2f7667",
+  event: "#8c641b",
+  evidence: "#8b4d47",
+};
+const SCENARIO_EDGE_COLOR = "#bc7900";
+const VIEWPORT_HEIGHT_MIN = 320;
+const VIEWPORT_HEIGHT_LIMIT = 900;
+const VIEWPORT_HEIGHT_STORAGE_KEY = "visual-companion:architecture-viewport-height:v1";
+
+interface ViewportHeightBounds {
+  defaultValue: number;
+  max: number;
+  min: number;
+}
+
+interface InitialViewportHeight {
+  bounds: ViewportHeightBounds;
+  userSized: boolean;
+  value: number;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function viewportHeightBounds(): ViewportHeightBounds {
+  const compact = window.matchMedia("(max-width: 760px)").matches;
+  const available = window.innerHeight - (compact ? 220 : 180);
+  const max = Math.max(VIEWPORT_HEIGHT_MIN, Math.min(VIEWPORT_HEIGHT_LIMIT, Math.round(available)));
+  return {
+    defaultValue: clamp(
+      Math.round(window.innerHeight * (compact ? 0.58 : 0.68)),
+      VIEWPORT_HEIGHT_MIN,
+      max,
+    ),
+    max,
+    min: VIEWPORT_HEIGHT_MIN,
+  };
+}
+
+function readStoredViewportHeight(): number | null {
+  try {
+    const value = Number.parseInt(localStorage.getItem(VIEWPORT_HEIGHT_STORAGE_KEY) ?? "", 10);
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeViewportHeight(value: number): void {
+  try {
+    localStorage.setItem(VIEWPORT_HEIGHT_STORAGE_KEY, String(Math.round(value)));
+  } catch {
+    // Standalone file origins may not expose browser storage.
+  }
+}
+
+function initialViewportHeight(): InitialViewportHeight {
+  const bounds = viewportHeightBounds();
+  const stored = readStoredViewportHeight();
+  return {
+    bounds,
+    userSized: stored !== null,
+    value: clamp(stored ?? bounds.defaultValue, bounds.min, bounds.max),
+  };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -79,15 +155,33 @@ function titleCaseType(value: string): string {
   return value.replaceAll("_", " ").replace(/^./u, first => first.toUpperCase());
 }
 
-export function ArchitectureCanvas({ content }: ArchitectureCanvasProps) {
+export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: ArchitectureCanvasProps) {
   const parsed = useMemo(() => architectureContent(content), [content]);
+  const [initialViewport] = useState(initialViewportHeight);
+  const userSizedViewport = useRef(initialViewport.userSized);
   const [mode, setMode] = useState<ArchitectureMode>(() => parsed?.initial_mode ?? "proposed");
   const [scenarioId, setScenarioId] = useState<string>(() => parsed?.scenarios[0]?.id ?? "");
   const [focusedId, setFocusedId] = useState<string | null>(() => parsed?.focus_targets[0] ?? null);
   const [flow, setFlow] = useState<ReactFlowInstance<ArchitectureCanvasNode, ArchitectureFlowEdge> | null>(null);
   const [layout, setLayout] = useState<LayoutState>({ status: "loading", result: null, error: null });
+  const [viewportBounds, setViewportBounds] = useState(initialViewport.bounds);
+  const [viewportHeight, setViewportHeight] = useState(initialViewport.value);
   const modeTabs = useRef(new Map<ArchitectureMode, HTMLButtonElement>());
   const initialViewApplied = useRef(false);
+
+  useEffect(() => {
+    const updateBounds = (): void => {
+      const next = viewportHeightBounds();
+      setViewportBounds(next);
+      setViewportHeight(current => clamp(
+        userSizedViewport.current ? current : next.defaultValue,
+        next.min,
+        next.max,
+      ));
+    };
+    window.addEventListener("resize", updateBounds);
+    return () => window.removeEventListener("resize", updateBounds);
+  }, []);
 
   useEffect(() => {
     if (!parsed) return;
@@ -119,6 +213,8 @@ export function ArchitectureCanvas({ content }: ArchitectureCanvasProps) {
   const scenarioPath = activeScenario?.paths[mode] ?? null;
   const scenarioNodeIds = useMemo(() => new Set(scenarioPath?.node_ids ?? []), [scenarioPath]);
   const scenarioEdgeIds = useMemo(() => new Set(scenarioPath?.edge_ids ?? []), [scenarioPath]);
+  const scenarioStartId = scenarioPath?.node_ids[0] ?? null;
+  const scenarioEndId = scenarioPath?.node_ids.at(-1) ?? null;
   const scenarioPathIdentity = parsed?.annotation_targets.find(id => scenarioEdgeIds.has(id))
     ?? scenarioPath?.edge_ids[0]
     ?? null;
@@ -161,51 +257,106 @@ export function ArchitectureCanvas({ content }: ArchitectureCanvasProps) {
     }));
     const nodes: ArchitectureCanvasNode[] = layout.result.nodes
       .filter(item => item.node.modes.includes(mode))
-      .map(item => ({
-        id: item.node.id,
-        type: "architectureNode",
-        parentId: item.node.owner_id,
-        extent: "parent",
-        position: item.position,
-        data: {
-          node: item.node,
-          focused: focusedId === item.node.id,
-          scenario: scenarioNodeIds.has(item.node.id),
-          scenarioId: activeScenario?.id ?? null,
-        },
-        ariaLabel: `${item.node.label}, ${titleCaseType(item.node.type)}`,
-        focusable: false,
-        selectable: true,
-        draggable: false,
-        style: { width: item.width, height: item.height },
-      }));
+      .map(item => {
+        const scenarioStart = item.node.id === scenarioStartId;
+        const scenarioEnd = item.node.id === scenarioEndId;
+        const endpointLabel = scenarioStart && scenarioEnd
+          ? "Scenario start and end"
+          : scenarioStart
+            ? "Scenario start"
+            : scenarioEnd
+              ? "Scenario end"
+              : null;
+        return {
+          id: item.node.id,
+          type: "architectureNode",
+          parentId: item.node.owner_id,
+          extent: "parent",
+          position: item.position,
+          data: {
+            node: item.node,
+            focused: focusedId === item.node.id,
+            scenario: scenarioNodeIds.has(item.node.id),
+            scenarioId: activeScenario?.id ?? null,
+            scenarioEnd,
+            scenarioStart,
+          },
+          ariaLabel: [item.node.label, titleCaseType(item.node.type), endpointLabel].filter(Boolean).join(", "),
+          focusable: false,
+          selectable: true,
+          draggable: false,
+          style: { width: item.width, height: item.height },
+        };
+      });
     return [...boundaries, ...nodes];
-  }, [activeScenario?.id, focusedId, layout.result, mode, scenarioNodeIds]);
+  }, [
+    activeScenario?.id,
+    focusedId,
+    layout.result,
+    mode,
+    scenarioEndId,
+    scenarioNodeIds,
+    scenarioStartId,
+  ]);
 
   const visibleEdges = useMemo<ArchitectureFlowEdge[]>(() => {
     if (!layout.result) return [];
     return layout.result.edges
       .filter(item => item.edge.modes.includes(mode))
-      .map(item => ({
-        id: item.edge.id,
-        type: "architectureEdge",
-        source: item.edge.source.node_id,
-        sourceHandle: item.edge.source.port_id,
-        target: item.edge.target.node_id,
-        targetHandle: item.edge.target.port_id,
-        data: {
-          edge: item.edge,
-          path: item.path,
-          routePoints: item.points.length,
-          scenario: scenarioEdgeIds.has(item.edge.id),
-          scenarioId: activeScenario?.id ?? null,
-          scenarioPathIdentity: item.edge.id === scenarioPathIdentity,
-        },
-        ariaLabel: `${item.edge.type} ${item.edge.id}`,
-        focusable: false,
-        selectable: true,
-      }));
+      .map(item => {
+        const scenario = scenarioEdgeIds.has(item.edge.id);
+        return {
+          id: item.edge.id,
+          type: "architectureEdge",
+          source: item.edge.source.node_id,
+          sourceHandle: item.edge.source.port_id,
+          target: item.edge.target.node_id,
+          targetHandle: item.edge.target.port_id,
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: scenario ? SCENARIO_EDGE_COLOR : EDGE_COLORS[item.edge.type],
+            width: 14,
+            height: 14,
+          },
+          data: {
+            edge: item.edge,
+            path: item.path,
+            routePoints: item.points.length,
+            scenario,
+            scenarioId: activeScenario?.id ?? null,
+            scenarioPathIdentity: item.edge.id === scenarioPathIdentity,
+          },
+          ariaLabel: `${item.edge.type} ${item.edge.id}`,
+          focusable: false,
+          selectable: true,
+        };
+      });
   }, [activeScenario?.id, layout.result, mode, scenarioEdgeIds, scenarioPathIdentity]);
+
+  const presentedComponentIds = useMemo(() => {
+    if (!parsed) return [];
+    const annotationTargets = new Set(parsed.annotation_targets);
+    const candidates = [activeScenario?.component_id];
+    if (layout.status === "ready" && layout.result) {
+      candidates.push(
+        ...layout.result.boundaries.map(item => item.boundary.component_id),
+        ...layout.result.nodes
+          .filter(item => item.node.modes.includes(mode))
+          .map(item => item.node.component_id),
+        ...layout.result.edges
+          .filter(item => item.edge.modes.includes(mode))
+          .map(item => item.edge.component_id),
+      );
+    }
+    return [...new Set(candidates.filter(
+      (id): id is string => typeof id === "string" && annotationTargets.has(id),
+    ))].sort();
+  }, [activeScenario?.component_id, layout.result, layout.status, mode, parsed]);
+
+  useEffect(() => {
+    onPresentedComponentIdsChange?.(presentedComponentIds);
+  }, [onPresentedComponentIdsChange, presentedComponentIds]);
+
   if (!parsed) {
     return <p className="workspace-error" role="alert">Architecture Workspace content is invalid.</p>;
   }
@@ -214,6 +365,8 @@ export function ArchitectureCanvas({ content }: ArchitectureCanvasProps) {
   const boundaryById = new Map(parsed.ownership_boundaries.map(boundary => [boundary.id, boundary]));
   const focusedNode = focusedId ? nodeById.get(focusedId) : undefined;
   const focusedBoundary = focusedId ? boundaryById.get(focusedId) : undefined;
+  const scenarioStartLabel = scenarioStartId ? nodeById.get(scenarioStartId)?.label ?? scenarioStartId : "Unavailable";
+  const scenarioEndLabel = scenarioEndId ? nodeById.get(scenarioEndId)?.label ?? scenarioEndId : "Unavailable";
 
   const selectMode = (nextMode: ArchitectureMode): void => {
     setMode(nextMode);
@@ -266,6 +419,11 @@ export function ArchitectureCanvas({ content }: ArchitectureCanvasProps) {
     }
   };
 
+  const commitViewportHeight = (value: number): void => {
+    userSizedViewport.current = true;
+    storeViewportHeight(value);
+  };
+
   return (
     <section
       className="architecture-canvas"
@@ -316,6 +474,21 @@ export function ArchitectureCanvas({ content }: ArchitectureCanvasProps) {
             ))}
           </select>
         </label>
+        <div
+          aria-label="Scenario Path start and end"
+          className="architecture-scenario-direction"
+          role="group"
+        >
+          <span data-scenario-start-id={scenarioStartId ?? undefined}>
+            <strong>Start</strong>
+            <span title={scenarioStartLabel}>{scenarioStartLabel}</span>
+          </span>
+          <ArrowRight aria-hidden="true" size={16} />
+          <span data-scenario-end-id={scenarioEndId ?? undefined}>
+            <strong>End</strong>
+            <span title={scenarioEndLabel}>{scenarioEndLabel}</span>
+          </span>
+        </div>
         <div aria-label="Camera controls" className="architecture-camera-controls" data-camera-controls="" role="toolbar">
           <button onClick={() => void flow?.zoomIn({ duration: 0 })} title="Zoom in" type="button">
             <Plus aria-hidden="true" size={17} />
@@ -352,58 +525,74 @@ export function ArchitectureCanvas({ content }: ArchitectureCanvasProps) {
       </div>
 
       <div className="architecture-stage">
-        <div
-          aria-label="Architecture topology viewport"
-          className="architecture-viewport"
-          data-architecture-viewport=""
-          data-mode={mode}
-          id="architecture-topology"
-          onKeyDown={handleGraphKeys}
-          role="region"
-          tabIndex={0}
-        >
-          {layout.status === "loading" ? (
-            <div className="architecture-layout-message" role="status">Computing topology layout...</div>
-          ) : layout.status === "error" ? (
-            <div className="architecture-layout-message" role="alert">{layout.error}</div>
-          ) : (
-            <ReactFlow<ArchitectureCanvasNode, ArchitectureFlowEdge>
-              aria-label="Architecture topology graph"
-              edges={visibleEdges}
-              edgeTypes={EDGE_TYPES}
-              edgesFocusable={false}
-              elementsSelectable
-              maxZoom={parsed.camera.max_zoom}
-              minZoom={parsed.camera.min_zoom}
-              nodeTypes={NODE_TYPES}
-              nodes={visibleNodes}
-              nodesConnectable={false}
-              nodesDraggable={false}
-              nodesFocusable={false}
-              onEdgeClick={(_, edge) => setFocusedId(edge.id)}
-              onInit={setFlow}
-              onNodeClick={(_, node) => setFocusedId(node.id)}
-              onlyRenderVisibleElements={false}
-              panOnDrag
-              preventScrolling
-              proOptions={{ hideAttribution: true }}
-              zoomOnDoubleClick={false}
-            >
-              <Background color="#cbd4dd" gap={28} size={1} variant={BackgroundVariant.Dots} />
-              <div className="architecture-minimap-shell" data-architecture-minimap="">
-                <MiniMap
-                  ariaLabel="Architecture minimap"
-                  bgColor="#f7f9fb"
-                  maskColor="rgba(25, 35, 45, 0.14)"
-                  nodeColor="#6f8294"
-                  nodeStrokeColor="#31465a"
-                  nodeStrokeWidth={1.5}
-                  pannable
-                  zoomable
-                />
-              </div>
-            </ReactFlow>
-          )}
+        <div className="architecture-viewport-stack">
+          <div
+            aria-label="Architecture topology viewport"
+            className="architecture-viewport"
+            data-architecture-viewport=""
+            data-mode={mode}
+            id="architecture-topology"
+            onKeyDown={handleGraphKeys}
+            role="region"
+            style={{ height: viewportHeight }}
+            tabIndex={0}
+          >
+            {layout.status === "loading" ? (
+              <div className="architecture-layout-message" role="status">Computing topology layout...</div>
+            ) : layout.status === "error" ? (
+              <div className="architecture-layout-message" role="alert">{layout.error}</div>
+            ) : (
+              <ReactFlow<ArchitectureCanvasNode, ArchitectureFlowEdge>
+                aria-label="Architecture topology graph"
+                edges={visibleEdges}
+                edgeTypes={EDGE_TYPES}
+                edgesFocusable={false}
+                elementsSelectable
+                maxZoom={parsed.camera.max_zoom}
+                minZoom={parsed.camera.min_zoom}
+                nodeTypes={NODE_TYPES}
+                nodes={visibleNodes}
+                nodesConnectable={false}
+                nodesDraggable={false}
+                nodesFocusable={false}
+                onEdgeClick={(_, edge) => setFocusedId(edge.id)}
+                onInit={setFlow}
+                onNodeClick={(_, node) => setFocusedId(node.id)}
+                onlyRenderVisibleElements={false}
+                panOnDrag
+                preventScrolling
+                proOptions={{ hideAttribution: true }}
+                zoomOnDoubleClick={false}
+              >
+                <Background color="#cbd4dd" gap={28} size={1} variant={BackgroundVariant.Dots} />
+                <div className="architecture-minimap-shell" data-architecture-minimap="">
+                  <MiniMap
+                    ariaLabel="Architecture minimap"
+                    bgColor="#f7f9fb"
+                    maskColor="rgba(25, 35, 45, 0.14)"
+                    nodeColor="#6f8294"
+                    nodeStrokeColor="#31465a"
+                    nodeStrokeWidth={1.5}
+                    pannable
+                    zoomable
+                  />
+                </div>
+              </ReactFlow>
+            )}
+          </div>
+          <PaneSeparator
+            aria-controls="architecture-topology"
+            className="architecture-viewport-separator"
+            label="Architecture viewport height"
+            max={viewportBounds.max}
+            min={viewportBounds.min}
+            onChange={setViewportHeight}
+            onCommit={commitViewportHeight}
+            orientation="horizontal"
+            resizeSide="before"
+            value={viewportHeight}
+            valueText={`Architecture viewport ${Math.round(viewportHeight)} pixels high`}
+          />
         </div>
 
         <aside aria-label="Architecture inspector" className="architecture-inspector" data-architecture-inspector="">
@@ -432,7 +621,11 @@ export function ArchitectureCanvas({ content }: ArchitectureCanvasProps) {
             </>
           )}
           {activeScenario ? (
-            <div className="architecture-scenario-summary">
+            <div
+              className="architecture-scenario-summary"
+              data-brainstorm-id={activeScenario.component_id}
+              data-brainstorm-label={activeScenario.label}
+            >
               <Route aria-hidden="true" size={15} />
               <p><strong>{activeScenario.label}</strong>{activeScenario.description}</p>
             </div>

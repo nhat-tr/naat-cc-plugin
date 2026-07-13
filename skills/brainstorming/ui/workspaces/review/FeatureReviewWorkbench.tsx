@@ -7,7 +7,7 @@ import {
   ShieldCheck,
   XCircle,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { ReviewNavigator } from "./ReviewNavigator";
 import { SourceEvidencePanel } from "./SourceEvidencePanel";
@@ -145,6 +145,7 @@ interface ReviewContent {
 
 interface FeatureReviewWorkbenchProps {
   content: Record<string, unknown>;
+  onPresentedComponentIdsChange: (componentIds: string[]) => void;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -257,9 +258,17 @@ function LineageGroup({ items, kind }: { items: Array<Record<string, unknown>>; 
     <div className="review-lineage-list">
       {items.map(item => {
         const id = text(item.id);
+        const componentId = text(item.component_id);
+        const label = text(item.title, text(item.result, id));
         const attribute = kind === "decision" ? { "data-decision-record": id } : { "data-outcome-record": id };
         return (
-          <article {...attribute} className="review-lineage-item" key={id}>
+          <article
+            {...attribute}
+            className="review-lineage-item"
+            data-brainstorm-id={componentId || undefined}
+            data-brainstorm-label={label}
+            key={id}
+          >
             <strong>{id}</strong>
             <span>{text(item.title, text(item.result, statusText(item.status)))}</span>
             <span className="review-status-label">{titleCase(statusText(item.status ?? item.result))}</span>
@@ -346,8 +355,14 @@ function ReviewEvidencePanel({ content, selectedCriterionId, selectedSource }: {
             const status = text(obligation.status, "open");
             const exclusion = isRecord(obligation.exclusion) ? obligation.exclusion : null;
             const reviewer = exclusion ? text(exclusion.reviewer) : "";
+            const componentId = text(obligation.component_id);
             return (
-              <article data-quality-obligation={text(obligation.id)} key={text(obligation.id)}>
+              <article
+                data-brainstorm-id={componentId || undefined}
+                data-brainstorm-label={titleCase(text(obligation.quality))}
+                data-quality-obligation={text(obligation.id)}
+                key={text(obligation.id)}
+              >
                 <span>
                   <strong>{text(obligation.id)}</strong>
                   {titleCase(text(obligation.quality))}
@@ -364,7 +379,12 @@ function ReviewEvidencePanel({ content, selectedCriterionId, selectedSource }: {
         <div className="review-section-title"><AlertTriangle aria-hidden="true" size={15} /><h4>Findings</h4></div>
         <div className="review-finding-list">
           {content.findings.map(finding => (
-            <article data-finding={text(finding.id)} key={text(finding.id)}>
+            <article
+              data-brainstorm-id={text(finding.component_id) || undefined}
+              data-brainstorm-label={text(finding.title, text(finding.id))}
+              data-finding={text(finding.id)}
+              key={text(finding.id)}
+            >
               <span className="review-finding-icon"><AlertTriangle aria-hidden="true" size={15} /></span>
               <div><strong>{text(finding.title, text(finding.id))}</strong><p>{text(finding.detail, text(finding.summary))}</p></div>
               <span className={`review-status-label severity-${text(finding.severity, "medium")}`}>
@@ -417,7 +437,10 @@ function defaultSelection(
   return path ? { id: `file:${path}`, path } : null;
 }
 
-export function FeatureReviewWorkbench({ content }: FeatureReviewWorkbenchProps) {
+export function FeatureReviewWorkbench({
+  content,
+  onPresentedComponentIdsChange,
+}: FeatureReviewWorkbenchProps) {
   const parsed = reviewContent(content);
   const [selectedCriterionId, setSelectedCriterionId] = useState("");
   const [selection, setSelection] = useState<ReviewNavigationSelection | null>(null);
@@ -431,24 +454,47 @@ export function FeatureReviewWorkbench({ content }: FeatureReviewWorkbenchProps)
   const fileStates = useMemo(() => (
     parsed ? Object.fromEntries(parsed.patch_set_review.file_reviews.map(file => [file.path, file])) : {}
   ), [parsed]);
-  if (!parsed) return <p className="workspace-error" role="alert">Review Workspace content is invalid.</p>;
-
-  const acceptanceCriteria = parsed.canonical_spec.acceptance_criteria;
+  const acceptanceCriteria = parsed?.canonical_spec.acceptance_criteria ?? [];
   const activeCriterionId = acceptanceCriteria.some(item => item.id === selectedCriterionId)
     ? selectedCriterionId
     : acceptanceCriteria[0]?.id ?? "";
-  const validSelection = selection && (
+  const validSelection = parsed && selection && (
     selection.sourceIdentity
       ? sources.some(source => source.identity === selection.sourceIdentity)
       : parsed.patch_set_review.file_reviews.some(file => file.path === selection.path)
         || expectedFiles.includes(selection.path)
   ) ? selection : null;
-  const activeSelection = validSelection
-    ?? defaultSelection(sources, parsed.patch_set_review.file_reviews, expectedFiles);
+  const activeSelection = parsed
+    ? validSelection ?? defaultSelection(sources, parsed.patch_set_review.file_reviews, expectedFiles)
+    : null;
   const selectedSource = activeSelection?.sourceIdentity
     ? sources.find(source => source.identity === activeSelection.sourceIdentity) ?? null
     : null;
   const selectedPath = activeSelection?.path ?? "";
+  const presentedComponentIds = useMemo(() => {
+    if (!parsed) return [];
+    const activeCriterion = acceptanceCriteria.find(criterion => criterion.id === activeCriterionId);
+    const relevantSlices = parsed.review_slices.filter(slice => slice.acceptance_criteria.includes(activeCriterionId));
+    const governanceRecords = [
+      ...parsed.findings,
+      ...parsed.quality_contract.obligations,
+      ...parsed.decision_records,
+      ...parsed.outcomes,
+    ];
+    return unique([
+      activeCriterion?.component_id ?? "",
+      ...relevantSlices.map(slice => slice.component_id),
+      selectedSource?.componentId ?? "",
+      ...governanceRecords.map(record => text(record.component_id)),
+    ].filter(id => id.length > 0));
+  }, [acceptanceCriteria, activeCriterionId, parsed, selectedSource]);
+
+  useEffect(() => {
+    onPresentedComponentIdsChange(presentedComponentIds);
+  }, [onPresentedComponentIdsChange, presentedComponentIds]);
+
+  if (!parsed) return <p className="workspace-error" role="alert">Review Workspace content is invalid.</p>;
+
   const verdict = parsed.patch_set_review.whole_feature_verdict;
   const verdictText = verdict?.verdict ?? "open";
   const changedFileCount = parsed.patch_set_review.file_reviews.length;

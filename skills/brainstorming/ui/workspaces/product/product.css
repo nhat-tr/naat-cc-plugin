@@ -577,85 +577,85 @@
   line-height: var(--vc-leading-body);
 }
 
+.product-concept-wall[data-layout="mobile-three-up"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--vc-space-1);
+}
+
+.product-concept-wall[data-layout="mobile-three-up"] .product-concept {
+  grid-template-rows: auto minmax(5rem, 1fr) auto;
+  gap: var(--vc-space-2);
+  min-height: 12rem;
+  padding: var(--vc-space-2);
+}
+
+.product-concept-wall[data-layout="mobile-three-up"] .product-concept-heading {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--vc-space-1);
+}
+
+.product-concept-wall[data-layout="mobile-three-up"] .product-concept-slot,
+.product-concept-wall[data-layout="mobile-three-up"] .product-concept-heading p,
+.product-concept-wall[data-layout="mobile-three-up"] .product-concept-title-long,
+.product-concept-wall[data-layout="mobile-three-up"] .product-prototype-device span,
+.product-concept-wall[data-layout="mobile-three-up"] .product-prototype-state,
+.product-concept-wall[data-layout="mobile-three-up"] .product-prototype-titlebar strong,
+.product-concept-wall[data-layout="mobile-three-up"] .product-prototype-region h4,
+.product-concept-wall[data-layout="mobile-three-up"] .product-prototype-region ul,
+.product-concept-wall[data-layout="mobile-three-up"] .product-prototype-action span,
+.product-concept-wall[data-layout="mobile-three-up"] .product-inspect-button span {
+  display: none;
+}
+
+.product-concept-wall[data-layout="mobile-three-up"] .product-concept-title-short {
+  display: inline;
+}
+
+.product-concept-wall[data-layout="mobile-three-up"] .product-concept-heading h3 {
+  font-size: var(--vc-font-size-xs);
+  text-align: center;
+}
+
+.product-concept-wall[data-layout="mobile-three-up"] .product-prototype-bar {
+  justify-content: center;
+  padding-inline: var(--vc-space-1);
+}
+
+.product-concept-wall[data-layout="mobile-three-up"] .product-prototype-surface {
+  gap: var(--vc-space-1);
+  padding: var(--vc-space-1);
+}
+
+.product-concept-wall[data-layout="mobile-three-up"] .product-prototype-titlebar {
+  justify-content: center;
+}
+
+.product-concept-wall[data-layout="mobile-three-up"] .product-prototype-regions {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.product-concept-wall[data-layout="mobile-three-up"] .product-prototype-region {
+  min-height: 2.25rem;
+  padding: 0;
+}
+
+.product-concept-wall[data-layout="mobile-three-up"] .product-prototype-action {
+  min-height: 0.625rem;
+  border-radius: var(--vc-radius-xs);
+  background: var(--vc-accent);
+}
+
+.product-concept-wall[data-layout="mobile-three-up"] .product-inspect-button {
+  width: 100%;
+  padding-inline: var(--vc-space-1);
+}
+
+.product-compare[data-layout="mobile-three-up"] .product-difference-lens {
+  display: none;
+}
+
 @media (max-width: 620px) {
-  .product-concept-wall[data-layout="mobile-three-up"] {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--vc-space-1);
-  }
-
-  .product-concept-wall[data-layout="mobile-three-up"] .product-concept {
-    grid-template-rows: auto minmax(5rem, 1fr) auto;
-    gap: var(--vc-space-2);
-    min-height: 12rem;
-    padding: var(--vc-space-2);
-  }
-
-  .product-concept-wall[data-layout="mobile-three-up"] .product-concept-heading {
-    grid-template-columns: minmax(0, 1fr);
-    gap: var(--vc-space-1);
-  }
-
-  .product-concept-wall[data-layout="mobile-three-up"] .product-concept-slot,
-  .product-concept-wall[data-layout="mobile-three-up"] .product-concept-heading p,
-  .product-concept-wall[data-layout="mobile-three-up"] .product-concept-title-long,
-  .product-concept-wall[data-layout="mobile-three-up"] .product-prototype-device span,
-  .product-concept-wall[data-layout="mobile-three-up"] .product-prototype-state,
-  .product-concept-wall[data-layout="mobile-three-up"] .product-prototype-titlebar strong,
-  .product-concept-wall[data-layout="mobile-three-up"] .product-prototype-region h4,
-  .product-concept-wall[data-layout="mobile-three-up"] .product-prototype-region ul,
-  .product-concept-wall[data-layout="mobile-three-up"] .product-prototype-action span,
-  .product-concept-wall[data-layout="mobile-three-up"] .product-inspect-button span {
-    display: none;
-  }
-
-  .product-concept-wall[data-layout="mobile-three-up"] .product-concept-title-short {
-    display: inline;
-  }
-
-  .product-concept-wall[data-layout="mobile-three-up"] .product-concept-heading h3 {
-    font-size: var(--vc-font-size-xs);
-    text-align: center;
-  }
-
-  .product-concept-wall[data-layout="mobile-three-up"] .product-prototype-bar {
-    justify-content: center;
-    padding-inline: var(--vc-space-1);
-  }
-
-  .product-concept-wall[data-layout="mobile-three-up"] .product-prototype-surface {
-    gap: var(--vc-space-1);
-    padding: var(--vc-space-1);
-  }
-
-  .product-concept-wall[data-layout="mobile-three-up"] .product-prototype-titlebar {
-    justify-content: center;
-  }
-
-  .product-concept-wall[data-layout="mobile-three-up"] .product-prototype-regions {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 2px;
-  }
-
-  .product-concept-wall[data-layout="mobile-three-up"] .product-prototype-region {
-    min-height: 2.25rem;
-    padding: 0;
-  }
-
-  .product-concept-wall[data-layout="mobile-three-up"] .product-prototype-action {
-    min-height: 0.625rem;
-    border-radius: var(--vc-radius-xs);
-    background: var(--vc-accent);
-  }
-
-  .product-concept-wall[data-layout="mobile-three-up"] .product-inspect-button {
-    width: 100%;
-    padding-inline: var(--vc-space-1);
-  }
-
-  .product-difference-lens {
-    display: none;
-  }
-
   .product-choice-options,
   .product-focus-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -689,6 +689,27 @@
 
   .product-responsive-preview .product-prototype-region {
     min-height: auto;
+  }
+}
+
+@container workspace-canvas (max-width: 620px) {
+  .product-choice-options,
+  .product-focus-grid,
+  .product-focus-heading {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .product-back-button {
+    width: 100%;
+  }
+
+  .product-focus-states,
+  .product-focus-responsive {
+    grid-column: 1;
+  }
+
+  .product-responsive-preview .product-prototype-regions {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

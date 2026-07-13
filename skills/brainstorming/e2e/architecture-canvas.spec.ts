@@ -18,6 +18,7 @@ type ArchitectureMode = "current" | "proposed";
 
 interface ArchitectureNodeFixture {
   id: string;
+  label: string;
   modes: ArchitectureMode[];
   ports: Array<{ direction: "input" | "output" }>;
 }
@@ -27,11 +28,20 @@ interface ArchitectureEdgeFixture {
   modes: ArchitectureMode[];
 }
 
+interface ArchitectureScenarioFixture {
+  id: string;
+  paths: Record<ArchitectureMode, {
+    edge_ids: string[];
+    node_ids: string[];
+  }>;
+}
+
 interface ArchitectureDocumentFixture extends Record<string, unknown> {
   content: {
     nodes: ArchitectureNodeFixture[];
     edges: ArchitectureEdgeFixture[];
     ownership_boundaries: Array<{ id: string }>;
+    scenarios: ArchitectureScenarioFixture[];
   };
 }
 
@@ -196,6 +206,129 @@ test("architecture canvas keeps one exclusive viewport and shared node positions
   await proposed.click();
   const restoredPosition = await requiredBox(deliveryCore, "Delivery core after returning to Proposed");
   expectSamePosition(proposedPosition, restoredPosition);
+});
+
+test("architecture canvas renders a directed arrow marker for every visible edge", async ({ page }) => {
+  const viewport = page.locator("[data-architecture-viewport]");
+  const edgePaths = viewport.locator(".architecture-edge-path");
+
+  await expect(edgePaths).not.toHaveCount(0);
+  const markers = await edgePaths.evaluateAll(paths => (
+    paths.map(pathElement => pathElement.getAttribute("marker-end") ?? "")
+  ));
+  expect(markers.every(marker => /^url\(/u.test(marker)), "visible edges must render directed arrow markers").toBe(true);
+});
+
+test("architecture canvas shows active Scenario Path Start and End in both modes", async ({ page }) => {
+  const fixture = architectureFixture();
+  const scenarioFixture = fixture.content.scenarios[0]!;
+  const viewport = page.locator("[data-architecture-viewport]");
+  const scenario = page.getByRole("combobox", { name: "Scenario" });
+
+  const expectPathDirection = async (mode: ArchitectureMode): Promise<void> => {
+    const path = scenarioFixture.paths[mode];
+    const startId = path.node_ids[0]!;
+    const endId = path.node_ids.at(-1)!;
+    const startLabel = fixture.content.nodes.find(node => node.id === startId)?.label;
+    const endLabel = fixture.content.nodes.find(node => node.id === endId)?.label;
+    const start = viewport.locator(
+      `[data-architecture-node][data-node-id="${startId}"][data-scenario-endpoint="start"]`,
+    );
+    const end = viewport.locator(
+      `[data-architecture-node][data-node-id="${endId}"][data-scenario-endpoint="end"]`,
+    );
+
+    await expect(viewport.locator('[data-scenario-endpoint="start"]')).toHaveCount(1);
+    await expect(viewport.locator('[data-scenario-endpoint="end"]')).toHaveCount(1);
+    await expect(start).toContainText("Start");
+    await expect(end).toContainText("End");
+    const direction = page.getByRole("group", { name: "Scenario Path start and end" });
+    await expect(direction.locator('[data-scenario-start-id]')).toHaveAttribute("data-scenario-start-id", startId);
+    await expect(direction.locator('[data-scenario-end-id]')).toHaveAttribute("data-scenario-end-id", endId);
+    await expect(direction.locator('[data-scenario-start-id]')).toContainText(`Start${startLabel}`);
+    await expect(direction.locator('[data-scenario-end-id]')).toContainText(`End${endLabel}`);
+  };
+
+  await scenario.selectOption(scenarioFixture.id);
+  await expectPathDirection("proposed");
+
+  await page.getByRole("tablist", { name: "Architecture state" })
+    .getByRole("tab", { name: "Current" })
+    .click();
+  await expect(viewport).toHaveAttribute("data-mode", "current");
+  await expectPathDirection("current");
+});
+
+test("architecture camera controls remain one four-button row", async ({ page }) => {
+  const controls = page.locator("[data-camera-controls]");
+
+  await expect(controls.getByRole("button")).toHaveCount(4);
+  const columns = await controls.evaluate(element => (
+    getComputedStyle(element).gridTemplateColumns.split(" ").filter(Boolean)
+  ));
+  expect(columns).toHaveLength(4);
+});
+
+test("architecture viewport separator resizes the graph height accessibly and persists", async ({ page }) => {
+  await page.setViewportSize({ width: 1_440, height: 900 });
+  const viewport = page.locator("[data-architecture-viewport]");
+  const flowRoot = viewport.locator(".react-flow");
+  const separator = page.getByRole("separator", { name: "Architecture viewport height" });
+
+  await expect(viewport).toHaveAttribute("data-mode", "proposed");
+  await expect(flowRoot).toBeVisible();
+  await expect(separator).toBeVisible();
+  await expect(separator).toHaveAttribute("aria-controls", "architecture-topology");
+  await expect(separator).toHaveAttribute("aria-orientation", "horizontal");
+  await expect(separator).toHaveAttribute("aria-valuemin", /^\d+$/u);
+  await expect(separator).toHaveAttribute("aria-valuemax", /^\d+$/u);
+  await expect(separator).toHaveAttribute("aria-valuenow", /^\d+$/u);
+  await expect(separator).toHaveAttribute("aria-valuetext", /Architecture viewport .* high/iu);
+
+  const beforeViewport = await requiredBox(viewport, "Architecture viewport before resizing");
+  const beforeFlow = await requiredBox(flowRoot, "React Flow root before resizing");
+  const beforeValue = Number(await separator.getAttribute("aria-valuenow"));
+  await separator.focus();
+  await expect(separator).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+
+  const resizedViewport = await requiredBox(viewport, "Architecture viewport after resizing");
+  const resizedFlow = await requiredBox(flowRoot, "React Flow root after resizing");
+  const resizedValue = Number(await separator.getAttribute("aria-valuenow"));
+  expect(resizedViewport.height).toBeGreaterThan(beforeViewport.height + 1);
+  expect(resizedFlow.height).toBeGreaterThan(beforeFlow.height + 1);
+  expect(Math.abs(
+    (resizedViewport.height - beforeViewport.height) - (resizedFlow.height - beforeFlow.height),
+  )).toBeLessThanOrEqual(1);
+  expect(resizedValue).toBeGreaterThan(beforeValue);
+  const persistedHeight = resizedViewport.height;
+
+  await page.getByRole("tablist", { name: "Architecture state" })
+    .getByRole("tab", { name: "Current" })
+    .click();
+  await expect(viewport).toHaveAttribute("data-mode", "current");
+  const currentHeight = (await requiredBox(viewport, "Current Architecture viewport")).height;
+  expect(Math.abs(currentHeight - persistedHeight)).toBeLessThanOrEqual(1);
+
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Agent feedback delivery architecture" })).toBeVisible();
+  await expect(page.locator("[data-architecture-canvas]")).toHaveAttribute("data-layout-status", "ready");
+  const reloadedHeight = (await requiredBox(viewport, "Reloaded Architecture viewport")).height;
+  expect(Math.abs(reloadedHeight - persistedHeight)).toBeLessThanOrEqual(1);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(separator).toBeVisible();
+  const mobileSeparator = await requiredBox(separator, "Mobile Architecture viewport separator");
+  expect(mobileSeparator.x).toBeGreaterThanOrEqual(0);
+  expect(mobileSeparator.x + mobileSeparator.width).toBeLessThanOrEqual(390);
+  const mobileBefore = await requiredBox(viewport, "Mobile Architecture viewport before resizing");
+  await separator.focus();
+  await page.keyboard.press("ArrowUp");
+  const mobileAfter = await requiredBox(viewport, "Mobile Architecture viewport after resizing");
+  expect(mobileAfter.height).toBeLessThan(mobileBefore.height - 1);
+  await expect(separator).toBeFocused();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
 });
 
 test("architecture canvas supports scenario, camera, focus, and annotation workflows", async ({ page }) => {

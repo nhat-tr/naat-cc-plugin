@@ -154,6 +154,11 @@ test('scenario paths resolve in both modes and camera, focus, and annotation con
     assert.ok(scenarioPath.edge_ids.every(id => edgeIds.has(id)), `${mode} scenario edges must resolve`);
     assert.ok(scenarioPath.node_ids.every(id => content.nodes.find(node => node.id === id).modes.includes(mode)));
     assert.ok(scenarioPath.edge_ids.every(id => content.edges.find(edge => edge.id === id).modes.includes(mode)));
+    scenarioPath.edge_ids.forEach((edgeId, index) => {
+      const edge = content.edges.find(candidate => candidate.id === edgeId);
+      assert.equal(edge.source.node_id, scenarioPath.node_ids[index], `${mode} scenario edge source must follow node order`);
+      assert.equal(edge.target.node_id, scenarioPath.node_ids[index + 1], `${mode} scenario edge target must follow node order`);
+    });
   }
 
   assert.deepEqual(content.camera.controls, ['pan', 'zoom_in', 'zoom_out', 'fit_view', 'minimap']);
@@ -162,6 +167,49 @@ test('scenario paths resolve in both modes and camera, focus, and annotation con
   assert.ok(content.focus_targets.every(id => nodeIds.has(id) || boundaryIds.has(id)));
   assert.ok(content.annotation_targets.every(id => componentIds.has(id)));
   assert.ok(content.annotation_targets.some(id => edgeIds.has(id)), 'an edge must be annotatable');
+});
+
+test('runtime content rejects a Scenario Path that is not an ordered contiguous directed walk', () => {
+  const invalid = structuredClone(fixture().content);
+  const proposed = invalid.scenarios[0].paths.proposed;
+  [proposed.node_ids[1], proposed.node_ids[2]] = [proposed.node_ids[2], proposed.node_ids[1]];
+
+  assert.throws(
+    () => normalizeKnownWorkspaceContent(invalid, { workspace_kind: 'architecture' }),
+    /scenario.*(?:contiguous|connect|ordered|path)/i,
+  );
+});
+
+test('runtime content rejects unresolved edge ports and endpoint mode drift before layout', () => {
+  const unresolvedNode = structuredClone(fixture().content);
+  unresolvedNode.edges[0].source.node_id = 'missing-source';
+
+  const unresolvedPort = structuredClone(fixture().content);
+  unresolvedPort.edges[0].source.port_id = 'missing-output';
+
+  const incompatibleMode = structuredClone(fixture().content);
+  const proposedOnlyEdge = incompatibleMode.edges.find(edge => edge.id === 'edge-006');
+  proposedOnlyEdge.modes = ['current', 'proposed'];
+
+  const scenarioModeDrift = structuredClone(fixture().content);
+  scenarioModeDrift.edges.find(edge => edge.id === 'edge-001').modes = ['proposed'];
+
+  assert.throws(
+    () => normalizeKnownWorkspaceContent(unresolvedNode, { workspace_kind: 'architecture' }),
+    /edge.*source node.*resolve/i,
+  );
+  assert.throws(
+    () => normalizeKnownWorkspaceContent(unresolvedPort, { workspace_kind: 'architecture' }),
+    /edge.*source port.*output/i,
+  );
+  assert.throws(
+    () => normalizeKnownWorkspaceContent(incompatibleMode, { workspace_kind: 'architecture' }),
+    /edge.*mode.*endpoint nodes/i,
+  );
+  assert.throws(
+    () => normalizeKnownWorkspaceContent(scenarioModeDrift, { workspace_kind: 'architecture' }),
+    /scenario.*current.*path/i,
+  );
 });
 
 test('Architecture Workspace Kind schema validates the representative semantic graph contract', () => {

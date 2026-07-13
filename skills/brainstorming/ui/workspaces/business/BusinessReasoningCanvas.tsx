@@ -7,7 +7,7 @@ import {
   Target,
   UserRound,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 
 import type { EvidenceReference, WorkspaceComponent } from "../../app/WorkspaceHost";
 
@@ -44,6 +44,7 @@ interface BusinessReasoningCanvasProps {
   components: WorkspaceComponent[];
   content: Record<string, unknown>;
   evidenceRefs: EvidenceReference[];
+  onPresentedComponentIdsChange: (componentIds: string[]) => void;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -79,8 +80,18 @@ export function BusinessReasoningCanvas({
   components,
   content,
   evidenceRefs,
+  onPresentedComponentIdsChange,
 }: BusinessReasoningCanvasProps) {
   const parsed = businessContent(content);
+  const presentedComponentIds = useMemo(
+    () => parsed?.stages.map(stage => stage.component_id) ?? [],
+    [parsed],
+  );
+
+  useEffect(() => {
+    onPresentedComponentIdsChange(presentedComponentIds);
+  }, [onPresentedComponentIdsChange, presentedComponentIds]);
+
   if (!parsed) {
     return <p className="workspace-error" role="alert">Business Workspace content is invalid.</p>;
   }

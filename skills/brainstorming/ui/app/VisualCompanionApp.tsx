@@ -1,7 +1,16 @@
 import { Download, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+} from "react";
 
 import { FeedbackPanel, type FeedbackComponentOption, type PresentedFeedbackThread } from "../shared/FeedbackPanel";
+import { PaneSeparator } from "../shared/PaneSeparator";
 import {
   type FeedbackDraft,
   type FeedbackThread,
@@ -207,10 +216,63 @@ function safeStorageSet(kind: "localStorage" | "sessionStorage", key: string, va
   }
 }
 
+const WORKSPACE_SPLIT_BREAKPOINT = 980;
+const WORKSPACE_CANVAS_MIN = 320;
+const WORKSPACE_FEEDBACK_DEFAULT = 352;
+const WORKSPACE_FEEDBACK_MIN = 256;
+const WORKSPACE_SEPARATOR_WIDTH = 12;
+
+interface WorkspaceCanvasBounds {
+  defaultValue: number;
+  max: number;
+  min: number;
+}
+
+type WorkspaceStyle = CSSProperties & { "--workspace-canvas-width": string };
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function subscribeToViewportWidth(onChange: () => void): () => void {
+  globalThis.window?.addEventListener("resize", onChange);
+  return () => globalThis.window?.removeEventListener("resize", onChange);
+}
+
+function viewportWidthSnapshot(): number {
+  return globalThis.window?.innerWidth ?? 1_280;
+}
+
+function serverViewportWidthSnapshot(): number {
+  return 1_280;
+}
+
+function workspaceCanvasBounds(viewportWidth: number): WorkspaceCanvasBounds {
+  const max = Math.max(
+    WORKSPACE_CANVAS_MIN,
+    viewportWidth - WORKSPACE_FEEDBACK_MIN - WORKSPACE_SEPARATOR_WIDTH,
+  );
+  return {
+    defaultValue: clamp(
+      viewportWidth - WORKSPACE_FEEDBACK_DEFAULT - WORKSPACE_SEPARATOR_WIDTH,
+      WORKSPACE_CANVAS_MIN,
+      max,
+    ),
+    max,
+    min: WORKSPACE_CANVAS_MIN,
+  };
+}
+
 export function VisualCompanionApp() {
   const embedded = globalThis.window?.__BRAINSTORM_EMBEDDED__;
   const initialDocument = embedded ? asVisualDocument(embedded.screen) : null;
   const basePath = document.body.dataset.basePath || "/";
+  const viewportWidth = useSyncExternalStore(
+    subscribeToViewportWidth,
+    viewportWidthSnapshot,
+    serverViewportWidthSnapshot,
+  );
+  const canvasBounds = workspaceCanvasBounds(viewportWidth);
   const [documentValue, setDocumentValue] = useState<VisualDocument | null>(initialDocument);
   const [session, setSession] = useState<SessionSnapshot>(() => embedded ? asSessionSnapshot(embedded.session) : emptySessionSnapshot());
   const [activeFrameId, setActiveFrameId] = useState(() => initialDocument ? workspaceFrames(initialDocument)[0]?.id ?? "" : "");
@@ -226,6 +288,11 @@ export function VisualCompanionApp() {
     deliveredThrough: 0,
     acknowledgedThrough: 0,
   });
+  const [presentedComponents, setPresentedComponents] = useState<{ identity: string; ids: string[] }>({
+    identity: "",
+    ids: [],
+  });
+  const [workspaceCanvasWidth, setWorkspaceCanvasWidth] = useState(canvasBounds.defaultValue);
   const previousDocument = useRef<VisualDocument | null>(null);
 
   const identity = documentValue?.version === 2
@@ -233,11 +300,25 @@ export function VisualCompanionApp() {
     : `${location.origin}${basePath}`;
   const densityKey = `visual-density:${identity}`;
   const feedbackKey = `visual-feedback:${identity}`;
+  const workspaceSplitKey = `visual-workspace-split:${identity}`;
   const readOnly = embedded?.readOnly === true || (documentValue?.version === 2 && documentValue.read_only);
   const frames = documentValue ? workspaceFrames(documentValue) : [];
   const effectiveFrameId = frames.some(frame => frame.id === activeFrameId)
     ? activeFrameId
     : frames[0]?.id ?? "";
+  const presentationIdentity = documentValue?.version === 2
+    ? `${documentValue.revision}:${effectiveFrameId}`
+    : "";
+  const reportPresentedComponentIds = useCallback((componentIds: string[]): void => {
+    const ids = [...new Set(componentIds)];
+    setPresentedComponents(current => (
+      current.identity === presentationIdentity
+      && current.ids.length === ids.length
+      && current.ids.every((id, index) => id === ids[index])
+        ? current
+        : { identity: presentationIdentity, ids }
+    ));
+  }, [presentationIdentity]);
 
   const applyDocument = useCallback((next: VisualDocument): void => {
     setChanges(computeComponentChanges(previousDocument.current, next));
@@ -299,6 +380,14 @@ export function VisualCompanionApp() {
       setDraftState(normalizeFeedbackDraft());
     }
   }, [densityKey, feedbackKey]);
+
+  useEffect(() => {
+    const storedRatio = Number.parseFloat(safeStorageGet("localStorage", workspaceSplitKey) ?? "");
+    const restored = Number.isFinite(storedRatio) && storedRatio > 0 && storedRatio < 1
+      ? viewportWidth * storedRatio
+      : canvasBounds.defaultValue;
+    setWorkspaceCanvasWidth(clamp(restored, canvasBounds.min, canvasBounds.max));
+  }, [canvasBounds.defaultValue, canvasBounds.max, canvasBounds.min, viewportWidth, workspaceSplitKey]);
 
   useEffect(() => {
     const shortcut = (event: globalThis.KeyboardEvent): void => {
@@ -427,8 +516,13 @@ export function VisualCompanionApp() {
   const activeComponentIds = documentValue.version === 2
     ? new Set(documentValue.frames.find(frame => frame.id === effectiveFrameId)?.component_ids ?? [])
     : null;
+  const reportedComponentIds = embeddedLegacyDocument(documentValue)
+    ? activeComponentIds ?? new Set<string>()
+    : presentedComponents.identity === presentationIdentity
+      ? new Set(presentedComponents.ids)
+      : new Set<string>();
   const options = activeComponentIds
-    ? allOptions.filter(component => activeComponentIds.has(component.id))
+    ? allOptions.filter(component => activeComponentIds.has(component.id) && reportedComponentIds.has(component.id))
     : allOptions;
   const latestFeedbackSeq = session.events.reduce<number | null>((latest, event) => (
     event.type === "user.turn" && Number.isInteger(event.seq)
@@ -438,6 +532,22 @@ export function VisualCompanionApp() {
   const presentedDeliveryEvidence: DeliveryEvidence = {
     ...deliveryEvidence,
     durableSeq: deliveryEvidence.durableSeq ?? (deliveryEvidence.listening ? null : latestFeedbackSeq),
+  };
+  const desktopWorkspaceSplit = viewportWidth > WORKSPACE_SPLIT_BREAKPOINT;
+  const boundedCanvasWidth = Math.round(clamp(
+    workspaceCanvasWidth,
+    canvasBounds.min,
+    canvasBounds.max,
+  ));
+  const feedbackPanelWidth = Math.max(
+    WORKSPACE_FEEDBACK_MIN,
+    viewportWidth - boundedCanvasWidth - WORKSPACE_SEPARATOR_WIDTH,
+  );
+  const workspaceStyle: WorkspaceStyle = {
+    "--workspace-canvas-width": `${boundedCanvasWidth}px`,
+  };
+  const commitWorkspaceCanvasWidth = (value: number): void => {
+    safeStorageSet("localStorage", workspaceSplitKey, String(value / viewportWidth));
   };
 
   return (
@@ -467,8 +577,8 @@ export function VisualCompanionApp() {
         </div>
       </header>
 
-      <div className="workspace" data-density={density}>
-        <main aria-live="polite" className="workspace-canvas">
+      <div className="workspace" data-density={density} style={workspaceStyle}>
+        <main aria-live="polite" className="workspace-canvas" id="workspace-canvas">
           <WorkspaceHost
             activeFrameId={effectiveFrameId}
             changes={changes}
@@ -476,9 +586,25 @@ export function VisualCompanionApp() {
             documentValue={documentValue}
             onChoice={selectChoice}
             onFrameSelect={setActiveFrameId}
+            onPresentedComponentIdsChange={reportPresentedComponentIds}
             readOnly={Boolean(readOnly)}
           />
         </main>
+        {desktopWorkspaceSplit ? (
+          <PaneSeparator
+            aria-controls="workspace-canvas"
+            className="workspace-pane-separator"
+            label="Workspace canvas width"
+            max={canvasBounds.max}
+            min={canvasBounds.min}
+            onChange={setWorkspaceCanvasWidth}
+            onCommit={commitWorkspaceCanvasWidth}
+            orientation="vertical"
+            resizeSide="before"
+            value={boundedCanvasWidth}
+            valueText={`Workspace canvas ${boundedCanvasWidth} pixels; Feedback panel ${Math.round(feedbackPanelWidth)} pixels`}
+          />
+        ) : null}
         <FeedbackPanel
           components={options}
           deliveryState={deriveBrowserDeliveryState(presentedDeliveryEvidence)}

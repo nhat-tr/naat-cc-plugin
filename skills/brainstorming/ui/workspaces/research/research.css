@@ -299,3 +299,18 @@
     padding-inline: 0;
   }
 }
+
+@container workspace-canvas (max-width: 760px) {
+  .research-board-header,
+  .research-confidence-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .research-confidence-columns {
+    gap: var(--vc-space-5);
+  }
+
+  .research-confidence-column {
+    padding-inline: 0;
+  }
+}

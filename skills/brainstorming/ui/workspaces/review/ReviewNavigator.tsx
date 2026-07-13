@@ -319,6 +319,8 @@ export function ReviewNavigator({
             aria-labelledby={`review-ac-tab-${id}`}
             className="review-ac-panel"
             data-acceptance-criterion-panel={criterion.id}
+            data-brainstorm-id={criterion.component_id}
+            data-brainstorm-label={criterion.title}
             hidden={!selectedCriterion}
             id={`review-ac-panel-${id}`}
             key={criterion.id}
@@ -345,6 +347,8 @@ export function ReviewNavigator({
                         aria-posinset={groupIndex + 1}
                         aria-setsize={groups.length}
                         className="review-slice-row"
+                        data-brainstorm-id={group.slice?.component_id}
+                        data-brainstorm-label={group.slice?.title}
                         data-review-slice={group.slice?.task_id ?? "other"}
                         onClick={() => firstFile && onSelection(fileSelection(firstFile))}
                       >
