@@ -389,6 +389,13 @@
       "supported_runtimes": [
         "claude"
       ]
+    },
+    "agent.mech": {
+      "type": "agent",
+      "canonical_file": "agents/mech.md",
+      "supported_runtimes": [
+        "claude"
+      ]
     }
   }
 }

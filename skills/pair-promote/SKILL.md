@@ -123,6 +123,15 @@ Apply the deletion test to every proposed custom module. Reject pass-through wra
 
 Every task must serve at least one AC. Every AC must be covered. Do not add cleanup, extensibility, or infrastructure that the approved intent does not require.
 
+## Generate `.pair/verify.sh`
+
+If `.pair/verify.sh` is absent, generate it — the stop-gate's execution check depends on it; without it the gate is checkbox-trust only. Detect the repo and write a FAST script (unit-level only, NO e2e, target < 2 minutes, exit non-zero on failure), then `chmod +x` it:
+
+- `*.csproj`/`*.sln` -> `dotnet build` (or the repo's `dobq`) + `dotnet test --filter "TestCategory=UnitTest"` (match the repo's actual category convention; omit the filter only if the repo has none).
+- `package.json` + tsconfig -> `npx tsc --noEmit` + the repo's unit-test script (never the e2e/playwright script).
+
+Verify it runs and passes on the CURRENT (pre-implementation) tree — a verify script that fails before work starts would deadlock the gate.
+
 ## Validate and Challenge
 
 Run until clean:

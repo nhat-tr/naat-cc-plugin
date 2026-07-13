@@ -70,6 +70,20 @@ scratch="${CLAUDE_SCRATCH_DIR:-$HOME/.claude-scratch}/$(basename "$root")/pair-r
 mkdir -p "$scratch"
 plan_file="$root/.pair/plan.md"
 
+# --- Fix-cycle: prior BLOCKERs must be re-verified, not self-graded -----------
+# The doer checks Review-Fix boxes itself; without this, a hollow checkmark
+# would satisfy the gate. Re-raised findings get a distinct title suffix so
+# the plan-append dedup does not swallow them.
+fix_cycle_note=""
+if [[ -f "$root/.pair/review.json" ]]; then
+  prior_blockers=$(jq -r '[.findings[]? | select(.severity == "BLOCKER") | "- \(.title) (\(.file):\(.line // 0))"] | join("\n")' "$root/.pair/review.json" 2> /dev/null)
+  if [[ -n "$prior_blockers" ]]; then
+    fix_cycle_note="FIX-CYCLE: a previous review round raised these BLOCKERs:
+$prior_blockers
+FIRST verify each one is genuinely addressed — read the actual fix, do not trust checked boxes or Log claims. Any BLOCKER not truly resolved: re-raise it with the same title plus the suffix ' (unresolved from previous round)'."
+  fi
+fi
+
 if [[ "$PLAN_MODE" -eq 1 ]]; then
   # --- Plan-challenge mode: critique the plan itself, before any code ---------
   if [[ ! -f "$plan_file" ]]; then
@@ -83,6 +97,7 @@ if [[ "$PLAN_MODE" -eq 1 ]]; then
 
 The plan under challenge is: $plan_file
 $spec_note
+$fix_cycle_note
 
 Check, in order:
 - Intent alignment: every stream serves Purpose, respects every Rejection Criterion, and does not implement a Contrast.
@@ -126,6 +141,7 @@ prompt="You are an independent senior code reviewer. You did NOT write this chan
 Diff under review (base: $BASE, $diff_lines lines): read $diff_file
 $plan_note
 $eco_note
+$fix_cycle_note
 
 Rules:
 - Read the diff first; then open only the files needed to verify a suspicion (targeted reads, not whole-file sweeps).

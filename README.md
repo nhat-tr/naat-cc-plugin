@@ -80,9 +80,12 @@ Notes:
 
 | Agent | Model | Command | Purpose |
 |-------|-------|---------|---------|
-| az-pr-review | sonnet | `/az-pr-review` | Set up an Azure DevOps PR locally in a git worktree and prepare a focused review prompt |
+| az-pr-review | sonnet | `/az-pr-review` | Set up an Azure DevOps PR locally in a git worktree, then hand off to az-pr-reviewer |
+| az-pr-reviewer | opus | (spawned by az-pr-review) | Deep design review of a checked-out PR worktree in a fresh, unanchored context |
 | az-review-response | sonnet | `/az-review-response` | Fetch PR comment threads, give an overview, then draft evidence-backed responses per thread |
-| kibana-analyst | opus | `/kibana-logs` | Search Elasticsearch logs, quoting evidence verbatim with trace correlation guidance |
+| kibana-analyst | opus | `/kibana-logs` | Search Elasticsearch logs AND investigate production errors, quoting evidence verbatim |
+| pair-reviewer | opus | (delegate mid-session) | In-session pair-v2 reviewer: diff vs plan, writes .pair/review.*, BLOCKERs feed the stop-gate |
+| mech | haiku | (delegate by default) | Cheap mechanical worker: renames, repetitive edits, boilerplate, known commands — standalone briefs only |
 
 ### Claude Code Commands
 
@@ -150,10 +153,13 @@ scripts under `skills/pair-v2/scripts/`:
   session JSONLs, so a workflow change can be judged on evidence.
 - `pair-loop [interval] [--auto]` — one-command overnight loop: validates the
   plan, then launches a FRESH claude session (cheap fixed context per wakeup)
-  on sonnet/medium with `/loop <interval>` working `.pair/plan.md` (or
-  `.claude-loop.md`). Interval ticks ride out token-limit outages. `--auto`
-  uses permission-mode auto so an unattended run can never stall on an
-  approval prompt. Run it in a cmux/tmux pane and leave the pane open.
+  with `/loop <interval>` working `.pair/plan.md` (or `.claude-loop.md`);
+  model/effort picked interactively or via flags. Interval ticks ride out
+  token-limit outages, and a SUPERVISOR relaunches a fresh session if the
+  session dies while tasks remain (crash/quota-exit resilience + context
+  recycling; caps at `PAIR_LOOP_MAX_RESTARTS`, default 10). `--auto` uses
+  permission-mode auto so an unattended run can never stall on an approval
+  prompt. Run it in a cmux/tmux pane and leave the pane open.
 
 ##### How to run it (end to end)
 
@@ -204,16 +210,17 @@ scripts under `skills/pair-v2/scripts/`:
 
 ### Hooks
 
-`hooks/stop-gate.sh` is the Stop-hook completion gate installed by
-`install.sh` (via `hooks/hooks.json`). A `.pair/plan.md` gates only while a live
-Pair Loop owns `.pair/active-loop.json`; a dormant or crashed plan never blocks
-ordinary sessions. `.claude-loop.md` retains file-based activation. Unchecked
-`- [ ]` tasks, an active attempt, or a failing `.pair/verify.sh` can block the
-agent from ending its turn as "done". After the no-progress cap is exhausted,
-that Pair Loop run stays allowed to stop until task progress or a new run resets
-the gate. Opt out per-run with `PAIR_STOP_GATE=off` (legacy:
-`CLAUDE_STOP_GATE=off`); tune the default cap of 5 with
-`PAIR_STOP_GATE_MAX` (legacy: `CLAUDE_STOP_GATE_MAX`).
+Installed by `install.sh` via `hooks/hooks.json` — deterministic enforcement
+of rules that instructions alone under-deliver:
+
+| Hook | Event | Does |
+|------|-------|------|
+| `stop-gate.sh` | Stop | Blocks "done" while a plan has unchecked tasks or `.pair/verify.sh` fails. A `.pair/plan.md` gates only while a live Pair Loop owns `.pair/active-loop.json`; a dormant or crashed plan never blocks ordinary sessions. `.claude-loop.md` retains file-based activation. After the no-progress cap is exhausted, that Pair Loop run stays allowed to stop until task progress or a new run resets the gate. Opt-out `PAIR_STOP_GATE=off` (legacy `CLAUDE_STOP_GATE=off`); no-progress cap `PAIR_STOP_GATE_MAX` (legacy `CLAUDE_STOP_GATE_MAX`, default 5) |
+| `delegation-nudge.sh` | PostToolUse (edits) | Once per session at the 8th main-session edit, reminds the model to batch mechanical remainders into a subagent (mech/haiku, general-purpose/sonnet). Opt-out `CLAUDE_DELEGATION_NUDGE=off`; threshold `CLAUDE_DELEGATION_NUDGE_AT` |
+| `commit-guard.sh` | PreToolUse (git commit) | Blocks commits containing attribution trailers (Co-Authored-By / Generated with Claude) before they run |
+| `scratch-guard.sh` | PreToolUse (Write) | Blocks writes to raw `/tmp` and throwaway `tmp-*.spec/test.*` files in repo trees; points to `$CLAUDE_SCRATCH_DIR` |
+| `gate-orient.sh` | SessionStart (incl. post-compaction) | In gated repos, injects the plan status (done/open counts, next task, unresolved BLOCKERs) into every fresh context — silent elsewhere |
+| `await-notify.sh` | Notification | macOS notification when Claude needs attention (permission prompt, waiting for input). Opt-out `CLAUDE_AWAIT_NOTIFY=off` |
 
 ### Codex-Compatible Skills
 

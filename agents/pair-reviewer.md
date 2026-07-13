@@ -16,6 +16,11 @@ your value is independence; an editing reviewer is a second doer.
 
 ## Procedure
 
+0. **Fix-cycle first**: if `.pair/review.json` already exists, read its BLOCKER
+   findings and verify each one is genuinely addressed in the current code —
+   read the actual fix; never trust checked boxes or Log claims. Any BLOCKER
+   not truly resolved: re-raise it with the same title plus the suffix
+   " (unresolved from previous round)" so it lands as a fresh unchecked task.
 1. Resolve the diff base: `git rev-parse --abbrev-ref origin/HEAD`, falling back
    through origin/main, origin/master, main, master, HEAD. Run
    `git diff <base>` (working tree included).

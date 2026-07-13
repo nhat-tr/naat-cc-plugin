@@ -39,8 +39,13 @@ conversation. State lives in `.pair/` files; the Stop hook enforces completion.
    launches the whole efficient-loop recipe in one command (fresh session,
    sonnet/medium, interval wakeups that ride out token-limit outages; `--auto`
    prevents stalls on permission prompts).
-3. **Review**: at a stream boundary (or before commit), run:
-   `~/.local/share/my-claude-code/skills/pair-v2/scripts/pair-review`
+3. **Review — the DOER fires it, at every Review boundary**: when the last
+   task before a `**Review boundary**` marker is checked, the doer immediately
+   spawns the **pair-reviewer agent** (fresh context, opus, writes
+   `.pair/review.md`/`review.json`, appends BLOCKERs to the plan) — never wait
+   for a human to trigger it, including inside `/loop` runs. The human can
+   also fire it any time:
+   `~/.local/share/my-claude-code/skills/pair-v2/scripts/pair-review` (nvim `<leader>pv`)
    - Default: strong model (settings default), targeted file reads allowed.
    - `--eco`: diff-only on sonnet — use ONLY for S-complexity changes.
      Review is judgment work; do not downgrade the model to save tokens —
@@ -49,6 +54,18 @@ conversation. State lives in `.pair/` files; the Stop hook enforces completion.
    unchecked tasks — the stop-gate holds the doer until they are fixed.
    In nvim, `<leader>ni` imports findings as `[rv]` notes for triage;
    reply to a note with `@cc ...` to dispatch a question/instruction.
+   **Context hygiene**: once a stream's review is clean, `/clear` before
+   starting the next stream — it is free and lossless here (gate-orient
+   re-injects the plan status; the plan file carries everything else).
+   Prefer `/clear` at boundaries over `/compact` mid-stream; if you must
+   compact mid-task, steer it: `/compact keep: current task, files touched,
+   decisions, open questions`.
+   **Plan slimming**: at the same moment (stream reviewed clean), collapse
+   that stream's tasks into one line —
+   `- [x] Stream N: <name> — done, reviewed (detail: plan-archive.md)` —
+   and MOVE the task detail to `.pair/plan-archive.md`. The plan is re-read
+   every wakeup; slimming makes that read get cheaper as work progresses
+   instead of growing (a live plan hit 56KB ≈ 14k tokens per wakeup).
 5. **Done**: all boxes checked, verify passes, reviewer verdict `approve`.
 
 ## Rules for the doer agent

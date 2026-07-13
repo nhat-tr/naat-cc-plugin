@@ -42,6 +42,7 @@ command -v jq > /dev/null || {
 
 total_lines=0 interrupts=0 nudges=0 rejections=0 tmp_refs=0 scratch_refs=0
 compactions=0 gate_blocks=0 reviews=0 mode_default=0 mode_accept=0 mode_bypass=0 mode_plan=0
+delegations=0 manual_edits=0 delegation_nudges=0
 
 for f in "${FILES[@]}"; do
   [[ -s "$f" ]] || continue
@@ -58,6 +59,15 @@ for f in "${FILES[@]}"; do
     | @tsv' "$f" 2> /dev/null || echo "0	0")
   interrupts=$((interrupts + ${i:-0}))
   nudges=$((nudges + ${n:-0}))
+
+  # Delegation rate: subagent spawns vs main-session hand edits
+  read -r dg me < <(jq -rs '
+    [([.[] | select(.type == "assistant") | .message.content[]? | select(.type == "tool_use" and .name == "Agent")] | length),
+     ([.[] | select(.type == "assistant") | .message.content[]? | select(.type == "tool_use" and (.name == "Edit" or .name == "Write" or .name == "MultiEdit"))] | length)]
+    | @tsv' "$f" 2> /dev/null || echo "0	0")
+  delegations=$((delegations + ${dg:-0}))
+  manual_edits=$((manual_edits + ${me:-0}))
+  delegation_nudges=$((delegation_nudges + $(grep -c "Delegation check:" "$f" 2> /dev/null || true)))
 
   rejections=$((rejections + $(grep -c "user doesn't want to proceed" "$f" 2> /dev/null || true)))
   compactions=$((compactions + $(grep -c "continued from a previous conversation" "$f" 2> /dev/null || true)))
@@ -101,5 +111,8 @@ workflow-metrics — ${#FILES[@]} session(s), $total_lines lines
   scratch-dir tool refs       $scratch_refs
   stop-gate blocks            $gate_blocks
   pair-review runs            $reviews
+  subagent delegations        $delegations
+  main-session edits          $manual_edits
+  delegation nudges fired     $delegation_nudges
   permission modes            default=$mode_default acceptEdits=$mode_accept bypass=$mode_bypass plan=$mode_plan (elevated: $elevated_pct)
 EOF
