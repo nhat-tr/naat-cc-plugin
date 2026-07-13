@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Decision Record Input",
+  "type": "object",
+  "properties": {
+    "schema": { "const": 1 },
+    "id": { "$ref": "#/$defs/decision_record_id" },
+    "status": { "const": "accepted" },
+    "workId": { "$ref": "#/$defs/work_id" },
+    "title": { "$ref": "#/$defs/non_blank_text" },
+    "originSpec": { "$ref": "#/$defs/canonical_spec_path" },
+    "acceptanceCriteria": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/acceptance_criterion_id" },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "context": { "$ref": "#/$defs/non_blank_text" },
+    "decision": { "$ref": "#/$defs/non_blank_text" },
+    "rationale": { "$ref": "#/$defs/non_blank_text" },
+    "alternatives": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/non_blank_text" },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "consequences": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/non_blank_text" },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "evidence": { "$ref": "#/$defs/references" },
+    "changes": { "$ref": "#/$defs/references" },
+    "supersedes": { "$ref": "#/$defs/nullable_decision_record_id" },
+    "supersededBy": { "type": "null" }
+  },
+  "required": [
+    "schema",
+    "id",
+    "status",
+    "workId",
+    "title",
+    "originSpec",
+    "acceptanceCriteria",
+    "context",
+    "decision",
+    "rationale",
+    "alternatives",
+    "consequences",
+    "evidence",
+    "changes",
+    "supersedes",
+    "supersededBy"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "non_blank_text": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "work_id": {
+      "type": "string",
+      "pattern": "^work-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "canonical_spec_path": {
+      "type": "string",
+      "pattern": "^docs/work/work-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*/spec\\.md$"
+    },
+    "acceptance_criterion_id": {
+      "type": "string",
+      "pattern": "^AC-[1-9][0-9]*$"
+    },
+    "decision_record_id": {
+      "type": "string",
+      "pattern": "^DR-[0-9]{3}-[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "nullable_decision_record_id": {
+      "anyOf": [
+        { "$ref": "#/$defs/decision_record_id" },
+        { "type": "null" }
+      ]
+    },
+    "references": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/non_blank_text" },
+      "uniqueItems": true
+    }
+  }
+}

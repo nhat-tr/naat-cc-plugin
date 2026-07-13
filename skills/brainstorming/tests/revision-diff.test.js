@@ -64,12 +64,16 @@ test('removed components are reported with human labels, ancestors only', () => 
 
 test('the shell wires change flags, the removed strip, and keyboard shortcuts', () => {
   const app = fs.readFileSync(path.join(__dirname, '../assets/visual-shell/app.js'), 'utf8');
+  const hostSource = fs.readFileSync(path.join(__dirname, '../ui/app/WorkspaceHost.tsx'), 'utf8');
+  const appSource = fs.readFileSync(path.join(__dirname, '../ui/app/VisualCompanionApp.tsx'), 'utf8');
   const styles = fs.readFileSync(path.join(__dirname, '../assets/visual-shell/styles.css'), 'utf8');
   const shell = fs.readFileSync(path.join(__dirname, '../assets/visual-shell/index.html'), 'utf8');
   const cli = fs.readFileSync(path.join(__dirname, '../scripts/visual-session.cjs'), 'utf8');
   assert.match(app, /component-flag/);
   assert.match(styles, /\.flag-updated\b/);
-  assert.match(shell, /id="changes"/);
-  assert.match(app, /metaKey|ctrlKey/); // ⌘/Ctrl+Enter submits the batch
+  assert.match(shell, /id="visual-shell-root"/);
+  assert.match(hostSource, /changes-strip/);
+  assert.match(hostSource, /role="status"/);
+  assert.match(appSource, /metaKey|ctrlKey/); // Ctrl/Cmd+Enter submits the batch
   assert.match(cli, /async function wait[\s\S]{0,600}pending/); // wait reports queued batches like drain
 });

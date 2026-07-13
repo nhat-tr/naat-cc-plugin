@@ -43,33 +43,33 @@ function renderPathInstruction(templateName) {
 
 function renderRuntimeSupportTable(manifest) {
   const assets = getAssetEntries(manifest);
-  const byRuntime = {
-    claude: new Set(),
-    codex: new Set(),
-    copilot: new Set(),
-  };
+  const byRuntime = Object.fromEntries(
+    Object.keys(manifest.runtimes).map(runtime => [runtime, new Set()]),
+  );
 
   for (const asset of assets) {
     for (const runtime of asset.supported_runtimes || []) {
+      if (!byRuntime[runtime]) throw new Error(`Asset declares unknown runtime: ${runtime}`);
       byRuntime[runtime].add(asset.type);
     }
   }
 
-  const describe = {
-    claude: 'Commands, agents, skills, CLI wrappers',
-    codex: 'Compatible skills, generated global AGENTS',
-    copilot: 'Repo instructions, path instructions, compatible skills',
-  };
+  const supportedAssets = runtime => [...byRuntime[runtime]]
+    .sort()
+    .map(type => `\`${type}\``)
+    .join(', ');
+
+  const rows = Object.entries(manifest.runtimes).map(([runtime, definition]) => (
+    `| ${definition.display_name} | ${supportedAssets(runtime)} |`
+  ));
 
   return [
     '## Runtime Support',
     '',
     '<!-- BEGIN GENERATED:runtime-support -->',
-    '| Runtime | Supported Assets |',
-    '|--------|-------------------|',
-    `| ${manifest.runtimes.claude.display_name} | ${describe.claude} |`,
-    `| ${manifest.runtimes.codex.display_name} | ${describe.codex} |`,
-    `| ${manifest.runtimes.copilot.display_name} | ${describe.copilot} |`,
+    '| Runtime | Supported Asset Types |',
+    '|--------|-----------------------|',
+    ...rows,
     '<!-- END GENERATED:runtime-support -->',
     '',
     'Runtime/asset mapping source of truth:',

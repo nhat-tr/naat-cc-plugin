@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "visual-companion-channel": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/skills/brainstorming/scripts/claude-channel-server.mjs"
+      ]
+    }
+  }
+}

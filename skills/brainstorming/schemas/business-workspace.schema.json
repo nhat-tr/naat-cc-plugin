@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nhat.dev/schemas/brainstorming/business-workspace.schema.json",
+  "title": "Business Reasoning Canvas content",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["actors", "outcomes", "stages"],
+  "properties": {
+    "journey_spine": { "type": "boolean" },
+    "actors": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": { "$ref": "#/$defs/namedEntity" }
+    },
+    "outcomes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": { "$ref": "#/$defs/namedEntity" }
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/stage" }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "evidenceIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^EVD-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$"
+    },
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "namedEntity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "$ref": "#/$defs/nonEmptyText" }
+      }
+    },
+    "reasoningItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "label"],
+      "properties": {
+        "kind": { "enum": ["assumption", "economics", "risk", "experiment", "outcome", "evidence"] },
+        "label": { "$ref": "#/$defs/nonEmptyText" },
+        "source_ref": { "$ref": "#/$defs/evidenceIdentifier" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "kind": { "const": "evidence" } },
+            "required": ["kind"]
+          },
+          "then": {
+            "properties": {
+              "source_ref": { "$ref": "#/$defs/evidenceIdentifier" }
+            },
+            "required": ["source_ref"]
+          }
+        }
+      ]
+    },
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component_id", "items"],
+      "properties": {
+        "component_id": { "$ref": "#/$defs/identifier" },
+        "tone": { "enum": ["neutral", "accent", "positive", "warning", "critical"] },
+        "actor_id": { "$ref": "#/$defs/identifier" },
+        "outcome_id": { "$ref": "#/$defs/identifier" },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": { "$ref": "#/$defs/reasoningItem" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,132 @@
+{
+  "version": 2,
+  "work_id": "work-20260712-visual-companion-vnext",
+  "workspace_kind": "business",
+  "title": "Business Reasoning Canvas",
+  "evidence_refs": [
+    {
+      "id": "EVD-trial",
+      "label": "Concierge trial results"
+    },
+    {
+      "id": "EVD-retention",
+      "label": "Retention cohort analysis"
+    }
+  ],
+  "revision": "3676c060",
+  "frames": [
+    {
+      "id": "journey",
+      "title": "Actor journey",
+      "component_ids": [
+        "stage-discover",
+        "stage-evaluate",
+        "stage-adopt"
+      ]
+    }
+  ],
+  "components": [
+    {
+      "id": "stage-discover",
+      "frame_id": "journey",
+      "label": "Discover"
+    },
+    {
+      "id": "stage-evaluate",
+      "frame_id": "journey",
+      "label": "Evaluate"
+    },
+    {
+      "id": "stage-adopt",
+      "frame_id": "journey",
+      "label": "Adopt"
+    }
+  ],
+  "decisions": [],
+  "feedback_threads": [
+    {
+      "id": "thread-evaluate-economics",
+      "component_id": "stage-evaluate",
+      "revision": "cd89b9a8",
+      "type": "annotation",
+      "status": "open",
+      "comment": "Quantify the switching cost the value must exceed.",
+      "replies": []
+    }
+  ],
+  "content": {
+    "journey_spine": true,
+    "actors": [
+      {
+        "id": "buyer",
+        "label": "Procurement lead"
+      },
+      {
+        "id": "admin",
+        "label": "Workshop administrator"
+      }
+    ],
+    "outcomes": [
+      {
+        "id": "time-to-value",
+        "label": "Faster time-to-value"
+      },
+      {
+        "id": "repeat-value",
+        "label": "Repeatable value"
+      }
+    ],
+    "stages": [
+      {
+        "component_id": "stage-discover",
+        "tone": "neutral",
+        "actor_id": "buyer",
+        "outcome_id": "time-to-value",
+        "items": [
+          {
+            "kind": "assumption",
+            "label": "The problem is frequent enough to matter"
+          },
+          {
+            "kind": "risk",
+            "label": "The current workaround may already be sufficient"
+          }
+        ]
+      },
+      {
+        "component_id": "stage-evaluate",
+        "tone": "accent",
+        "actor_id": "buyer",
+        "items": [
+          {
+            "kind": "economics",
+            "label": "Value must exceed the switching cost"
+          },
+          {
+            "kind": "experiment",
+            "label": "Concierge trial measures willingness to change",
+            "source_ref": "EVD-trial"
+          }
+        ]
+      },
+      {
+        "component_id": "stage-adopt",
+        "tone": "positive",
+        "actor_id": "admin",
+        "outcome_id": "repeat-value",
+        "items": [
+          {
+            "kind": "outcome",
+            "label": "Time-to-value is observable"
+          },
+          {
+            "kind": "evidence",
+            "label": "Retention tests whether the value repeats",
+            "source_ref": "EVD-retention"
+          }
+        ]
+      }
+    ]
+  },
+  "read_only": true
+}

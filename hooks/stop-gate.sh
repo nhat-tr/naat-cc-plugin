@@ -11,15 +11,30 @@
 # (unchecked count not decreasing) are capped at CLAUDE_STOP_GATE_MAX
 # (default 5) to prevent infinite loops on genuinely stuck work.
 #
-# Opt-out: CLAUDE_STOP_GATE=off
+# Opt-out: PAIR_STOP_GATE=off (legacy: CLAUDE_STOP_GATE=off)
 set -uo pipefail
 
-# Consume hook input (JSON on stdin) — not currently needed, but must be read.
-cat > /dev/null
+# Both Codex and Claude send JSON on stdin. Codex uses cwd; Claude commonly
+# provides CLAUDE_PROJECT_DIR in the environment.
+hook_input=$(cat)
 
-[[ "${CLAUDE_STOP_GATE:-on}" == "off" ]] && exit 0
+[[ "${PAIR_STOP_GATE:-on}" == "off" || "${CLAUDE_STOP_GATE:-on}" == "off" ]] && exit 0
 
-proj="${CLAUDE_PROJECT_DIR:-$PWD}"
+hook_cwd=""
+if command -v jq > /dev/null 2>&1 && [[ -n "$hook_input" ]]; then
+  hook_cwd=$(printf '%s' "$hook_input" | jq -r '.cwd // .project_dir // empty' 2> /dev/null || true)
+fi
+proj="${CLAUDE_PROJECT_DIR:-${hook_cwd:-$PWD}}"
+
+# pair-loop owns this file. If a coordinator turn tries to stop while an
+# attempt is in flight or survived a crash, force it to resolve the attempt.
+active_attempt="$proj/.pair/active-attempt.json"
+if [[ -f "$active_attempt" ]]; then
+  command -v jq > /dev/null 2>&1 || exit 0
+  task=$(jq -r '.taskId // "unknown"' "$active_attempt" 2> /dev/null || echo unknown)
+  jq -n --arg r "Pair attempt for task $task is still active. Resume pair-loop or classify/recover the attempt before stopping." '{decision: "block", reason: $r}'
+  exit 0
+fi
 
 gate=""
 for candidate in "$proj/.pair/plan.md" "$proj/.claude-loop.md"; do
@@ -34,7 +49,7 @@ command -v jq > /dev/null 2>&1 || exit 0 # cannot emit valid JSON without jq
 
 # State lives in the scratch dir (keyed by gate path) so gates never litter
 # project roots with untracked state files.
-state_dir="${CLAUDE_SCRATCH_DIR:-${TMPDIR:-/tmp}}/stop-gate"
+state_dir="${CLAUDE_SCRATCH_DIR:-$HOME/.claude-scratch}/stop-gate"
 mkdir -p "$state_dir"
 state_file="$state_dir/$(printf '%s' "$gate" | shasum | cut -c1-16)"
 
@@ -87,7 +102,7 @@ else
   iter=$((prev_iter + 1))
 fi
 
-max="${CLAUDE_STOP_GATE_MAX:-5}"
+max="${PAIR_STOP_GATE_MAX:-${CLAUDE_STOP_GATE_MAX:-5}}"
 if [[ "$iter" -gt "$max" ]]; then
   rm -f "$state_file"
   echo "stop-gate: $unchecked task(s) still unchecked in $gate but no progress after $max attempts — allowing stop" >&2

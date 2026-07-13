@@ -1,0 +1,343 @@
+{
+  "version": 2,
+  "work_id": "work-20260712-visual-companion-vnext",
+  "workspace_kind": "product",
+  "title": "Feedback review concepts",
+  "evidence_refs": [
+    {
+      "id": "EVD-001-design-direction-approval",
+      "label": "Approved device-aware triptych"
+    }
+  ],
+  "revision": "07320ec4",
+  "frames": [
+    {
+      "id": "compare",
+      "title": "Compare concepts",
+      "component_ids": [
+        "concept-a",
+        "concept-b",
+        "concept-c",
+        "difference-lens"
+      ]
+    },
+    {
+      "id": "focus",
+      "title": "Focused concept",
+      "component_ids": [
+        "focus-states",
+        "focus-responsive",
+        "focus-accessibility",
+        "focus-handoff"
+      ]
+    }
+  ],
+  "components": [
+    {
+      "id": "concept-a",
+      "frame_id": "compare",
+      "label": "Concept A · Command center"
+    },
+    {
+      "id": "concept-b",
+      "frame_id": "compare",
+      "label": "Concept B · Guided review"
+    },
+    {
+      "id": "concept-c",
+      "frame_id": "compare",
+      "label": "Concept C · Direct manipulation"
+    },
+    {
+      "id": "difference-lens",
+      "frame_id": "compare",
+      "label": "Concept difference lens"
+    },
+    {
+      "id": "focus-states",
+      "frame_id": "focus",
+      "label": "Interaction states"
+    },
+    {
+      "id": "focus-responsive",
+      "frame_id": "focus",
+      "label": "Responsive behavior"
+    },
+    {
+      "id": "focus-accessibility",
+      "frame_id": "focus",
+      "label": "Accessibility behavior"
+    },
+    {
+      "id": "focus-handoff",
+      "frame_id": "focus",
+      "label": "Implementation handoff"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "product-concept-choice",
+      "title": "Choose one product concept",
+      "multiselect": false,
+      "option_component_ids": [
+        "concept-a",
+        "concept-b",
+        "concept-c"
+      ]
+    }
+  ],
+  "feedback_threads": [],
+  "content": {
+    "layout_direction": {
+      "id": "device-aware-triptych",
+      "mobile": "three_up",
+      "desktop": "stacked_with_difference_lens",
+      "evidence_ref": "EVD-001-design-direction-approval"
+    },
+    "fixture": {
+      "id": "feedback-review-fixture",
+      "device": "responsive_web",
+      "scope": "Review and acknowledge one Feedback Batch",
+      "fidelity": "interaction_detailed",
+      "data": {
+        "work_title": "Visual Companion vNext",
+        "revision": "b0f64e58",
+        "pending_count": 3,
+        "feedback_batches": [
+          {
+            "id": "feedback-41",
+            "author": "Product reviewer",
+            "summary": "Keep the comparison equal before revealing a recommendation.",
+            "state": "queued"
+          },
+          {
+            "id": "feedback-42",
+            "author": "Accessibility reviewer",
+            "summary": "Expose focus order and state without relying on color.",
+            "state": "delivered"
+          },
+          {
+            "id": "feedback-43",
+            "author": "Frontend reviewer",
+            "summary": "Include responsive behavior in the implementation handoff.",
+            "state": "acknowledged"
+          }
+        ]
+      }
+    },
+    "recommendation": {
+      "concept_id": "concept-b",
+      "disclosure": "after_inspection_or_provisional_choice",
+      "rationale": [
+        "The guided review keeps the next decision explicit.",
+        "It carries the smallest context-switch cost on mobile."
+      ]
+    },
+    "concepts": [
+      {
+        "id": "concept-a",
+        "slot": "A",
+        "title": "Concept A · Command center",
+        "strategy": {
+          "id": "command-center",
+          "difference_kind": "information_architecture",
+          "summary": "A persistent queue, detail surface, and acknowledgement rail keep all context visible."
+        },
+        "preview": {
+          "primary_action": "Acknowledge selected Feedback Batch",
+          "regions": [
+            {
+              "id": "a-queue",
+              "label": "Feedback queue",
+              "role": "navigation",
+              "items": ["feedback-41", "feedback-42", "feedback-43"]
+            },
+            {
+              "id": "a-detail",
+              "label": "Selected Feedback Batch",
+              "role": "main",
+              "items": ["summary", "annotations", "choice"]
+            },
+            {
+              "id": "a-handoff",
+              "label": "Acknowledgement rail",
+              "role": "complementary",
+              "items": ["delivery-state", "reply"]
+            }
+          ]
+        },
+        "focus": {
+          "states": [
+            { "id": "default", "label": "Default", "detail": "Queue and selected Feedback Batch are available." },
+            { "id": "loading", "label": "Loading", "detail": "Keep the queue stable while detail evidence loads." },
+            { "id": "empty", "label": "Empty", "detail": "Explain that no Feedback Batch is pending." },
+            { "id": "error", "label": "Error", "detail": "Keep the Feedback Batch selected and offer retry." }
+          ],
+          "responsive": [
+            { "viewport": "mobile", "behavior": "Queue becomes a compact selector above the detail surface." },
+            { "viewport": "desktop", "behavior": "Queue, detail, and acknowledgement rail remain visible together." }
+          ],
+          "accessibility": {
+            "landmarks": ["Feedback queue", "Selected Feedback Batch", "Acknowledgement rail"],
+            "keyboard_order": ["Feedback queue", "Selected Feedback Batch", "Acknowledge"],
+            "announcements": ["Feedback Batch selection", "Delivery state"],
+            "reduced_motion": "State changes use no spatial transition."
+          },
+          "handoff": {
+            "component_boundaries": ["FeedbackQueue", "FeedbackDetail", "AcknowledgementRail"],
+            "data_contracts": ["FeedbackBatch", "Choice", "Reply"],
+            "events": ["feedback-selected", "feedback-acknowledged"],
+            "implementation_notes": ["Preserve queue selection while detail evidence refreshes."]
+          }
+        }
+      },
+      {
+        "id": "concept-b",
+        "slot": "B",
+        "title": "Concept B · Guided review",
+        "strategy": {
+          "id": "guided-review",
+          "difference_kind": "interaction_model",
+          "summary": "One focused step at a time moves from evidence to Choice to acknowledgement."
+        },
+        "preview": {
+          "primary_action": "Continue to Choice",
+          "regions": [
+            {
+              "id": "b-progress",
+              "label": "Review progress",
+              "role": "navigation",
+              "items": ["Evidence", "Choice", "Acknowledge"]
+            },
+            {
+              "id": "b-step",
+              "label": "Current review step",
+              "role": "main",
+              "items": ["feedback-41", "summary", "annotations"]
+            },
+            {
+              "id": "b-context",
+              "label": "Persistent context",
+              "role": "complementary",
+              "items": ["revision", "delivery-state"]
+            }
+          ]
+        },
+        "focus": {
+          "states": [
+            { "id": "default", "label": "Default", "detail": "Evidence step is ready for review." },
+            { "id": "loading", "label": "Loading", "detail": "Keep progress and context visible while the current step loads." },
+            { "id": "empty", "label": "Empty", "detail": "End the flow when no Feedback Batch remains." },
+            { "id": "error", "label": "Error", "detail": "Retry the current step without losing completed progress." }
+          ],
+          "responsive": [
+            { "viewport": "mobile", "behavior": "Progress condenses to labeled steps above one full-width task." },
+            { "viewport": "desktop", "behavior": "Current task stays centered with persistent context beside it." }
+          ],
+          "accessibility": {
+            "landmarks": ["Review progress", "Current review step", "Persistent context"],
+            "keyboard_order": ["Review progress", "Current review step", "Continue"],
+            "announcements": ["Review step", "Completed step", "Delivery state"],
+            "reduced_motion": "Step changes replace content without animated travel."
+          },
+          "handoff": {
+            "component_boundaries": ["ReviewProgress", "ReviewStep", "ReviewContext"],
+            "data_contracts": ["FeedbackBatch", "Choice", "Reply"],
+            "events": ["review-step-completed", "feedback-acknowledged"],
+            "implementation_notes": ["Persist completed steps when the current step is retried."]
+          }
+        }
+      },
+      {
+        "id": "concept-c",
+        "slot": "C",
+        "title": "Concept C · Direct manipulation",
+        "strategy": {
+          "id": "direct-manipulation",
+          "difference_kind": "interaction_model",
+          "summary": "Feedback targets stay on the visual canvas and are acted on in place."
+        },
+        "preview": {
+          "primary_action": "Acknowledge on selected target",
+          "regions": [
+            {
+              "id": "c-canvas",
+              "label": "Visual Document canvas",
+              "role": "main",
+              "items": ["concept-wall", "annotation-targets", "feedback-41"]
+            },
+            {
+              "id": "c-targets",
+              "label": "Target markers",
+              "role": "navigation",
+              "items": ["open", "resolved", "outdated"]
+            },
+            {
+              "id": "c-popover",
+              "label": "Target action surface",
+              "role": "complementary",
+              "items": ["summary", "choice", "acknowledge"]
+            }
+          ]
+        },
+        "focus": {
+          "states": [
+            { "id": "default", "label": "Default", "detail": "Feedback target markers are available on the canvas." },
+            { "id": "loading", "label": "Loading", "detail": "Keep target geometry stable while feedback details load." },
+            { "id": "empty", "label": "Empty", "detail": "Show the reviewed canvas without target markers." },
+            { "id": "error", "label": "Error", "detail": "Keep the target selected and retry its action surface." }
+          ],
+          "responsive": [
+            { "viewport": "mobile", "behavior": "Selected target details open as a bottom sheet over the canvas." },
+            { "viewport": "desktop", "behavior": "Selected target details stay anchored beside the target." }
+          ],
+          "accessibility": {
+            "landmarks": ["Visual Document canvas", "Target markers", "Target action surface"],
+            "keyboard_order": ["Target markers", "Selected target", "Acknowledge"],
+            "announcements": ["Selected target", "Thread state", "Delivery state"],
+            "reduced_motion": "Target selection uses an immediate outline and no zoom animation."
+          },
+          "handoff": {
+            "component_boundaries": ["VisualCanvas", "TargetMarkerList", "TargetActionSurface"],
+            "data_contracts": ["FeedbackBatch", "Annotation", "Choice", "Reply"],
+            "events": ["feedback-target-selected", "feedback-acknowledged"],
+            "implementation_notes": ["Mirror canvas target order in a keyboard-accessible marker list."]
+          }
+        }
+      }
+    ],
+    "difference_lens": {
+      "title": "What materially changes",
+      "dimensions": [
+        {
+          "id": "navigation",
+          "label": "Navigation",
+          "values": {
+            "concept-a": "Persistent queue",
+            "concept-b": "Sequential steps",
+            "concept-c": "Canvas targets"
+          }
+        },
+        {
+          "id": "context",
+          "label": "Context model",
+          "values": {
+            "concept-a": "Everything visible",
+            "concept-b": "Current task plus summary",
+            "concept-c": "Context anchored to target"
+          }
+        },
+        {
+          "id": "primary-action",
+          "label": "Primary action",
+          "values": {
+            "concept-a": "Acknowledgement rail",
+            "concept-b": "Continue to next step",
+            "concept-c": "Act on selected target"
+          }
+        }
+      ]
+    }
+  },
+  "read_only": false
+}

@@ -72,7 +72,7 @@ test('decision options accept points for claim-level scanning', () => {
 });
 
 test('the shell renders points as individually annotatable fragments', () => {
-  const app = fs.readFileSync(path.join(__dirname, '../assets/visual-shell/app.js'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, '../ui/app/WorkspaceHost.tsx'), 'utf8');
   const styles = fs.readFileSync(path.join(__dirname, '../assets/visual-shell/styles.css'), 'utf8');
   assert.match(app, /point-list/);
   assert.match(app, /-p\$\{|\-p' \+/); // derived per-point ids like <item-id>-p1

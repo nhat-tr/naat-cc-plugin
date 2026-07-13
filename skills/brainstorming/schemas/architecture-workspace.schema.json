@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nhat.dev/schemas/brainstorming/architecture-workspace.schema.json",
+  "title": "Architecture Canvas content",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "layout_direction",
+    "layout",
+    "initial_mode",
+    "ownership_boundaries",
+    "nodes",
+    "edges",
+    "scenarios",
+    "camera",
+    "focus_targets",
+    "annotation_targets"
+  ],
+  "properties": {
+    "layout_direction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "comparison", "evidence_ref"],
+      "properties": {
+        "id": { "const": "exclusive-view-modes" },
+        "comparison": { "const": "exclusive_view_modes" },
+        "evidence_ref": { "$ref": "#/$defs/evidenceIdentifier" }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "engine", "algorithm", "direction", "stable_across_modes"],
+      "properties": {
+        "contract_version": { "const": 1 },
+        "engine": { "const": "elk" },
+        "algorithm": { "const": "layered" },
+        "direction": { "const": "RIGHT" },
+        "stable_across_modes": { "const": true }
+      }
+    },
+    "initial_mode": { "$ref": "#/$defs/mode" },
+    "ownership_boundaries": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/ownershipBoundary" }
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2000,
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5000,
+      "items": { "$ref": "#/$defs/edge" }
+    },
+    "scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/scenario" }
+    },
+    "camera": { "$ref": "#/$defs/camera" },
+    "focus_targets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/identifier" }
+    },
+    "annotation_targets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 500,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/identifier" }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "evidenceIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^EVD-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$"
+    },
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "mode": {
+      "enum": ["current", "proposed"]
+    },
+    "modes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/mode" }
+    },
+    "ownershipBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "component_id", "label", "parent_id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "component_id": { "$ref": "#/$defs/identifier" },
+        "label": { "$ref": "#/$defs/nonEmptyText" },
+        "parent_id": {
+          "anyOf": [
+            { "$ref": "#/$defs/identifier" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "layoutHint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layer", "order"],
+      "properties": {
+        "layer": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "order": { "type": "integer", "minimum": 0, "maximum": 10000 }
+      }
+    },
+    "port": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "direction", "kind", "protocol"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "$ref": "#/$defs/nonEmptyText" },
+        "direction": { "enum": ["input", "output"] },
+        "kind": { "$ref": "#/$defs/nonEmptyText" },
+        "protocol": { "$ref": "#/$defs/nonEmptyText" }
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "component_id",
+        "type",
+        "label",
+        "owner_id",
+        "layout_hint",
+        "ports",
+        "modes",
+        "change"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "component_id": { "$ref": "#/$defs/identifier" },
+        "type": {
+          "enum": [
+            "adapter",
+            "artifact",
+            "data_store",
+            "external_system",
+            "interface",
+            "service",
+            "worker"
+          ]
+        },
+        "label": { "$ref": "#/$defs/nonEmptyText" },
+        "owner_id": { "$ref": "#/$defs/identifier" },
+        "layout_hint": { "$ref": "#/$defs/layoutHint" },
+        "ports": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/port" }
+        },
+        "modes": { "$ref": "#/$defs/modes" },
+        "change": { "enum": ["added", "modified", "removed", "unchanged"] }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_id", "port_id"],
+      "properties": {
+        "node_id": { "$ref": "#/$defs/identifier" },
+        "port_id": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "component_id", "type", "source", "target", "modes"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "component_id": { "$ref": "#/$defs/identifier" },
+        "type": { "enum": ["command", "control", "data", "event", "evidence"] },
+        "source": { "$ref": "#/$defs/endpoint" },
+        "target": { "$ref": "#/$defs/endpoint" },
+        "modes": { "$ref": "#/$defs/modes" }
+      }
+    },
+    "scenarioPath": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node_ids", "edge_ids"],
+      "properties": {
+        "node_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 500,
+          "items": { "$ref": "#/$defs/identifier" }
+        },
+        "edge_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 499,
+          "items": { "$ref": "#/$defs/identifier" }
+        }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "component_id", "label", "description", "paths"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "component_id": { "$ref": "#/$defs/identifier" },
+        "label": { "$ref": "#/$defs/nonEmptyText" },
+        "description": { "$ref": "#/$defs/nonEmptyText" },
+        "paths": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["current", "proposed"],
+          "properties": {
+            "current": { "$ref": "#/$defs/scenarioPath" },
+            "proposed": { "$ref": "#/$defs/scenarioPath" }
+          }
+        }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_zoom", "max_zoom", "default_zoom", "fit_padding", "controls"],
+      "properties": {
+        "min_zoom": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "max_zoom": { "type": "number", "minimum": 1, "maximum": 8 },
+        "default_zoom": { "type": "number", "exclusiveMinimum": 0, "maximum": 4 },
+        "fit_padding": { "type": "number", "minimum": 0, "maximum": 0.5 },
+        "controls": {
+          "const": ["pan", "zoom_in", "zoom_out", "fit_view", "minimap"]
+        }
+      }
+    }
+  }
+}

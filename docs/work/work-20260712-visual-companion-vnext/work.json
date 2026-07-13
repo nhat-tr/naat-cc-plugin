@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "work_id": "work-20260712-visual-companion-vnext",
+  "title": "Visual Companion vNext",
+  "status": "planned",
+  "spec": {
+    "path": "docs/work/work-20260712-visual-companion-vnext/spec.md",
+    "sha256": "d62ef7f2a2fd38b616816b506fc011c1e7bc658e5dae9a5ca5471d4a1b51e9bc"
+  },
+  "active_pair_mirror": ".pair/spec.md",
+  "plan": {
+    "path": ".pair/plan.md",
+    "sha256": "b5c72af73056006a1b4a42b9536184e936a9dedc6eb823aa15e2265cfd221b19",
+    "status": "validated",
+    "independent_review": "no-blockers"
+  },
+  "engineering_quality_contract": {
+    "path": "docs/work/work-20260712-visual-companion-vnext/spec.md",
+    "section": "Engineering Quality Contract",
+    "status": "approved"
+  },
+  "decision_records": [
+    "docs/work/work-20260712-visual-companion-vnext/decisions/DR-001-visual-companion-vnext.md"
+  ],
+  "decision_supersessions": [],
+  "approved_visual_revision": "b0f64e58",
+  "changes": [
+    "docs/work/work-20260712-visual-companion-vnext/changes/CHG-001-implementation.json",
+    "docs/work/work-20260712-visual-companion-vnext/changes/CHG-002-persistent-session-hygiene.json",
+    "docs/work/work-20260712-visual-companion-vnext/changes/CHG-003-fresh-session-lifecycle.json"
+  ],
+  "outcomes": [],
+  "evidence_records": [
+    "docs/work/work-20260712-visual-companion-vnext/evidence/EVD-001-design-direction-approval.json",
+    "docs/work/work-20260712-visual-companion-vnext/evidence/EVD-002-runtime-delivery-pilot.json",
+    "docs/work/work-20260712-visual-companion-vnext/evidence/EVD-003-performance.json",
+    "docs/work/work-20260712-visual-companion-vnext/evidence/EVD-004-accessibility-review.json",
+    "docs/work/work-20260712-visual-companion-vnext/evidence/EVD-005-compatibility-backout.json",
+    "docs/work/work-20260712-visual-companion-vnext/evidence/EVD-006-accessibility-review.json"
+  ]
+}

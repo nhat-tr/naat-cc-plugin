@@ -15,7 +15,6 @@ Thumbs.db
 
 # Dependencies
 node_modules/
-package-lock.json
 
 # Python
 __pycache__/
@@ -26,6 +25,9 @@ __pycache__/
 
 # Machine-local settings (never shareable; also skipped by the leak checker)
 .claude/settings.local.json
+
+# Visual Companion persistent session state
+.brainstorm/
 
 # Eval workspaces (run artifacts, may contain work data)
 module-deepening-workspace/

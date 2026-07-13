@@ -6,6 +6,8 @@ const MAX_MESSAGE_LENGTH = 10_000;
 const MAX_COMMENT_LENGTH = 4_000;
 const MAX_ITEMS = 50;
 const LOCK_STALE_MS = 30_000;
+const DEFAULT_RECONCILIATION_INTERVAL_MS = 1_000;
+const MAX_RECONCILIATION_INTERVAL_MS = 60_000;
 
 function sleep(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
@@ -115,6 +117,26 @@ class SessionStore {
     this.now = options.now || Date.now;
     this.randomUUID = options.randomUUID || crypto.randomUUID;
     this.lockTimeoutMs = options.lockTimeoutMs || 2_000;
+    this.watch = options.watch || ((directory, listener) => fs.watch(directory, listener));
+    this.setTimeout = options.setTimeout || setTimeout;
+    this.clearTimeout = options.clearTimeout || clearTimeout;
+    this.setImmediate = options.setImmediate || setImmediate;
+    this.clearImmediate = options.clearImmediate || clearImmediate;
+    this.reconciliationIntervalMs = options.reconciliationIntervalMs ?? DEFAULT_RECONCILIATION_INTERVAL_MS;
+    for (const [name, dependency] of [
+      ['watch', this.watch],
+      ['setTimeout', this.setTimeout],
+      ['clearTimeout', this.clearTimeout],
+      ['setImmediate', this.setImmediate],
+      ['clearImmediate', this.clearImmediate],
+    ]) {
+      if (typeof dependency !== 'function') throw new TypeError(`${name} must be a function`);
+    }
+    if (!Number.isInteger(this.reconciliationIntervalMs)
+      || this.reconciliationIntervalMs < 1
+      || this.reconciliationIntervalMs > MAX_RECONCILIATION_INTERVAL_MS) {
+      throw new TypeError(`reconciliationIntervalMs must be an integer between 1 and ${MAX_RECONCILIATION_INTERVAL_MS}`);
+    }
     fs.mkdirSync(this.stateDir, { recursive: true, mode: 0o700 });
   }
 
@@ -163,6 +185,32 @@ class SessionStore {
     return events;
   }
 
+  _readRegularText(file, label, optional = false) {
+    let descriptor;
+    try {
+      descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    } catch (error) {
+      if (optional && error.code === 'ENOENT') return null;
+      throw new Error(`${label} could not be read`);
+    }
+    try {
+      if (!fs.fstatSync(descriptor).isFile()) throw new Error(`${label} must be a regular file`);
+      return fs.readFileSync(descriptor, 'utf8');
+    } finally {
+      fs.closeSync(descriptor);
+    }
+  }
+
+  _readEventsStrictUnlocked() {
+    const contents = this._readRegularText(this.eventsFile, 'Session Store event history', true);
+    if (contents == null) return [];
+    try {
+      return contents.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+    } catch {
+      throw new Error('Session Store event history is invalid');
+    }
+  }
+
   _appendUnlocked(payload, events = this._readEvents()) {
     const record = {
       version: 1,
@@ -196,6 +244,22 @@ class SessionStore {
     return Number.isInteger(parsed.seq) && parsed.seq >= 0 ? parsed.seq : 0;
   }
 
+  _readCursorStrictUnlocked() {
+    const contents = this._readRegularText(this.cursorFile, 'Session Store cursor', true);
+    if (contents == null) return 0;
+    let parsed;
+    try {
+      parsed = JSON.parse(contents);
+    } catch {
+      throw new Error('Session Store cursor is invalid');
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+      || !Number.isInteger(parsed.seq) || parsed.seq < 0) {
+      throw new Error('Session Store cursor is invalid');
+    }
+    return parsed.seq;
+  }
+
   readCursor() {
     return this._withLock(() => this._readCursorUnlocked());
   }
@@ -226,46 +290,130 @@ class SessionStore {
     if (!Number.isInteger(timeoutMs) || timeoutMs < 0) {
       throw new TypeError('timeoutMs must be a non-negative integer');
     }
-    const existing = this.nextUnacknowledgedTurn();
-    if (existing || timeoutMs === 0) return Promise.resolve(existing);
+    const signal = options.signal;
+    if (signal != null
+      && (typeof signal.addEventListener !== 'function' || typeof signal.removeEventListener !== 'function')) {
+      throw new TypeError('signal must be an AbortSignal');
+    }
+    const isClosed = options.isClosed || (() => fs.existsSync(path.join(this.stateDir, 'server-stopped')));
+    if (typeof isClosed !== 'function') throw new TypeError('isClosed must be a function');
+    if (timeoutMs === 0) return Promise.resolve(this.nextUnacknowledgedTurn());
 
     return new Promise((resolve, reject) => {
       let settled = false;
       let watcher;
-      let timeout;
+      let timeout = null;
+      let fallback = null;
+      let immediate = null;
+
+      const closeWatcher = () => {
+        if (!watcher) return;
+        const active = watcher;
+        watcher = null;
+        try { active.close(); } catch { /* The authoritative reconciliation timers are still cleaned below. */ }
+      };
+
+      const abortError = () => {
+        const error = new Error('Visual Session Wait was aborted');
+        error.name = 'AbortError';
+        return error;
+      };
+
+      const closedError = () => {
+        const error = new Error('Visual Session is closed');
+        error.code = 'VISUAL_SESSION_CLOSED';
+        return error;
+      };
 
       const finish = (error, turn = null) => {
         if (settled) return;
         settled = true;
-        if (timeout) clearTimeout(timeout);
-        watcher?.close();
+        if (timeout !== null) {
+          try { this.clearTimeout(timeout); } catch { /* Best-effort cleanup for injected schedulers. */ }
+        }
+        if (fallback !== null) {
+          try { this.clearTimeout(fallback); } catch { /* Best-effort cleanup for injected schedulers. */ }
+        }
+        if (immediate !== null) {
+          try { this.clearImmediate(immediate); } catch { /* Best-effort cleanup for injected schedulers. */ }
+        }
+        timeout = null;
+        fallback = null;
+        immediate = null;
+        closeWatcher();
+        try { signal?.removeEventListener('abort', onAbort); } catch { /* Invalid signals are rejected above. */ }
         if (error) reject(error);
         else resolve(turn);
       };
 
-      const check = () => {
+      const check = (final = false) => {
+        if (settled) return;
         try {
           const turn = this.nextUnacknowledgedTurn();
-          if (turn) finish(null, turn);
+          if (turn) {
+            finish(null, turn);
+            return;
+          }
+          if (isClosed()) {
+            finish(closedError());
+            return;
+          }
+          if (final) finish(null, null);
         } catch (error) {
           finish(error);
         }
       };
 
-      try {
-        watcher = fs.watch(this.stateDir, (_eventType, filename) => {
-          if (!['session.jsonl', 'agent-cursor.json'].includes(String(filename))) return;
-          setImmediate(check);
-        });
-        watcher.on('error', error => finish(error));
-      } catch (error) {
-        finish(error);
+      const scheduleCheck = () => {
+        if (settled || immediate !== null) return;
+        try {
+          immediate = this.setImmediate(() => {
+            immediate = null;
+            check();
+          });
+        } catch (error) {
+          finish(error);
+        }
+      };
+
+      const scheduleFallback = () => {
+        if (settled) return;
+        try {
+          fallback = this.setTimeout(() => {
+            fallback = null;
+            check();
+            if (!settled) scheduleFallback();
+          }, this.reconciliationIntervalMs);
+        } catch (error) {
+          finish(error);
+        }
+      };
+
+      const onAbort = () => finish(abortError());
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) {
+        finish(abortError());
         return;
       }
 
-      timeout = setTimeout(() => finish(null, null), timeoutMs);
-      timeout.unref?.();
-      check();
+      try {
+        watcher = this.watch(this.stateDir, (_eventType, filename) => {
+          if (filename != null && !['session.jsonl', 'agent-cursor.json', 'server-stopped'].includes(String(filename))) return;
+          scheduleCheck();
+        });
+        watcher.on('error', () => closeWatcher());
+      } catch {
+        // A watcher is an optimization. The bounded fallback below remains authoritative.
+      }
+
+      try {
+        timeout = this.setTimeout(() => check(true), timeoutMs);
+        timeout.unref?.();
+        scheduleFallback();
+        check();
+      } catch (error) {
+        finish(error);
+      }
     });
   }
 
@@ -290,15 +438,41 @@ class SessionStore {
   }
 
   snapshot() {
+    return this._withLock(() => this._snapshotUnlocked());
+  }
+
+  strictSnapshot() {
     return this._withLock(() => {
-      const events = this._readEvents();
-      const cursor = this._readCursorUnlocked();
+      const events = this._readEventsStrictUnlocked();
+      const cursor = this._readCursorStrictUnlocked();
       return {
         version: 1,
         cursor,
         pendingTurns: events.filter(event => event.type === 'user.turn' && event.seq > cursor).length,
         events,
       };
+    });
+  }
+
+  _snapshotUnlocked() {
+    const events = this._readEvents();
+    const cursor = this._readCursorUnlocked();
+    return {
+      version: 1,
+      cursor,
+      pendingTurns: events.filter(event => event.type === 'user.turn' && event.seq > cursor).length,
+      events,
+    };
+  }
+
+  withSnapshotLock(action) {
+    if (typeof action !== 'function') throw new TypeError('snapshot action must be a function');
+    return this._withLock(() => {
+      const result = action(this._snapshotUnlocked());
+      if (result && typeof result.then === 'function') {
+        throw new TypeError('snapshot action must be synchronous');
+      }
+      return result;
     });
   }
 }

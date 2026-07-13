@@ -136,6 +136,9 @@ function validateRuntimeAssets() {
       // .observability/ dirs are generated run/test artifacts of the
       // observability-index tool — local paths inside them are expected.
       !filePath.includes(`${path.sep}.observability${path.sep}`) &&
+      // .brainstorm/ holds explicitly persistent, machine-local Visual Sessions.
+      // Absolute recovery paths are expected there and the directory is gitignored.
+      !filePath.includes(`${path.sep}.brainstorm${path.sep}`) &&
       !filePath.endsWith('.png') &&
       !filePath.endsWith('.jpg') &&
       !filePath.endsWith('.jpeg') &&

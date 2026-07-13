@@ -15,7 +15,7 @@ conversation. State lives in `.pair/` files; the Stop hook enforces completion.
 | File | Purpose |
 |---|---|
 | `.pair/spec.md` | What/why + acceptance criteria (from brainstorming, plan mode, or by hand) |
-| `.pair/plan.md` | Implementable plan: task checkboxes + file paths + Implementation Context |
+| `.pair/plan.md` | Implementable plan: intent/capability/simplicity contracts + validated TDD tasks |
 | `.pair/review.md` | Human-readable review from the last reviewer run |
 | `.pair/review.json` | Machine findings — imported into nvim notes with `<leader>ni` |
 | `.pair/verify.sh` | Optional executable; if present, the stop-gate blocks "done" while it fails |
@@ -24,8 +24,10 @@ conversation. State lives in `.pair/` files; the Stop hook enforces completion.
 
 1. **Spec → Plan**: `/pair-promote` converts a spec (or Claude plan-mode output)
    into an implementable `.pair/plan.md`. A spec is NOT implementable — promotion
-   is mandatory. Validate any plan with:
-   `bash ~/.local/share/my-claude-code/skills/pair-v2/scripts/validate-plan.sh`
+   is mandatory. Run pair-v3's canonical parser so validation and execution
+   cannot drift:
+   `~/.local/share/my-claude-code/skills/pair-v3/scripts/validate-plan`
+   The old `pair-v2/scripts/validate-plan.sh` path remains a compatibility wrapper.
 2. **Implement — TDD order is mandatory**: work the plan in the normal session
    or `/loop`. Each stream starts with its failing-test task: write the tests,
    run them, watch them fail for the right reason, THEN implement until they

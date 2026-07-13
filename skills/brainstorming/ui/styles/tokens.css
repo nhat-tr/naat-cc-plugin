@@ -1,0 +1,113 @@
+:root {
+  color-scheme: light;
+
+  --vc-paper: #ffffff;
+  --vc-page: #f7f9f8;
+  --vc-surface-muted: #f1f4f3;
+  --vc-surface-selected: #e7f3f1;
+  --vc-line: #d7dfdc;
+  --vc-line-strong: #a9b7b2;
+  --vc-ink: #152521;
+  --vc-body: #34443f;
+  --vc-muted: #5c6b66;
+  --vc-faint: #606f6a;
+
+  --vc-accent: #0f766e;
+  --vc-accent-strong: #0a5c56;
+  --vc-accent-soft: #e1f1ee;
+  --vc-positive: #247a43;
+  --vc-positive-soft: #e8f5ec;
+  --vc-warning: #945f00;
+  --vc-warning-soft: #fff4d6;
+  --vc-critical: #b42318;
+  --vc-critical-soft: #fdecea;
+
+  --vc-focus: #087f73;
+  --vc-shadow-panel: 0 8px 24px rgb(21 37 33 / 8%);
+  --vc-radius-xs: 3px;
+  --vc-radius-sm: 5px;
+  --vc-radius-md: 8px;
+
+  --vc-font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --vc-font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --vc-font-size-xs: 0.6875rem;
+  --vc-font-size-sm: 0.8125rem;
+  --vc-font-size-body: 0.9375rem;
+  --vc-font-size-title: 1.625rem;
+  --vc-leading-tight: 1.25;
+  --vc-leading-body: 1.55;
+
+  --vc-space-1: 0.25rem;
+  --vc-space-2: 0.5rem;
+  --vc-space-3: 0.75rem;
+  --vc-space-4: 1rem;
+  --vc-space-5: 1.25rem;
+  --vc-space-6: 1.5rem;
+  --vc-space-8: 2rem;
+  --vc-control-height: 2.25rem;
+  --vc-content-gap: 1rem;
+  --vc-section-space: 1.5rem;
+
+  --paper: var(--vc-paper);
+  --canvas: var(--vc-page);
+  --card: var(--vc-paper);
+  --line: var(--vc-line);
+  --line-soft: color-mix(in srgb, var(--vc-line) 58%, var(--vc-paper));
+  --ink: var(--vc-ink);
+  --body: var(--vc-body);
+  --muted: var(--vc-muted);
+  --faint: var(--vc-faint);
+  --accent: var(--vc-accent);
+  --accent-deep: var(--vc-accent-strong);
+  --accent-soft: var(--vc-accent-soft);
+  --positive: var(--vc-positive);
+  --positive-soft: var(--vc-positive-soft);
+  --warning: var(--vc-warning);
+  --warning-soft: var(--vc-warning-soft);
+  --critical: var(--vc-critical);
+  --critical-soft: var(--vc-critical-soft);
+  --radius: var(--vc-radius-md);
+  --font-body: var(--vc-font-body);
+  --font-mono: var(--vc-font-mono);
+}
+
+[data-density="compact"] {
+  --vc-content-gap: 0.625rem;
+  --vc-section-space: 1rem;
+  --vc-control-height: 2rem;
+}
+
+[data-primitive="tone"][data-tone="neutral"],
+.tone-neutral {
+  --tone: var(--vc-line-strong);
+  --tone-ink: var(--vc-muted);
+  --tone-soft: var(--vc-surface-muted);
+}
+
+[data-primitive="tone"][data-tone="accent"],
+.tone-accent {
+  --tone: var(--vc-accent);
+  --tone-ink: var(--vc-accent-strong);
+  --tone-soft: var(--vc-accent-soft);
+}
+
+[data-primitive="tone"][data-tone="positive"],
+.tone-positive {
+  --tone: var(--vc-positive);
+  --tone-ink: var(--vc-positive);
+  --tone-soft: var(--vc-positive-soft);
+}
+
+[data-primitive="tone"][data-tone="warning"],
+.tone-warning {
+  --tone: var(--vc-warning);
+  --tone-ink: var(--vc-warning);
+  --tone-soft: var(--vc-warning-soft);
+}
+
+[data-primitive="tone"][data-tone="critical"],
+.tone-critical {
+  --tone: var(--vc-critical);
+  --tone-ink: var(--vc-critical);
+  --tone-soft: var(--vc-critical-soft);
+}

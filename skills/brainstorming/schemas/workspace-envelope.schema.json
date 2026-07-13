@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nhat-dev-toolkit.local/schemas/workspace-envelope.schema.json",
+  "title": "Visual Document v2 shared envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "work_id",
+    "workspace_kind",
+    "title",
+    "evidence_refs",
+    "revision",
+    "frames",
+    "components",
+    "decisions",
+    "feedback_threads",
+    "content",
+    "read_only"
+  ],
+  "properties": {
+    "version": { "const": 2 },
+    "work_id": { "type": "string", "pattern": "^work-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "workspace_kind": { "enum": ["product", "architecture", "research", "business", "review"] },
+    "title": { "type": "string", "allOf": [{ "$ref": "#/$defs/non_blank_text" }], "maxLength": 300 },
+    "evidence_refs": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/evidence_reference" }
+    },
+    "revision": { "$ref": "#/$defs/revision" },
+    "frames": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/frame" }
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5000,
+      "items": { "$ref": "#/$defs/component" }
+    },
+    "decisions": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "$ref": "#/$defs/decision" }
+    },
+    "feedback_threads": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": { "$ref": "#/$defs/feedback_thread" }
+    },
+    "content": { "type": "object" },
+    "read_only": { "type": "boolean" }
+  },
+  "$defs": {
+    "non_blank_text": { "type": "string", "pattern": "\\S" },
+    "identifier": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,119}$" },
+    "revision": { "type": "string", "pattern": "^[a-f0-9]{8}$" },
+    "evidence_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label"],
+      "properties": {
+        "id": { "type": "string", "maxLength": 200, "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$" },
+        "label": { "type": "string", "allOf": [{ "$ref": "#/$defs/non_blank_text" }], "maxLength": 300 }
+      }
+    },
+    "frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "component_ids"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "title": { "type": "string", "allOf": [{ "$ref": "#/$defs/non_blank_text" }], "maxLength": 200 },
+        "component_ids": { "type": "array", "maxItems": 5000, "uniqueItems": true, "items": { "$ref": "#/$defs/identifier" } }
+      }
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "frame_id", "label"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "frame_id": { "$ref": "#/$defs/identifier" },
+        "label": { "type": "string", "allOf": [{ "$ref": "#/$defs/non_blank_text" }], "maxLength": 300 }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "multiselect", "option_component_ids"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "title": { "type": "string", "allOf": [{ "$ref": "#/$defs/non_blank_text" }], "maxLength": 200 },
+        "multiselect": { "type": "boolean" },
+        "option_component_ids": { "type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": true, "items": { "$ref": "#/$defs/identifier" } }
+      }
+    },
+    "reply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "author", "text", "recorded_at"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "author": { "type": "string", "allOf": [{ "$ref": "#/$defs/non_blank_text" }], "maxLength": 80 },
+        "text": { "type": "string", "allOf": [{ "$ref": "#/$defs/non_blank_text" }], "maxLength": 10000 },
+        "recorded_at": {
+          "type": "string",
+          "maxLength": 40,
+          "format": "date-time",
+          "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])T(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$"
+        }
+      }
+    },
+    "feedback_thread": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "component_id", "revision", "type", "status", "comment", "replies"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "component_id": { "$ref": "#/$defs/identifier" },
+        "revision": { "$ref": "#/$defs/revision" },
+        "type": { "type": "string", "allOf": [{ "$ref": "#/$defs/non_blank_text" }], "maxLength": 200 },
+        "status": { "enum": ["open", "resolved", "outdated"] },
+        "comment": { "type": "string", "allOf": [{ "$ref": "#/$defs/non_blank_text" }], "maxLength": 10000 },
+        "replies": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/reply" } }
+      }
+    }
+  }
+}

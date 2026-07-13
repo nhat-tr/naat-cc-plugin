@@ -6,15 +6,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '⚠ VERIFY before done — UI change: Aspire+browser | API change: Aspire+curl | logic only: tsc+test | skipping = not done'"
-          }
-        ]
-      },
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
             "command": "bash ~/.local/share/my-claude-code/hooks/stop-gate.sh",
             "timeout": 180
           }

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Evidence Record",
+  "type": "object",
+  "properties": {
+    "schema": { "const": 1 },
+    "id": { "$ref": "#/$defs/evidence_record_id" },
+    "work_id": { "$ref": "#/$defs/work_id" },
+    "kind": { "$ref": "#/$defs/non_blank_text" },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/acceptance_criterion_id" },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "decision_record_ids": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/decision_record_id" },
+      "uniqueItems": true
+    },
+    "source": { "$ref": "#/$defs/non_blank_text" },
+    "recorded_at": { "type": "string", "format": "date-time" },
+    "result": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "schema",
+    "id",
+    "work_id",
+    "kind",
+    "acceptance_criteria",
+    "decision_record_ids",
+    "source",
+    "recorded_at",
+    "result"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "non_blank_text": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "work_id": {
+      "type": "string",
+      "pattern": "^work-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "acceptance_criterion_id": {
+      "type": "string",
+      "pattern": "^AC-[1-9][0-9]*$"
+    },
+    "decision_record_id": {
+      "type": "string",
+      "pattern": "^DR-[0-9]{3}-[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "evidence_record_id": {
+      "type": "string",
+      "pattern": "^EVD-[0-9]{3}-[a-z0-9]+(?:-[a-z0-9]+)*$"
+    }
+  }
+}

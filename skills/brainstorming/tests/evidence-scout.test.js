@@ -8,6 +8,7 @@ const {
   MAX_BRIEF_BYTES,
   MAX_PACKET_BYTES,
   buildRuntimeCommand,
+  normalizeBatchEvidencePacket,
   normalizeBrief,
   normalizeEvidencePacket,
   summarizeRuntimeFailure,
@@ -98,6 +99,29 @@ test('scout brief and evidence packet enforce compact, observed, bounded input',
     ...brief,
     purpose: 'x'.repeat(MAX_BRIEF_BYTES + 1),
   }), /at most|exceeds/i);
+});
+
+test('batch evidence citations reject a repository symlink that resolves outside the root', t => {
+  const root = createScratchDirectory(t, 'scout-citation-root');
+  const outside = createScratchDirectory(t, 'scout-citation-outside');
+  const outsideFile = path.join(outside, 'outside.js');
+  fs.writeFileSync(outsideFile, 'module.exports = true;\n');
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.symlinkSync(outsideFile, path.join(root, 'src', 'linked.js'));
+
+  assert.throws(() => normalizeBatchEvidencePacket({
+    version: 2,
+    summary: 'A linked file was claimed as repository evidence.',
+    evidence: [{
+      evidence_key: 'symbol:linked',
+      kind: 'symbol',
+      path: 'src/linked.js',
+      startLine: 1,
+      endLine: 1,
+      observation: 'The linked file exports true.',
+    }],
+    unknowns: [],
+  }, { root }), /symlink|outside|escape/i);
 });
 
 test('evidence scout runs a bounded worker process and emits only compact metadata', t => {

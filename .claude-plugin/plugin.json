@@ -16,6 +16,11 @@
   ],
   "skills": ["./skills/"],
   "commands": ["./commands/"],
+  "channels": [
+    {
+      "server": "visual-companion-channel"
+    }
+  ],
   "agents": [
     "./agents/az-pr-review.md",
     "./agents/az-review-response.md",

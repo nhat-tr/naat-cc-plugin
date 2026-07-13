@@ -5,14 +5,17 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { createBrainstormServer } = require('./server.cjs');
+const { waitForFeedback } = require('./delivery-core.cjs');
 const { SessionStore } = require('./session-store.cjs');
 const { renderStandalone } = require('./standalone.cjs');
 const { createVisualScaffold, normalizeVisualDocument } = require('./visual-document.cjs');
+const { createWorkspaceScaffold } = require('./workspace-scaffold.cjs');
 
 const SHELL_DIR = path.resolve(__dirname, '../assets/visual-shell');
 const KNOWN_OPTIONS = new Set([
   'projectDir', 'host', 'urlHost', 'port', 'ownerPid', 'output', 'profile', 'audience',
   'title', 'summary', 'kinds', 'document', 'sessionDir', 'timeoutMs', 'replyTo', 'messageFile',
+  'workId', 'workspaceKind',
 ]);
 
 function fail(message) {
@@ -70,12 +73,65 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
+function readRegularJson(file, label, options = {}) {
+  let descriptor;
+  try {
+    descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  } catch (error) {
+    if (error.code === 'ENOENT' && options.optional) return null;
+    if (error.code === 'ELOOP') fail(`${label} must be a regular file and must not be a symlink`);
+    fail(`${label} could not be read`);
+  }
+  try {
+    if (!fs.fstatSync(descriptor).isFile()) fail(`${label} must be a regular file and must not be a symlink`);
+    return JSON.parse(fs.readFileSync(descriptor, 'utf8'));
+  } catch {
+    fail(`${label} contains invalid JSON`);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function normalizeDocument(value) {
+  if (value?.version !== 2) return normalizeVisualDocument(value);
+  const { normalizeWorkspaceDocument } = require('./workspace-document.cjs');
+  const { normalizeKnownWorkspaceContent } = require('./workspace-content.cjs');
+  return normalizeWorkspaceDocument(value, {
+    contentValidator: normalizeKnownWorkspaceContent,
+  });
+}
+
+function atomicWrite(file, contents, mode = 0o600) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, contents, { mode, flag: 'wx' });
+    fs.renameSync(temporary, file);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
+
 function atomicJson(file, value, mode = 0o600) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
   fs.writeFileSync(temporary, `${JSON.stringify(value)}\n`, { mode });
   fs.renameSync(temporary, file);
   fs.chmodSync(file, mode);
+}
+
+function atomicJsonExclusive(file, value, mode = 0o600) {
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(value)}\n`, { mode, flag: 'wx' });
+    fs.linkSync(temporary, file);
+  } catch (error) {
+    if (error.code === 'EEXIST') fail(`scaffold output already exists: ${file}`);
+    throw error;
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
 }
 
 function processAlive(pid) {
@@ -140,20 +196,41 @@ function waitingDocument() {
   });
 }
 
-function readScreenOrWaiting(screenFile) {
-  if (!fs.existsSync(screenFile)) return waitingDocument();
-  try {
-    return normalizeVisualDocument(readJson(screenFile));
-  } catch {
+function readScreenOrWaiting(screenFile, options = {}) {
+  if (!fs.existsSync(screenFile)) {
+    if (options.required) fail('active Visual Document is unavailable');
     return waitingDocument();
   }
+  return normalizeDocument(readRegularJson(screenFile, 'active Visual Document'));
+}
+
+function visualFormatFile(metadata) {
+  return path.join(metadata.state_dir, 'visual-format.json');
+}
+
+function readVisualFormat(metadata) {
+  const value = readRegularJson(visualFormatFile(metadata), 'visual format metadata', { optional: true });
+  if (value == null) return null;
+  if (value.version !== 1 || ![1, 2].includes(value.active_version)
+    || value.v1_document !== 'content/screen.json'
+    || value.v2_document !== 'content/workspace.json'
+    || Object.keys(value).some(key => !['version', 'active_version', 'v1_document', 'v2_document'].includes(key))) {
+    fail('visual format metadata is malformed');
+  }
+  return value;
+}
+
+function activeDocumentFile(metadata) {
+  return readVisualFormat(metadata)?.active_version === 2
+    ? path.join(metadata.content_dir, 'workspace.json')
+    : path.join(metadata.content_dir, 'screen.json');
 }
 
 function readSessionSnapshot(stateDir) {
   try {
-    return new SessionStore(stateDir).snapshot();
+    return new SessionStore(stateDir).strictSnapshot();
   } catch {
-    return { version: 1, cursor: 0, pendingTurns: 0, events: [] };
+    fail('Session Store state is invalid');
   }
 }
 
@@ -165,6 +242,7 @@ function buildStandaloneHtml(screen, session) {
     shell: fs.readFileSync(path.join(SHELL_DIR, 'index.html'), 'utf8'),
     styles: fs.readFileSync(path.join(SHELL_DIR, 'styles.css'), 'utf8'),
     script: fs.readFileSync(path.join(SHELL_DIR, 'app.js'), 'utf8'),
+    worker: fs.readFileSync(path.join(SHELL_DIR, 'elk-worker.min.js'), 'utf8'),
     screen,
     session,
   });
@@ -179,11 +257,14 @@ function defaultExportPath(metadata) {
 }
 
 function writeStandaloneExport(metadata, outputOption) {
-  const screen = readScreenOrWaiting(path.join(metadata.content_dir, 'screen.json'));
+  const format = readVisualFormat(metadata);
+  const activeFile = format?.active_version === 2
+    ? path.join(metadata.content_dir, 'workspace.json')
+    : path.join(metadata.content_dir, 'screen.json');
+  const screen = readScreenOrWaiting(activeFile, { required: format != null });
   const session = readSessionSnapshot(metadata.state_dir);
   const output = path.resolve(outputOption || defaultExportPath(metadata));
-  fs.mkdirSync(path.dirname(output), { recursive: true });
-  fs.writeFileSync(output, buildStandaloneHtml(screen, session), { mode: 0o600 });
+  atomicWrite(output, buildStandaloneHtml(screen, session));
   return output;
 }
 
@@ -198,6 +279,33 @@ function removeActiveIfMatching(metadata) {
   }
 }
 
+async function startCodexIdleDelivery(options = {}) {
+  const conversationId = options.conversationId || process.env.CODEX_THREAD_ID;
+  if (typeof conversationId !== 'string' || !conversationId.trim()) return null;
+  const { AgentConversationDelivery } = require('./agent-conversation-delivery.cjs');
+  const { CodexAppServerAdapter } = require('./codex-app-server-adapter.cjs');
+  const adapter = options.adapter || new CodexAppServerAdapter();
+  const delivery = new AgentConversationDelivery({
+    adapters: { codex: adapter },
+    sessionStore: options.sessionStore,
+    stateDir: options.stateDir,
+  });
+  const worker = await delivery.startWorker({
+    runtime: 'codex',
+    sessionId: options.sessionId,
+    conversationId,
+  });
+  let closed = false;
+  return {
+    close: async () => {
+      if (closed) return;
+      closed = true;
+      await worker.close();
+      await adapter.close?.();
+    },
+  };
+}
+
 async function start(options) {
   const activeFile = path.resolve(options.activeFile || defaultActiveFile(options));
   if (fs.existsSync(activeFile)) {
@@ -210,6 +318,7 @@ async function start(options) {
   const sessionDir = options.projectDir
     ? path.join(path.resolve(options.projectDir), '.brainstorm', sessionId)
     : path.join(path.dirname(activeFile), sessionId);
+  atomicJsonExclusive(path.join(sessionDir, 'content', 'screen.json'), waitingDocument());
   const token = crypto.randomBytes(24).toString('hex');
   const host = options.host || '127.0.0.1';
   // The owner is the foreground harness (this node process's parent). When it dies, the
@@ -250,6 +359,11 @@ async function start(options) {
   // A copy inside the session lets --session-dir commands recover the true active_file and
   // pid without re-deriving them from the caller's cwd.
   atomicJson(path.join(info.state_dir, 'session-meta.json'), metadata);
+  const idleDelivery = await startCodexIdleDelivery({
+    sessionStore: app.store,
+    stateDir: info.state_dir,
+    sessionId,
+  });
   console.log(JSON.stringify({
     ...metadata,
     type: 'visual-session-started',
@@ -261,6 +375,7 @@ async function start(options) {
   const shutdown = async reason => {
     if (stopping) return;
     stopping = true;
+    await idleDelivery?.close();
     await app.close(reason);
     fs.rmSync(pidFile, { force: true });
     removeActiveIfMatching(metadata);
@@ -275,17 +390,103 @@ function publish(options) {
   const metadata = activeMetadata(options);
   assertLive(metadata);
   const source = path.resolve(options.document);
-  const document = normalizeVisualDocument(readJson(source));
-  const roundTrip = normalizeVisualDocument(document);
+  const document = normalizeDocument(readRegularJson(source, 'Visual Document candidate'));
+  const roundTrip = normalizeDocument(document);
   if (JSON.stringify(roundTrip) !== JSON.stringify(document)) {
     fail('visual document normalization is not stable; screen was not replaced');
   }
-  atomicJson(path.join(metadata.content_dir, 'screen.json'), document);
-  console.log(JSON.stringify({ type: 'screen.published', screen_file: path.join(metadata.content_dir, 'screen.json') }));
+  const { withVisualStateLock } = require('./legacy-visual-import.cjs');
+  const output = withVisualStateLock(metadata.session_dir, () => {
+    const format = readVisualFormat(metadata);
+    if (format?.active_version === 1 && document.version === 2) {
+      fail('active v1 Visual Session requires migrate before publishing Visual Document v2');
+    }
+    if (format?.active_version === 2 && document.version !== 2) {
+      fail('active v2 Visual Session accepts only Visual Document v2 Publish candidates');
+    }
+    const legacyFile = path.join(metadata.content_dir, 'screen.json');
+    if (format == null && fs.existsSync(legacyFile)) {
+      const current = normalizeDocument(readRegularJson(legacyFile, 'active Visual Document'));
+      if (current.version !== document.version) {
+        fail(current.version === 1
+          ? 'active v1 Visual Session requires migrate before publishing Visual Document v2'
+          : 'active Visual Document version cannot be replaced without an explicit migration');
+      }
+    }
+    const destination = format?.active_version === 2
+      ? path.join(metadata.content_dir, 'workspace.json')
+      : legacyFile;
+    atomicJson(destination, document);
+    return destination;
+  });
+  console.log(JSON.stringify({ type: 'screen.published', screen_file: output }));
+}
+
+function migrate(options) {
+  if (!options.workId || !options.workspaceKind) fail('migrate requires --work-id and --workspace-kind');
+  const metadata = activeMetadata(options);
+  readRegularJson(path.join(metadata.content_dir, 'screen.json'), 'legacy Visual Document');
+  readRegularJson(path.join(metadata.content_dir, 'workspace.json'), 'retained v2 Visual Document', { optional: true });
+  readRegularJson(visualFormatFile(metadata), 'visual format metadata', { optional: true });
+  const { migratePersistedSession } = require('./legacy-visual-import.cjs');
+  let result;
+  try {
+    result = migratePersistedSession({
+      sessionDir: metadata.session_dir,
+      workId: options.workId,
+      workspaceKind: options.workspaceKind,
+      evidenceRefs: [],
+    });
+  } catch (error) {
+    if (String(error.message).includes(metadata.session_dir)) fail('persisted Visual Session migration failed');
+    throw error;
+  }
+  console.log(JSON.stringify({
+    type: result.reactivated ? 'visual-session-reactivated' : 'visual-session-migrated',
+    active_version: result.activeVersion,
+  }));
+}
+
+function backout(options) {
+  const metadata = activeMetadata(options);
+  readRegularJson(path.join(metadata.content_dir, 'screen.json'), 'legacy Visual Document');
+  readRegularJson(path.join(metadata.content_dir, 'workspace.json'), 'retained v2 Visual Document');
+  const { backoutPersistedSession } = require('./legacy-visual-import.cjs');
+  let result;
+  try {
+    result = backoutPersistedSession({ sessionDir: metadata.session_dir });
+  } catch (error) {
+    if (String(error.message).includes(metadata.session_dir)) fail('persisted Visual Session backout failed');
+    throw error;
+  }
+  console.log(JSON.stringify({ type: 'visual-session-backout', active_version: result.activeVersion }));
 }
 
 function scaffold(options) {
   if (!options.output) fail('scaffold requires --output FILE');
+  if (options.workspaceKind || options.workId) {
+    if (!options.workspaceKind || !options.workId) {
+      fail('v2 scaffold requires --workspace-kind and --work-id');
+    }
+    if (options.profile || options.audience || options.summary || options.kinds) {
+      fail('v2 scaffold does not accept --profile, --audience, --summary, or --kinds');
+    }
+    const document = createWorkspaceScaffold({
+      workId: options.workId,
+      workspaceKind: options.workspaceKind,
+      title: options.title,
+    });
+    const output = path.resolve(options.output);
+    atomicJsonExclusive(output, document);
+    console.log(JSON.stringify({
+      type: 'workspace.scaffolded',
+      workspace_file: output,
+      work_id: document.work_id,
+      workspace_kind: document.workspace_kind,
+      revision: document.revision,
+    }));
+    return;
+  }
   const kinds = options.kinds ? options.kinds.split(',').map(value => value.trim()).filter(Boolean) : undefined;
   const document = createVisualScaffold({
     profile: options.profile,
@@ -295,7 +496,7 @@ function scaffold(options) {
     kinds,
   });
   const output = path.resolve(options.output);
-  atomicJson(output, document);
+  atomicJsonExclusive(output, document);
   console.log(JSON.stringify({
     type: 'screen.scaffolded',
     screen_file: output,
@@ -321,15 +522,18 @@ function drain(options) {
 async function wait(options) {
   const metadata = activeMetadata(options);
   const timeoutMs = parseNonNegativeInteger(options.timeoutMs, 'timeout-ms') ?? 15 * 60 * 1_000;
-  const store = new SessionStore(metadata.state_dir);
-  const turn = await store.waitForUnacknowledgedTurn({ timeoutMs });
-  if (!turn) {
+  const result = await waitForFeedback({ sessionDir: metadata.session_dir, timeoutMs });
+  if (result.state === 'timeout') {
     console.log(JSON.stringify({ type: 'timeout' }));
+    return;
+  }
+  if (result.state === 'closed') {
+    console.log(JSON.stringify({ type: 'closed', reason: result.reason }));
     return;
   }
   // Same contract as drain: pending counts every unacknowledged batch, so the caller knows a
   // second batch is already queued instead of ending the review loop after one turn.
-  console.log(JSON.stringify({ ...turn, pending: store.snapshot().pendingTurns }));
+  console.log(JSON.stringify({ ...result.feedbackBatch, pending: result.pending }));
 }
 
 function reply(options) {
@@ -367,14 +571,9 @@ function stop(options) {
     }
   }
   if (fs.existsSync(pidFile) && processAlive(metadata.pid)) fail(`visual session process ${metadata.pid} did not stop`);
-  removeActiveIfMatching(metadata);
   // Capture the standalone visual before scratch cleanup deletes the session directory.
-  let exportFile = null;
-  try {
-    exportFile = writeStandaloneExport(metadata, options.output);
-  } catch (error) {
-    console.error(`visual-session: standalone export failed: ${error.message}`);
-  }
+  const exportFile = writeStandaloneExport(metadata, options.output);
+  removeActiveIfMatching(metadata);
   if (!metadata.persistent && metadata.session_dir.startsWith(`${scratchRoot()}${path.sep}`)) {
     fs.rmSync(metadata.session_dir, { recursive: true, force: true });
   }
@@ -393,7 +592,10 @@ async function main() {
     console.log([
       'Usage: visual-session.cjs start [--project-dir DIR] [--host HOST] [--url-host HOST]',
       '       visual-session.cjs scaffold --output FILE [--profile technical|product|business] [--kinds anchor,flow,decision]',
+      '       visual-session.cjs scaffold --output FILE --work-id ID --workspace-kind product|architecture|research|business|review [--title TITLE]',
       '       visual-session.cjs publish --document FILE [--session-dir DIR]',
+      '       visual-session.cjs migrate --work-id ID --workspace-kind KIND [--session-dir DIR]',
+      '       visual-session.cjs backout [--session-dir DIR]',
       '       visual-session.cjs drain [--session-dir DIR]',
       '       visual-session.cjs wait [--timeout-ms MS] [--session-dir DIR]',
       '       visual-session.cjs reply --reply-to SEQ --message-file FILE [--session-dir DIR]',
@@ -407,6 +609,8 @@ async function main() {
   if (command === 'start') await start(options);
   else if (command === 'scaffold') scaffold(options);
   else if (command === 'publish') publish(options);
+  else if (command === 'migrate') migrate(options);
+  else if (command === 'backout') backout(options);
   else if (command === 'drain') drain(options);
   else if (command === 'wait') await wait(options);
   else if (command === 'reply') reply(options);
@@ -423,4 +627,11 @@ if (require.main === module) {
   });
 }
 
-module.exports = { activeMetadata, buildStandaloneHtml, defaultActiveFile, parseOptions, writeStandaloneExport };
+module.exports = {
+  activeMetadata,
+  buildStandaloneHtml,
+  defaultActiveFile,
+  parseOptions,
+  startCodexIdleDelivery,
+  writeStandaloneExport,
+};

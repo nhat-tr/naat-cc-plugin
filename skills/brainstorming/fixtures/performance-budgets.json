@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "units": {
+    "time": "milliseconds",
+    "size": "bytes",
+    "dom": "nodes",
+    "workload": "items"
+  },
+  "measurement": {
+    "status": "recorded by the Task 10.4 aggregate stress run",
+    "runtime": "Playwright 1.61.1 headless Chromium",
+    "machine_profile": "developer workstation; CI calibration required",
+    "samples": 1,
+    "statistic": "upper-bound target",
+    "host_fixture": "shared host with three frames",
+    "stress_fixture": "300 changed files with a 200-node architecture graph"
+  },
+  "host": {
+    "initial_render_ms": 3000,
+    "interaction_response_ms": 250,
+    "feedback_persistence_ms": 500,
+    "max_long_task_ms": 50,
+    "max_dom_nodes": 5000
+  },
+  "standalone_export": {
+    "max_bytes": 3145728,
+    "generation_ms": 1000,
+    "open_to_interactive_ms": 3000
+  },
+  "stress_workload": {
+    "changed_files": 300,
+    "architecture_nodes": 200,
+    "architecture_edges": 320
+  }
+}

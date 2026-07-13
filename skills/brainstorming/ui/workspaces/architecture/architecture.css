@@ -1,0 +1,560 @@
+.architecture-canvas {
+  display: grid;
+  gap: var(--vc-space-3);
+  min-width: 0;
+  color: var(--vc-ink);
+}
+
+.architecture-canvas-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: space-between;
+  gap: var(--vc-space-3);
+  min-width: 0;
+  padding-bottom: var(--vc-space-3);
+  border-bottom: 1px solid var(--vc-line);
+}
+
+.architecture-canvas-header h2,
+.architecture-inspector h3,
+.architecture-inspector p,
+.architecture-scenario-summary p {
+  margin: 0;
+  letter-spacing: 0;
+}
+
+.architecture-canvas-header h2 {
+  margin-top: var(--vc-space-1);
+  font-size: 1.125rem;
+  line-height: 1.3;
+}
+
+.architecture-kicker {
+  color: var(--vc-muted);
+  font-family: var(--vc-font-mono);
+  font-size: var(--vc-font-size-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.architecture-state-tabs {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(5.5rem, 1fr));
+  min-width: min(100%, 12rem);
+  border: 1px solid var(--vc-line-strong);
+  border-radius: var(--vc-radius-sm);
+  overflow: hidden;
+}
+
+.architecture-state-tab {
+  min-height: var(--vc-control-height);
+  border: 0;
+  border-right: 1px solid var(--vc-line);
+  border-radius: 0;
+  background: var(--vc-paper);
+  color: var(--vc-muted);
+  padding: var(--vc-space-2) var(--vc-space-3);
+  font-size: var(--vc-font-size-sm);
+  cursor: pointer;
+}
+
+.architecture-state-tab:last-child {
+  border-right: 0;
+}
+
+.architecture-state-tab[aria-selected="true"] {
+  background: var(--vc-accent-soft);
+  color: var(--vc-accent-strong);
+  font-weight: 800;
+}
+
+.architecture-state-tab:focus-visible,
+.architecture-tools button:focus-visible,
+.architecture-tools select:focus-visible,
+.architecture-viewport:focus-visible {
+  outline: 2px solid var(--vc-focus);
+  outline-offset: 2px;
+}
+
+.architecture-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--vc-space-2);
+  min-width: 0;
+}
+
+.architecture-scenario {
+  display: inline-flex;
+  flex: 1 1 15rem;
+  align-items: center;
+  gap: var(--vc-space-2);
+  min-width: 0;
+  color: var(--vc-body);
+  font-size: var(--vc-font-size-sm);
+  font-weight: 700;
+}
+
+.architecture-scenario svg {
+  flex: 0 0 auto;
+  color: #396b91;
+}
+
+.architecture-scenario select {
+  flex: 1 1 auto;
+  min-width: 7rem;
+  max-width: 20rem;
+  min-height: var(--vc-control-height);
+  border: 1px solid var(--vc-line-strong);
+  border-radius: var(--vc-radius-sm);
+  background: var(--vc-paper);
+  color: var(--vc-ink);
+  padding: var(--vc-space-1) var(--vc-space-2);
+  font: inherit;
+}
+
+.architecture-camera-controls {
+  display: inline-grid;
+  grid-template-columns: repeat(3, var(--vc-control-height));
+  flex: 0 0 auto;
+  border: 1px solid var(--vc-line-strong);
+  border-radius: var(--vc-radius-sm);
+  overflow: hidden;
+}
+
+.architecture-camera-controls button {
+  display: grid;
+  place-items: center;
+  width: var(--vc-control-height);
+  height: var(--vc-control-height);
+  border: 0;
+  border-right: 1px solid var(--vc-line);
+  border-radius: 0;
+  background: var(--vc-paper);
+  color: var(--vc-body);
+  cursor: pointer;
+}
+
+.architecture-camera-controls button:last-child {
+  border-right: 0;
+}
+
+.architecture-camera-controls button:hover {
+  background: var(--vc-surface-muted);
+  color: var(--vc-accent-strong);
+}
+
+.architecture-focus-targets {
+  display: flex;
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+  gap: var(--vc-space-2);
+  min-width: 0;
+}
+
+.architecture-focus-targets button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--vc-space-1);
+  min-width: 0;
+  min-height: 2rem;
+  border: 1px solid var(--vc-line);
+  border-radius: var(--vc-radius-sm);
+  background: var(--vc-paper);
+  color: var(--vc-body);
+  padding: var(--vc-space-1) var(--vc-space-2);
+  font-size: var(--vc-font-size-xs);
+  cursor: pointer;
+}
+
+.architecture-focus-targets button[aria-pressed="true"] {
+  border-color: var(--vc-accent);
+  background: var(--vc-accent-soft);
+  color: var(--vc-accent-strong);
+}
+
+.architecture-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(13rem, 15rem);
+  align-items: stretch;
+  gap: var(--vc-space-3);
+  min-width: 0;
+}
+
+.architecture-viewport {
+  position: relative;
+  min-width: 0;
+  height: min(62vh, 39rem);
+  min-height: 31rem;
+  overflow: hidden;
+  border: 1px solid var(--vc-line-strong);
+  border-radius: var(--vc-radius-sm);
+  background: #f5f8fa;
+}
+
+.architecture-viewport .react-flow {
+  width: 100%;
+  height: 100%;
+}
+
+.architecture-layout-message {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--vc-muted);
+  font-size: var(--vc-font-size-sm);
+}
+
+.react-flow__node-ownershipBoundary {
+  pointer-events: none;
+}
+
+.ownership-boundary {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid rgb(70 93 110 / 48%);
+  border-radius: var(--vc-radius-sm);
+  background: rgb(225 234 239 / 22%);
+  color: #31475a;
+}
+
+.ownership-boundary[data-parent-boundary-id] {
+  border-style: dashed;
+  background: rgb(237 242 245 / 28%);
+}
+
+.ownership-boundary[data-focused="true"] {
+  border-color: var(--vc-focus);
+  box-shadow: inset 0 0 0 2px rgb(8 127 115 / 22%);
+}
+
+.ownership-boundary > header {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.75rem;
+  max-width: calc(100% - 1rem);
+  overflow: hidden;
+  border-right: 1px solid rgb(70 93 110 / 24%);
+  border-bottom: 1px solid rgb(70 93 110 / 24%);
+  background: rgb(255 255 255 / 88%);
+  padding: var(--vc-space-1) var(--vc-space-2);
+  font-family: var(--vc-font-mono);
+  font-size: 0.625rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.architecture-node {
+  --node-accent: #486d88;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 0.25rem;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  border: 1px solid #8fa1ae;
+  border-left: 4px solid var(--node-accent);
+  border-radius: var(--vc-radius-sm);
+  background: rgb(255 255 255 / 96%);
+  color: #182a37;
+  padding: 0.55rem 0.6rem 0.45rem;
+  box-shadow: 0 2px 7px rgb(26 45 58 / 10%);
+}
+
+.architecture-node-adapter { --node-accent: #7b5aa6; }
+.architecture-node-artifact { --node-accent: #986314; }
+.architecture-node-data_store { --node-accent: #356d62; }
+.architecture-node-external_system { --node-accent: #9a4b45; }
+.architecture-node-interface { --node-accent: #24728d; }
+.architecture-node-service { --node-accent: #2f5f9b; }
+.architecture-node-worker { --node-accent: #5f6b31; }
+
+.architecture-node.change-added {
+  border-color: var(--vc-positive);
+  border-left-color: var(--vc-positive);
+}
+
+.architecture-node.change-modified {
+  border-color: #a26600;
+  border-left-color: #a26600;
+}
+
+.architecture-node.change-removed {
+  border-color: var(--vc-critical);
+  border-style: dashed;
+  border-left-style: solid;
+}
+
+.architecture-node[data-focused="true"] {
+  border-color: var(--vc-focus);
+  box-shadow: 0 0 0 3px rgb(8 127 115 / 24%);
+}
+
+.architecture-node[data-scenario-active] {
+  background: #fffbea;
+  box-shadow: 0 0 0 2px rgb(182 128 0 / 30%);
+}
+
+.architecture-node-heading {
+  display: grid;
+  grid-template-columns: 0.55rem minmax(0, 1fr);
+  align-items: start;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.architecture-type-mark {
+  width: 0.5rem;
+  height: 0.5rem;
+  margin-top: 0.22rem;
+  border: 2px solid var(--node-accent);
+  border-radius: 50%;
+  background: var(--vc-paper);
+}
+
+.architecture-node-heading strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 0.72rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.architecture-node-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem;
+  min-width: 0;
+  color: #627482;
+  font-family: var(--vc-font-mono);
+  font-size: 0.53rem;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.architecture-change {
+  color: #8a5700;
+  font-weight: 800;
+}
+
+.architecture-port {
+  width: 0.5rem;
+  height: 0.5rem;
+  border: 1px solid #ffffff;
+  background: #344f63;
+}
+
+.architecture-port-input { left: -0.3rem; }
+.architecture-port-output { right: -0.3rem; }
+
+.architecture-edge {
+  --edge-color: #607789;
+  opacity: 0.2;
+  pointer-events: stroke;
+}
+
+.architecture-edge-command { --edge-color: #356494; }
+.architecture-edge-control { --edge-color: #87517e; }
+.architecture-edge-data { --edge-color: #2f7667; }
+.architecture-edge-event { --edge-color: #8c641b; }
+.architecture-edge-evidence { --edge-color: #8b4d47; }
+
+.architecture-edge-hit,
+.architecture-edge-path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.architecture-edge-hit {
+  stroke: transparent;
+  stroke-width: 12;
+}
+
+.architecture-edge-path {
+  stroke: var(--edge-color);
+  stroke-width: 1.7;
+}
+
+.architecture-edge-control .architecture-edge-path,
+.architecture-edge-evidence .architecture-edge-path {
+  stroke-dasharray: 7 4;
+}
+
+.architecture-edge.scenario-active .architecture-edge-path {
+  stroke: #bc7900;
+  stroke-width: 3.5;
+}
+
+.architecture-edge.scenario-active {
+  opacity: 1;
+}
+
+.architecture-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--vc-space-3);
+  min-width: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--vc-line);
+  background: var(--vc-paper);
+  padding: var(--vc-space-3) 0 var(--vc-space-3) var(--vc-space-3);
+}
+
+.architecture-inspector h3 {
+  font-size: 0.9375rem;
+  line-height: 1.35;
+}
+
+.architecture-inspector > p,
+.architecture-scenario-summary p {
+  color: var(--vc-muted);
+  font-size: var(--vc-font-size-sm);
+  line-height: 1.45;
+}
+
+.architecture-inspector dl {
+  display: grid;
+  gap: var(--vc-space-2);
+  margin: 0;
+}
+
+.architecture-inspector dl div {
+  display: grid;
+  grid-template-columns: 3.6rem minmax(0, 1fr);
+  gap: var(--vc-space-2);
+  min-width: 0;
+  padding-bottom: var(--vc-space-2);
+  border-bottom: 1px solid var(--vc-line);
+  font-size: var(--vc-font-size-xs);
+}
+
+.architecture-inspector dt {
+  color: var(--vc-muted);
+  font-weight: 700;
+}
+
+.architecture-inspector dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--vc-body);
+  overflow-wrap: anywhere;
+}
+
+.architecture-scenario-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--vc-space-2);
+  margin-top: auto;
+  border-top: 1px solid var(--vc-line);
+  padding-top: var(--vc-space-3);
+}
+
+.architecture-scenario-summary svg {
+  margin-top: 0.15rem;
+  color: #a26800;
+}
+
+.architecture-scenario-summary strong {
+  display: block;
+  margin-bottom: var(--vc-space-1);
+  color: var(--vc-body);
+}
+
+.architecture-viewport .react-flow__minimap {
+  width: 8rem;
+  height: 5.5rem;
+  overflow: hidden;
+  border: 1px solid #9eacb6;
+  border-radius: var(--vc-radius-xs);
+  box-shadow: 0 3px 10px rgb(26 45 58 / 13%);
+}
+
+.architecture-minimap-shell {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  pointer-events: none;
+}
+
+.architecture-minimap-shell .react-flow__minimap {
+  pointer-events: auto;
+}
+
+.architecture-viewport .react-flow__attribution {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .architecture-stage {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .architecture-viewport {
+    height: 26rem;
+    min-height: 26rem;
+  }
+
+  .architecture-inspector {
+    min-height: 9rem;
+    border-top: 1px solid var(--vc-line);
+    border-left: 0;
+    padding: var(--vc-space-3) 0 0;
+  }
+
+  .architecture-scenario-summary {
+    margin-top: 0;
+  }
+}
+
+@media (max-width: 460px) {
+  .architecture-canvas-header {
+    align-items: stretch;
+  }
+
+  .architecture-state-tabs {
+    width: 100%;
+  }
+
+  .architecture-scenario {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    flex-basis: 100%;
+  }
+
+  .architecture-scenario select {
+    grid-column: 1 / -1;
+    width: 100%;
+    max-width: none;
+  }
+
+  .architecture-camera-controls {
+    margin-left: 0;
+  }
+
+  .architecture-focus-targets button {
+    flex: 1 1 9rem;
+    justify-content: center;
+  }
+
+  .architecture-viewport .react-flow__minimap {
+    width: 6.25rem;
+    height: 4.25rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .architecture-canvas *,
+  .architecture-canvas *::before,
+  .architecture-canvas *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

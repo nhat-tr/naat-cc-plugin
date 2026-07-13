@@ -1,0 +1,94 @@
+#!/usr/bin/env node
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const dataDir = process.env.PAIR_DATA_DIR || path.join(os.homedir(), '.local', 'share', 'pair-v3');
+const ledger = process.argv[2] || path.join(dataDir, 'attempts.jsonl');
+if (!fs.existsSync(ledger)) {
+  console.log('pair-report: no attempts recorded');
+  process.exit(0);
+}
+
+const attempts = fs.readFileSync(ledger, 'utf8')
+  .split(/\r?\n/)
+  .filter(Boolean)
+  .map(line => {
+    try { return JSON.parse(line); } catch { return null; }
+  })
+  .filter(record => record?.event === 'attempt.completed');
+
+const groups = new Map();
+for (const attempt of attempts) {
+  const key = `${attempt.routeId}|${attempt.profile?.type || '?'}|${attempt.profile?.risk || '?'}`;
+  const group = groups.get(key) || {
+    route: attempt.routeId,
+    type: attempt.profile?.type || '?',
+    risk: attempt.profile?.risk || '?',
+    attempts: 0,
+    valid: 0,
+    accepted: 0,
+    localFix: 0,
+    escalated: 0,
+    rewrites: 0,
+    redesigns: 0,
+    regenerations: 0,
+    humanTakeovers: 0,
+    anchorSamples: 0,
+    reviewerMisses: 0,
+    blockers: 0,
+    majors: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    costUsd: 0,
+    measuredCosts: 0,
+  };
+  group.attempts++;
+  if (attempt.valid) group.valid++;
+  if (attempt.disposition === 'accepted') group.accepted++;
+  if (attempt.disposition === 'local-fix') group.localFix++;
+  if (attempt.action === 'escalate') group.escalated++;
+  if (attempt.disposition === 'substantial-rewrite') group.rewrites++;
+  if (attempt.disposition === 'redesign') group.redesigns++;
+  if (attempt.disposition === 'regenerated') group.regenerations++;
+  if (attempt.disposition === 'human-takeover') group.humanTakeovers++;
+  if (attempt.reviewCalibration?.sampled) group.anchorSamples++;
+  group.reviewerMisses += attempt.reviewCalibration?.missedFindings || 0;
+  group.blockers += (attempt.review?.findings || []).filter(finding => finding.severity === 'BLOCKER').length;
+  group.majors += (attempt.review?.findings || []).filter(finding => finding.severity === 'MAJOR').length;
+  for (const usage of [attempt.usage?.worker, attempt.usage?.reviewer]) {
+    group.inputTokens += usage?.inputTokens || 0;
+    group.outputTokens += usage?.outputTokens || 0;
+  }
+  if (Number.isFinite(attempt.totalCost)) {
+    group.costUsd += attempt.totalCost;
+    group.measuredCosts++;
+  }
+  groups.set(key, group);
+}
+
+if (process.argv.includes('--json')) {
+  console.log(JSON.stringify([...groups.values()], null, 2));
+  process.exit(0);
+}
+
+console.log('route                         type       risk      tries quality clean local rewrite findings(B/M) anchor(miss/sample) tokens(in/out) cost');
+for (const group of [...groups.values()].sort((a, b) => a.route.localeCompare(b.route))) {
+  const cost = group.measuredCosts > 0 ? `$${group.costUsd.toFixed(3)}` : '-';
+  const quality = group.valid > 0 ? `${Math.round((group.accepted / group.valid) * 100)}%` : '-';
+  console.log([
+    group.route.padEnd(29),
+    group.type.padEnd(10),
+    group.risk.padEnd(9),
+    String(group.attempts).padStart(5),
+    quality.padStart(7),
+    String(group.accepted).padStart(5),
+    String(group.localFix).padStart(5),
+    String(group.rewrites).padStart(7),
+    `${group.blockers}/${group.majors}`.padStart(13),
+    `${group.reviewerMisses}/${group.anchorSamples}`.padStart(19),
+    `${group.inputTokens}/${group.outputTokens}`.padStart(14),
+    cost.padStart(7),
+  ].join(' '));
+}

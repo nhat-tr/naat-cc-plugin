@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Review Slice Manifest",
+  "type": "object",
+  "properties": {
+    "schema": { "const": 1 },
+    "work_id": { "$ref": "#/$defs/work_id" },
+    "base_tree": { "$ref": "#/$defs/git_object" },
+    "head_tree": { "$ref": "#/$defs/git_object" },
+    "plan_digest": { "$ref": "#/$defs/sha256" },
+    "indexer_version": { "$ref": "#/$defs/non_blank_text" },
+    "review_slices": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/review_slice" }
+    },
+    "cross_slice_changes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/cross_slice_change" }
+    },
+    "unmapped_changes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/unmapped_change" }
+    }
+  },
+  "required": [
+    "schema",
+    "work_id",
+    "base_tree",
+    "head_tree",
+    "plan_digest",
+    "indexer_version",
+    "review_slices",
+    "cross_slice_changes",
+    "unmapped_changes"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "non_blank_text": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "work_id": {
+      "type": "string",
+      "pattern": "^work-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "stable_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "acceptance_criterion_id": {
+      "type": "string",
+      "pattern": "^AC-[1-9][0-9]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "git_object": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{40}(?:[a-f0-9]{24})?$"
+    },
+    "repository_path": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"
+    },
+    "attributed_change": {
+      "type": "object",
+      "properties": {
+        "path": { "$ref": "#/$defs/repository_path" },
+        "hunk_id": { "$ref": "#/$defs/sha256" },
+        "claimed_by": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/stable_id" },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": ["path", "hunk_id", "claimed_by"],
+      "additionalProperties": false
+    },
+    "cross_slice_change": {
+      "type": "object",
+      "properties": {
+        "path": { "$ref": "#/$defs/repository_path" },
+        "hunk_id": { "$ref": "#/$defs/sha256" },
+        "claimed_by": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/stable_id" },
+          "minItems": 2,
+          "uniqueItems": true
+        }
+      },
+      "required": ["path", "hunk_id", "claimed_by"],
+      "additionalProperties": false
+    },
+    "unmapped_change": {
+      "type": "object",
+      "properties": {
+        "path": { "$ref": "#/$defs/repository_path" },
+        "hunk_id": { "$ref": "#/$defs/sha256" }
+      },
+      "required": ["path", "hunk_id"],
+      "additionalProperties": false
+    },
+    "review_slice": {
+      "type": "object",
+      "properties": {
+        "task_id": { "$ref": "#/$defs/stable_id" },
+        "stream_id": { "$ref": "#/$defs/stable_id" },
+        "acceptance_criteria": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/acceptance_criterion_id" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "expected_files": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/repository_path" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "verification_command": { "$ref": "#/$defs/non_blank_text" },
+        "actual_changes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/attributed_change" }
+        }
+      },
+      "required": [
+        "task_id",
+        "stream_id",
+        "acceptance_criteria",
+        "expected_files",
+        "verification_command",
+        "actual_changes"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

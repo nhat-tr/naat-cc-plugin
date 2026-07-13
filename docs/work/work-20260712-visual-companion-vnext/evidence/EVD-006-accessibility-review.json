@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "id": "EVD-006-accessibility-review",
+  "work_id": "work-20260712-visual-companion-vnext",
+  "kind": "accessibility-review",
+  "acceptance_criteria": [
+    "AC-20"
+  ],
+  "decision_record_ids": [
+    "DR-001-visual-companion-vnext"
+  ],
+  "source": "Manual Chromium review plus Playwright accessibility compatibility suite",
+  "recorded_at": "2026-07-13T09:07:46Z",
+  "result": {
+    "status": "passed_with_residual_risks",
+    "runtime": "Playwright 1.61.1 headless Chromium",
+    "automated_review": {
+      "command": "npm run test:brainstorming:a11y",
+      "tests": 5,
+      "passed": 5,
+      "failed": 0,
+      "workspace_kinds": [
+        "product",
+        "architecture",
+        "research",
+        "business",
+        "review"
+      ],
+      "blocking_axe_findings": 0,
+      "reduced_motion_checked": true,
+      "offline_rendering_checked": true
+    },
+    "manual_review": {
+      "method": "Live local server sessions driven with real Tab and workspace keyboard input, accessibility-tree inspection, geometry checks, and screenshots.",
+      "viewport_scans": 15,
+      "viewports": [
+        "1440x900 desktop",
+        "390x844 mobile",
+        "320x800 CSS-pixel reflow equivalent"
+      ],
+      "tab_stops": {
+        "expected": 174,
+        "reached": 174,
+        "missing": 0,
+        "unnamed": 0,
+        "without_visible_focus": 0,
+        "offscreen": 0,
+        "keyboard_traps": 0
+      },
+      "structural_findings": {
+        "horizontal_document_overflow": 0,
+        "heading_level_jumps": 0,
+        "duplicate_ids": 0,
+        "broken_aria_controls": 0,
+        "broken_aria_labelledby": 0,
+        "unnamed_complementary_landmarks": 0,
+        "page_errors": 0,
+        "console_errors": 0
+      },
+      "observed_interactions": [
+        "Product Frame tabs retain focus; Inspect focuses Back; Back restores the originating Inspect control; state and responsive controls retain focus.",
+        "Architecture mode, topology camera, focus targets, and keyboard-only annotation remain operable; annotation returns focus to Targeted note and updates a polite live region.",
+        "Architecture exposes one named graph application inside one named viewport region and removes 520 node and edge elements from the sequential Tab order.",
+        "Research filtering remains keyboard operable and retains focus.",
+        "Business reasoning remains readable with named, non-color-only actor and outcome states.",
+        "Review Acceptance Criterion tabs and tree Left, Right, parent, Home, End, typeahead, and activation behavior retain focus and selected state."
+      ],
+      "non_color_state_cues_observed": true,
+      "all_controls_vertically_reachable": true
+    },
+    "remediated_findings": [
+      "Added the missing Product comparison heading level and explicit Inspect/Back focus handoff.",
+      "Named the Architecture inspector and Review navigator complementary landmarks.",
+      "Made Pending feedback a polite additions region and returned focus to the note input.",
+      "Replaced the large graph's 520 direct node and edge Tab stops with bounded keyboard controls while retaining pointer selection and Component targeting.",
+      "Removed nested application boundaries and named the remaining Architecture graph application.",
+      "Kept Review source status labels unbroken at 320 CSS pixels."
+    ],
+    "residual_risks": [
+      "Manual browser review covered Chromium only; Firefox and WebKit were not manually exercised.",
+      "The 320 CSS-pixel check emulates 400-percent reflow and is not a native browser zoom session.",
+      "No real screen-reader speech, forced-colors or high-contrast mode, touch assistive technology, or OS zoom session was exercised.",
+      "The 200-node and 320-edge Architecture accessibility tree remains intrinsically dense and needs real assistive-technology user validation.",
+      "Polite live-region structure was verified, but spoken announcement verbosity was not."
+    ]
+  }
+}

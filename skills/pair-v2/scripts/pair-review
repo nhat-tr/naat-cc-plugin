@@ -66,7 +66,7 @@ resolve_base() {
 }
 [[ -z "$BASE" ]] && BASE=$(resolve_base)
 
-scratch="${CLAUDE_SCRATCH_DIR:-${TMPDIR:-/tmp}}/$(basename "$root")"
+scratch="${CLAUDE_SCRATCH_DIR:-$HOME/.claude-scratch}/$(basename "$root")/pair-review"
 mkdir -p "$scratch"
 plan_file="$root/.pair/plan.md"
 
@@ -85,10 +85,13 @@ The plan under challenge is: $plan_file
 $spec_note
 
 Check, in order:
+- Intent alignment: every stream serves Purpose, respects every Rejection Criterion, and does not implement a Contrast.
+- Capability evidence: every external Dependency uses name@version and cites repository usage, pinned API metadata, official evidence, or a probe; every Repository capability names an observed path/symbol and contract; model memory is not evidence; no task invents an API to compensate for missing evidence.
 - Acceptance-criteria coverage: every spec AC maps to at least one task; every task serves an AC (YAGNI — flag work no AC requires).
 - TDD compliance: every stream's FIRST task is a failing-test task; an integration-test task exercising the ACs end-to-end exists. Missing = BLOCKER.
-- Decomposition: streams independent where claimed, sized honestly (S/M/L), review boundaries at sensible points, dependency order sound.
+- Decomposition: streams are vertical behaviors rather than layers, independent where claimed, sized honestly (S/M/L), and topologically ordered.
 - Grounding: spot-check that the file paths tasks reference actually exist (or are plausibly new); Implementation Context names real patterns from this repo (verify with 1-3 targeted reads, not a sweep).
+- Simplicity: compare the plan with its framework-native baseline; apply the deletion test and flag pass-through wrappers, one-adapter interfaces, speculative factories/registries, duplicated framework capability, and layer-oriented work with no AC.
 - Risks: name what is most likely to go wrong and whether the plan mitigates it.
 - Severity: BLOCKER = plan cannot work as written / AC uncovered / TDD violation; MAJOR = will cause rework; MINOR = polish.
 

@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nhat.dev/schemas/brainstorming/research-workspace.schema.json",
+  "title": "Research Evidence Board content",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision_relevance_options", "claims", "unknowns"],
+  "properties": {
+    "decision_relevance_options": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/relevanceLabel" }
+    },
+    "claims": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 500,
+      "items": { "$ref": "#/$defs/claim" }
+    },
+    "unknowns": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "items": { "$ref": "#/$defs/unknown" }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "evidenceIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^EVD-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$"
+    },
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "relevanceLabel": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "relevanceLabels": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/relevanceLabel" }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component_id", "confidence", "source_refs", "decision_relevance"],
+      "properties": {
+        "component_id": { "$ref": "#/$defs/identifier" },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "source_refs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/evidenceIdentifier" }
+        },
+        "contradicts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" }
+        },
+        "decision_relevance": { "$ref": "#/$defs/relevanceLabels" }
+      }
+    },
+    "unknown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["component_id", "note", "decision_relevance"],
+      "properties": {
+        "component_id": { "$ref": "#/$defs/identifier" },
+        "note": { "$ref": "#/$defs/nonEmptyText" },
+        "decision_relevance": { "$ref": "#/$defs/relevanceLabels" }
+      }
+    }
+  }
+}

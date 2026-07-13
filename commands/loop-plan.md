@@ -27,17 +27,31 @@ not the conversation).
 
    ## Tasks
    <!-- TDD order: failing tests first, implementation after, integration test mandatory -->
-   - [ ] write failing tests for <behavior> — files: `tests/...`
-   - [ ] implement <task> to make the tests pass — files: `path/to/file`
-   - [ ] integration test: <end-to-end scenario> — files: `tests/...`
+   - [ ] write failing tests for <behavior> [type:test] [risk:low] [scope:local] [uncertainty:low] — files: `tests/...` — **S**
+   - [ ] implement <task> to make the tests pass [type:feature] [risk:medium] [scope:local] [uncertainty:medium] — files: `path/to/file` — **M**
+   - [ ] integration test: <end-to-end scenario> [type:test] [risk:medium] [scope:cross-module] [uncertainty:low] — files: `tests/...` — **M**
 
    ## Log
    <!-- one line per wakeup: what was done, what is next -->
    ```
 
-3. Keep state files out of version control: if `.git/info/exclude` does not
+3. Add pair-v3 routing tags (`type`, `risk`, `scope`, `uncertainty`) and S/M/L
+   complexity to every task so model selection does not have to infer them.
+4. Keep state files out of version control: if `.git/info/exclude` does not
    already list it, append `.claude-loop.md` to `.git/info/exclude`.
-4. Report to the user, then print BOTH start commands with this guidance:
+5. Report to the user, then print the runtime-neutral start command:
+
+   ```bash
+   pair-loop --runtime auto
+   ```
+
+   `PAIR_DEFAULT_RUNTIME=codex|claude` controls auto selection outside an
+   existing agent session. `--runtime codex` or `--runtime claude` overrides it.
+
+   Legacy Claude `/loop` remains available, but pair-loop is the measured path
+   that records per-task quality, review, token, and rework evidence.
+
+   **Legacy Claude token-limit behavior:**
 
    **Riding token limits** (expecting to exhaust quota and resume when it
    refreshes — overnight runs): use the interval form. Interval wakeups are

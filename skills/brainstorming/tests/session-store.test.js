@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
@@ -22,6 +23,97 @@ function browserTurn(overrides = {}) {
     choices: [{ groupId: 'session-store', componentId: 'store-option', value: 'sqlite', label: 'SQLite' }],
     screen: { id: 'technical-plan', file: 'technical-plan.html' },
     ...overrides,
+  };
+}
+
+class FakeWatcher extends EventEmitter {
+  constructor(onChange) {
+    super();
+    this.onChange = onChange;
+    this.closeCount = 0;
+  }
+
+  change(filename, eventType = 'change') {
+    this.onChange(eventType, filename);
+  }
+
+  close() {
+    this.closeCount += 1;
+  }
+}
+
+class ManualScheduler {
+  constructor() {
+    this.nextId = 1;
+    this.timeouts = new Map();
+    this.immediates = new Map();
+  }
+
+  setTimeout = (callback, delay) => {
+    const handle = { id: this.nextId++, unref() {} };
+    this.timeouts.set(handle, { callback, delay });
+    return handle;
+  };
+
+  clearTimeout = handle => {
+    this.timeouts.delete(handle);
+  };
+
+  setImmediate = callback => {
+    const handle = { id: this.nextId++ };
+    this.immediates.set(handle, callback);
+    return handle;
+  };
+
+  clearImmediate = handle => {
+    this.immediates.delete(handle);
+  };
+
+  runImmediate() {
+    const entry = this.immediates.entries().next().value;
+    assert.ok(entry, 'expected a scheduled immediate reconciliation');
+    const [handle, callback] = entry;
+    this.immediates.delete(handle);
+    callback();
+  }
+
+  runTimeout(delay) {
+    const entry = [...this.timeouts.entries()].find(([, timer]) => timer.delay === delay);
+    assert.ok(entry, `expected a ${delay}ms timer`);
+    const [handle, timer] = entry;
+    this.timeouts.delete(handle);
+    timer.callback();
+  }
+
+  get pendingCount() {
+    return this.timeouts.size + this.immediates.size;
+  }
+}
+
+function deterministicWaitStore(t, name, overrides = {}) {
+  const stateDir = createScratchDirectory(t, name);
+  const scheduler = new ManualScheduler();
+  let watcher;
+  let watchCount = 0;
+  const store = new SessionStore(stateDir, {
+    watch: (_directory, onChange) => {
+      watchCount += 1;
+      watcher = new FakeWatcher(onChange);
+      return watcher;
+    },
+    setTimeout: scheduler.setTimeout,
+    clearTimeout: scheduler.clearTimeout,
+    setImmediate: scheduler.setImmediate,
+    clearImmediate: scheduler.clearImmediate,
+    reconciliationIntervalMs: 5,
+    ...overrides,
+  });
+  return {
+    scheduler,
+    stateDir,
+    store,
+    get watchCount() { return watchCount; },
+    get watcher() { return watcher; },
   };
 }
 
@@ -136,4 +228,139 @@ test('SessionStore waits for the next unacknowledged browser turn without pollin
 
   assert.equal(turn.clientTurnId, 'browser-turn-wait');
   assert.equal(turn.message, 'Queued while agent waits.');
+  assert.equal(store.readCursor(), 0, 'delivery does not acknowledge the Feedback Batch');
+});
+
+test('SessionStore treats an absent watcher filename as a reconciliation signal', async t => {
+  const harness = deterministicWaitStore(t, 'wait-absent-filename');
+  let available = null;
+  harness.store.nextUnacknowledgedTurn = () => available;
+  const waiting = harness.store.waitForUnacknowledgedTurn({ timeoutMs: 20 });
+  available = { seq: 1, clientTurnId: 'absent-filename-turn' };
+
+  assert.equal(harness.watchCount, 1);
+  harness.watcher.change(undefined);
+  harness.scheduler.runImmediate();
+
+  assert.equal((await waiting).clientTurnId, 'absent-filename-turn');
+  assert.equal(harness.watcher.closeCount, 1);
+  assert.equal(harness.scheduler.pendingCount, 0);
+});
+
+test('SessionStore recovers from watcher errors through bounded fallback reconciliation', async t => {
+  const harness = deterministicWaitStore(t, 'wait-watcher-error');
+  let available = null;
+  let reads = 0;
+  harness.store.nextUnacknowledgedTurn = () => {
+    reads += 1;
+    return available;
+  };
+  const waiting = harness.store.waitForUnacknowledgedTurn({ timeoutMs: 20 });
+
+  assert.equal(harness.watchCount, 1);
+  harness.watcher.emit('error', new Error('simulated watcher loss'));
+  available = { seq: 1, clientTurnId: 'fallback-turn' };
+  assert.ok(harness.scheduler.timeouts.size <= 2, 'fallback and overall timeout are the only timer handles');
+  harness.scheduler.runTimeout(5);
+
+  assert.equal((await waiting).clientTurnId, 'fallback-turn');
+  assert.equal(reads, 2, 'initial scan plus one bounded fallback scan');
+  assert.equal(harness.watcher.closeCount, 1);
+  assert.equal(harness.scheduler.pendingCount, 0);
+});
+
+test('SessionStore performs bounded fallback reconciliation while the watcher is silent', async t => {
+  const harness = deterministicWaitStore(t, 'wait-silent-fallback');
+  let available = null;
+  let reads = 0;
+  harness.store.nextUnacknowledgedTurn = () => {
+    reads += 1;
+    return available;
+  };
+  const waiting = harness.store.waitForUnacknowledgedTurn({ timeoutMs: 20 });
+  available = { seq: 1, clientTurnId: 'silent-fallback-turn' };
+
+  assert.equal(harness.scheduler.timeouts.size, 2, 'one fallback and one overall timeout are scheduled');
+  harness.scheduler.runTimeout(5);
+
+  assert.equal((await waiting).clientTurnId, 'silent-fallback-turn');
+  assert.equal(reads, 2, 'the fallback performs one reconciliation per interval');
+  assert.equal(harness.watcher.closeCount, 1);
+  assert.equal(harness.scheduler.pendingCount, 0);
+});
+
+test('SessionStore performs a final reconciliation before reporting timeout', async t => {
+  const harness = deterministicWaitStore(t, 'wait-final-timeout-scan', { reconciliationIntervalMs: 100 });
+  let available = null;
+  harness.store.nextUnacknowledgedTurn = () => available;
+  const waiting = harness.store.waitForUnacknowledgedTurn({ timeoutMs: 20 });
+  available = { seq: 1, clientTurnId: 'final-scan-turn' };
+
+  harness.scheduler.runTimeout(20);
+
+  assert.equal((await waiting).clientTurnId, 'final-scan-turn');
+  assert.equal(harness.watcher.closeCount, 1);
+  assert.equal(harness.scheduler.pendingCount, 0);
+});
+
+test('SessionStore coalesces repeated wake signals and releases watcher and timer handles once', async t => {
+  const harness = deterministicWaitStore(t, 'wait-idempotent-wake');
+  let reads = 0;
+  const turn = { seq: 1, clientTurnId: 'idempotent-turn' };
+  harness.store.nextUnacknowledgedTurn = () => (++reads === 1 ? null : turn);
+  const waiting = harness.store.waitForUnacknowledgedTurn({ timeoutMs: 20 });
+
+  assert.ok(harness.watcher, 'the injected watcher owns the active Wait');
+  harness.watcher.change('session.jsonl');
+  harness.watcher.change(undefined, 'rename');
+  assert.equal(harness.scheduler.immediates.size, 1, 'wake signals share one scheduled reconciliation');
+  harness.scheduler.runImmediate();
+  harness.watcher.change('agent-cursor.json');
+
+  assert.equal(await waiting, turn);
+  assert.equal(reads, 2, 'multiple wake signals do not duplicate delivery scans');
+  assert.equal(harness.watcher.closeCount, 1);
+  assert.equal(harness.scheduler.pendingCount, 0);
+});
+
+test('SessionStore cancellation and timeout leave later Feedback Batches pending', async t => {
+  const cancelled = deterministicWaitStore(t, 'wait-cancelled');
+  const controller = new AbortController();
+  const cancelledWait = cancelled.store.waitForUnacknowledgedTurn({ timeoutMs: 20, signal: controller.signal });
+  controller.abort();
+
+  await assert.rejects(cancelledWait, error => error?.name === 'AbortError');
+  const cancelledTurn = cancelled.store.appendBrowserTurn(browserTurn({ clientTurnId: 'after-cancel' }));
+  assert.equal(cancelled.store.nextUnacknowledgedTurn().seq, cancelledTurn.seq);
+  assert.equal(cancelled.store.readCursor(), 0);
+  assert.equal(cancelled.watcher.closeCount, 1);
+  assert.equal(cancelled.scheduler.pendingCount, 0);
+
+  const timedOut = deterministicWaitStore(t, 'wait-timed-out', { reconciliationIntervalMs: 100 });
+  const timedOutWait = timedOut.store.waitForUnacknowledgedTurn({ timeoutMs: 20 });
+  timedOut.scheduler.runTimeout(20);
+  assert.equal(await timedOutWait, null);
+  const timedOutTurn = timedOut.store.appendBrowserTurn(browserTurn({ clientTurnId: 'after-timeout' }));
+  assert.equal(timedOut.store.nextUnacknowledgedTurn().seq, timedOutTurn.seq);
+  assert.equal(timedOut.store.readCursor(), 0);
+  assert.equal(timedOut.watcher.closeCount, 1);
+  assert.equal(timedOut.scheduler.pendingCount, 0);
+});
+
+test('SessionStore exposes one synchronous snapshot transaction for identity-preserving migration', t => {
+  const store = new SessionStore(createScratchDirectory(t, 'snapshot-transaction'), {
+    randomUUID: () => 'snapshot-event-1',
+  });
+  store.appendBrowserTurn({ clientTurnId: 'snapshot-turn-1', message: 'Preserve this batch.' });
+
+  const result = store.withSnapshotLock(snapshot => ({
+    eventId: snapshot.events[0].id,
+    pendingTurns: snapshot.pendingTurns,
+  }));
+  assert.deepEqual(result, { eventId: 'snapshot-event-1', pendingTurns: 1 });
+  assert.throws(
+    () => store.withSnapshotLock(() => Promise.resolve()),
+    /synchronous/i,
+  );
+  assert.equal(store.snapshot().events.length, 1, 'the lock is released after a rejected async callback');
 });

@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "profile": "technical",
+  "audience": "Visual Companion architecture reviewers",
+  "title": "Architecture Canvas layout direction",
+  "summary": "Choose how current and proposed topology preserve one stable spatial model.",
+  "sections": [
+    {
+      "kind": "mockup",
+      "id": "architecture-exclusive-modes",
+      "title": "Primary skeleton · Exclusive view modes",
+      "summary": "Current and proposed states reuse one stable ELK layout and switch without moving shared nodes.",
+      "device": "desktop",
+      "regions": [
+        {
+          "id": "architecture-toolbar",
+          "title": "State and scenario controls",
+          "detail": "Only one topology state is visually active at a time.",
+          "tone": "neutral",
+          "span": 12,
+          "elements": [
+            { "kind": "heading", "text": "Architecture Canvas" },
+            { "kind": "tabs", "labels": ["Current", "Proposed"], "active": 1 },
+            { "kind": "input", "control": "select", "label": "Scenario", "value": "Feedback delivery" }
+          ]
+        },
+        {
+          "id": "architecture-navigator",
+          "title": "Ownership and scenarios",
+          "detail": "Focus controls remain outside the graph camera.",
+          "tone": "neutral",
+          "span": 3,
+          "elements": [
+            { "kind": "list", "items": [
+              { "title": "Visual Session", "meta": "ownership" },
+              { "title": "Delivery core", "meta": "boundary" },
+              { "title": "Feedback path", "meta": "scenario" }
+            ] }
+          ]
+        },
+        {
+          "id": "architecture-canvas",
+          "title": "Stable proposed layout",
+          "detail": "Typed nodes, ports, edges, and nested ownership retain their positions across modes.",
+          "tone": "accent",
+          "span": 9,
+          "elements": [
+            { "kind": "placeholder", "label": "Shared layout · proposed state overlay" },
+            { "kind": "badge", "label": "Scenario path on", "tone": "positive" },
+            { "kind": "text", "text": "Changed nodes are emphasized; unchanged topology stays spatially stable." }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "decision",
+      "id": "architecture-layout-choice",
+      "title": "Choose the Architecture Canvas state comparison",
+      "summary": "Both share one stable layout; they differ in simultaneous visibility.",
+      "groupId": "architecture-layout",
+      "multiselect": false,
+      "options": [
+        {
+          "id": "architecture-exclusive-option",
+          "label": "Exclusive view modes",
+          "detail": "Switch Current or Proposed in one full-width canvas while preserving shared node positions.",
+          "points": ["9/10 · Maximum graph readability and camera space.", "Comparison depends on stable positions and change emphasis."],
+          "tone": "accent",
+          "score": 9,
+          "recommended": true
+        },
+        {
+          "id": "architecture-synced-split-option",
+          "label": "Synced compare split sharing one layout",
+          "detail": "Show Current and Proposed side by side with synchronized cameras and the same layout coordinates.",
+          "points": ["8/10 · Strongest direct before/after comparison.", "Each canvas loses width and dense graphs become harder to read."],
+          "tone": "neutral",
+          "score": 8,
+          "recommended": false
+        }
+      ]
+    }
+  ]
+}

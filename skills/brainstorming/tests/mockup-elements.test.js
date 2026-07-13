@@ -90,9 +90,9 @@ test('regions without elements stay valid for existing documents', () => {
 });
 
 test('the shell renders elements as annotatable prototype components', () => {
-  const app = fs.readFileSync(path.join(__dirname, '../assets/visual-shell/app.js'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, '../ui/app/WorkspaceHost.tsx'), 'utf8');
   const styles = fs.readFileSync(path.join(__dirname, '../assets/visual-shell/styles.css'), 'utf8');
-  assert.match(app, /renderElement/);
+  assert.match(app, /ElementView/);
   assert.match(app, /-e\$\{/); // derived per-element ids like <region-id>-e1
   assert.match(styles, /\.el-button\b/);
   assert.match(styles, /\.el-input\b/);

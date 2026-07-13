@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "id": "EVD-002-runtime-delivery-pilot",
+  "work_id": "work-20260712-visual-companion-vnext",
+  "kind": "runtime-delivery-pilot",
+  "acceptance_criteria": [
+    "AC-10",
+    "AC-12"
+  ],
+  "decision_record_ids": [
+    "DR-001-visual-companion-vnext"
+  ],
+  "source": "skills/brainstorming/scripts/runtime-pilot.cjs",
+  "recorded_at": "2026-07-13T06:08:16.247Z",
+  "result": {
+    "version": 1,
+    "runtimes": {
+      "codex": {
+        "version": "0.144.1",
+        "capability_state": "supported",
+        "delivery_state": "queued",
+        "acknowledgement_state": "not_applicable",
+        "checked_at": "2026-07-13T06:08:16.247Z",
+        "reason_code": "no_open_target"
+      },
+      "claude": {
+        "version": "2.1.207",
+        "capability_state": "supported",
+        "delivery_state": "queued",
+        "acknowledgement_state": "not_applicable",
+        "checked_at": "2026-07-13T06:08:16.247Z",
+        "reason_code": "no_open_target"
+      }
+    }
+  }
+}

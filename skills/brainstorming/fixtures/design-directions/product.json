@@ -1,0 +1,164 @@
+{
+  "version": 1,
+  "profile": "product",
+  "audience": "Visual Companion product reviewers",
+  "title": "Product Concept Studio layout direction",
+  "summary": "Compare one device-aware primary skeleton with the strongest width-independent rival.",
+  "sections": [
+    {
+      "kind": "mockup",
+      "id": "product-device-aware",
+      "title": "Primary desktop skeleton · Device-aware triptych",
+      "summary": "Desktop stacks full-width concepts and follows them with an explicit difference lens.",
+      "device": "desktop",
+      "regions": [
+        {
+          "id": "product-toolbar",
+          "title": "Comparison controls",
+          "detail": "Recommendation stays hidden during initial inspection.",
+          "tone": "neutral",
+          "span": 12,
+          "elements": [
+            { "kind": "heading", "text": "Product Concept Studio" },
+            { "kind": "tabs", "labels": ["Compare", "Focus"], "active": 0 },
+            { "kind": "badge", "label": "Equal fixture", "tone": "positive" }
+          ]
+        },
+        {
+          "id": "product-concept-a",
+          "title": "Concept A",
+          "detail": "Command-center strategy.",
+          "tone": "neutral",
+          "span": 12,
+          "elements": [
+            { "kind": "heading", "text": "A · Command center" },
+            { "kind": "text", "text": "Same data, device, scope, and fidelity." },
+            { "kind": "button", "label": "Inspect A", "variant": "secondary" }
+          ]
+        },
+        {
+          "id": "product-concept-b",
+          "title": "Concept B",
+          "detail": "Guided-flow strategy.",
+          "tone": "neutral",
+          "span": 12,
+          "elements": [
+            { "kind": "heading", "text": "B · Guided flow" },
+            { "kind": "text", "text": "Same data, device, scope, and fidelity." },
+            { "kind": "button", "label": "Inspect B", "variant": "secondary" }
+          ]
+        },
+        {
+          "id": "product-concept-c",
+          "title": "Concept C",
+          "detail": "Direct-manipulation strategy.",
+          "tone": "neutral",
+          "span": 12,
+          "elements": [
+            { "kind": "heading", "text": "C · Direct manipulation" },
+            { "kind": "text", "text": "Same data, device, scope, and fidelity." },
+            { "kind": "button", "label": "Inspect C", "variant": "secondary" }
+          ]
+        },
+        {
+          "id": "product-difference-lens",
+          "title": "Desktop difference lens",
+          "detail": "The lens restores cross-concept scanning after the three readable full-width prototypes.",
+          "tone": "accent",
+          "span": 12,
+          "elements": [
+            {
+              "kind": "table",
+              "columns": ["Difference", "A", "B", "C"],
+              "rows": [
+                ["Navigation", "Global", "Guided", "Spatial"],
+                ["Primary action", "Toolbar", "Next step", "On object"]
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "mockup",
+      "id": "product-mobile-triptych",
+      "title": "Primary mobile skeleton · Three-up concept strip",
+      "summary": "Mobile keeps all three equal-fixture concepts in one compact strip, then focuses one for readable inspection.",
+      "device": "mobile",
+      "regions": [
+        {
+          "id": "product-mobile-toolbar",
+          "title": "Mobile comparison controls",
+          "detail": "Initial inspection keeps the recommendation hidden.",
+          "tone": "neutral",
+          "span": 12,
+          "elements": [
+            { "kind": "heading", "text": "Compare A / B / C" },
+            { "kind": "badge", "label": "Mobile · equal fixture", "tone": "positive" }
+          ]
+        },
+        {
+          "id": "product-mobile-a",
+          "title": "A",
+          "detail": "Command-center preview.",
+          "tone": "neutral",
+          "span": 4,
+          "elements": [
+            { "kind": "heading", "text": "A" },
+            { "kind": "badge", "label": "Command", "tone": "neutral" }
+          ]
+        },
+        {
+          "id": "product-mobile-b",
+          "title": "B",
+          "detail": "Guided-flow preview.",
+          "tone": "neutral",
+          "span": 4,
+          "elements": [
+            { "kind": "heading", "text": "B" },
+            { "kind": "badge", "label": "Guided", "tone": "neutral" }
+          ]
+        },
+        {
+          "id": "product-mobile-c",
+          "title": "C",
+          "detail": "Direct-manipulation preview.",
+          "tone": "neutral",
+          "span": 4,
+          "elements": [
+            { "kind": "heading", "text": "C" },
+            { "kind": "badge", "label": "Direct", "tone": "neutral" }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "decision",
+      "id": "product-layout-choice",
+      "title": "Choose the Product Concept Studio skeleton",
+      "summary": "Both keep equal fixtures; they differ in whether width changes the comparison model.",
+      "groupId": "product-layout",
+      "multiselect": false,
+      "options": [
+        {
+          "id": "product-device-aware-option",
+          "label": "Device-aware triptych",
+          "detail": "Mobile keeps a three-up concept strip; desktop stacks richer concepts and adds a difference lens.",
+          "points": ["9/10 · Best balance of comparability and readable concept detail.", "Costs one explicit width-dependent composition rule."],
+          "tone": "accent",
+          "score": 9,
+          "recommended": true
+        },
+        {
+          "id": "product-stacked-option",
+          "label": "Stacked concepts + difference lens",
+          "detail": "Use one vertical comparison rhythm at every width and rely on a difference lens for scanning.",
+          "points": ["8/10 · Simplest responsive model and generous concept width.", "Cross-concept comparison requires more scrolling on mobile."],
+          "tone": "neutral",
+          "score": 8,
+          "recommended": false
+        }
+      ]
+    }
+  ]
+}

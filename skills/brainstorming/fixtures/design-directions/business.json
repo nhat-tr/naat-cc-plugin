@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "profile": "business",
+  "audience": "Visual Companion business reviewers",
+  "title": "Business Reasoning Canvas layout direction",
+  "summary": "Choose whether a journey is always the reading spine or optional for proposition-shaped reasoning.",
+  "sections": [
+    {
+      "kind": "timeline",
+      "id": "business-journey-spine",
+      "title": "Primary skeleton · Journey spine",
+      "summary": "Actors and outcomes lead the reading order; assumptions, economics, risks, and experiments attach to the relevant stage.",
+      "items": [
+        {
+          "id": "business-discover",
+          "title": "Discover",
+          "detail": "Actor recognizes the unmet outcome.",
+          "tone": "neutral",
+          "points": ["Assumption · the problem is frequent enough to matter.", "Risk · current workaround may already be sufficient."]
+        },
+        {
+          "id": "business-evaluate",
+          "title": "Evaluate",
+          "detail": "Actor compares the proposition with the current alternative.",
+          "tone": "accent",
+          "points": ["Economics · value must exceed switching cost.", "Experiment · concierge trial measures willingness to change."]
+        },
+        {
+          "id": "business-adopt",
+          "title": "Adopt",
+          "detail": "Actor reaches the promised outcome and generates learning.",
+          "tone": "positive",
+          "points": ["Outcome · time-to-value is observable.", "Evidence · retention tests whether value repeats."]
+        }
+      ]
+    },
+    {
+      "kind": "decision",
+      "id": "business-layout-choice",
+      "title": "Choose the Business Reasoning Canvas skeleton",
+      "summary": "Both retain actors, outcomes, assumptions, economics, risks, and experiments.",
+      "groupId": "business-layout",
+      "multiselect": false,
+      "options": [
+        {
+          "id": "business-journey-option",
+          "label": "Journey spine",
+          "detail": "Use the actor journey as the stable reading order and attach business reasoning to its stages.",
+          "points": ["9/10 · Strong narrative causality from actor to outcome.", "Can force an artificial sequence onto proposition-shaped work."],
+          "tone": "accent",
+          "score": 9,
+          "recommended": true
+        },
+        {
+          "id": "business-proposition-option",
+          "label": "Proposition blocks · spine optional",
+          "detail": "Lead with actor, outcome, proposition, economics, and risks; add a journey spine only when sequence carries meaning.",
+          "points": ["8/10 · Better for early propositions and non-linear business models.", "Needs another cue to preserve narrative reading order."],
+          "tone": "neutral",
+          "score": 8,
+          "recommended": false
+        }
+      ]
+    }
+  ]
+}

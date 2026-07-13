@@ -1,0 +1,560 @@
+#!/usr/bin/env node
+
+const childProcess = require('node:child_process');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const {
+  buildRuntimeCommand,
+  classifyOutcome,
+  createAttempt,
+  nextOpenTask,
+  planContractDigest,
+  parseRuntimeUsage,
+  selectRoute,
+} = require('./lib/pair-core');
+const { validateWorkDirectory } = require('../../brainstorming/scripts/work-lineage.cjs');
+
+const POLICY_VERSION = '3.1.0';
+const SCRIPT_DIR = __dirname;
+const SKILL_DIR = path.resolve(SCRIPT_DIR, '..');
+const WORKER_SCHEMA_PATH = path.join(SKILL_DIR, 'schemas', 'worker-result.json');
+const REVIEW_SCHEMA_PATH = path.join(SKILL_DIR, 'schemas', 'review-result.json');
+
+function fail(message) {
+  console.error(`pair-task: ${message}`);
+  process.exit(1);
+}
+
+function parseArgs(argv) {
+  const options = {
+    runtime: process.env.PAIR_RUNTIME || 'auto',
+    once: false,
+    dryRun: false,
+    maxAttempts: Number(process.env.PAIR_MAX_TASK_ATTEMPTS || 3),
+  };
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (arg === '--runtime') options.runtime = argv[++index];
+    else if (arg === '--model') options.model = argv[++index];
+    else if (arg === '--effort') options.effort = argv[++index];
+    else if (arg === '--once') options.once = true;
+    else if (arg === '--dry-run') options.dryRun = true;
+    else if (arg === '--max-attempts') options.maxAttempts = Number(argv[++index]);
+    else if (arg === '--help') options.help = true;
+    else fail(`unknown option ${arg}`);
+  }
+  return options;
+}
+
+function commandExists(command) {
+  return childProcess.spawnSync('sh', ['-c', `command -v ${command}`], { stdio: 'ignore' }).status === 0;
+}
+
+function resolveRuntime(requested) {
+  if (requested !== 'auto') {
+    if (!['codex', 'claude'].includes(requested)) fail(`unsupported runtime ${requested}`);
+    if (!commandExists(requested)) fail(`${requested} is not on PATH`);
+    return requested;
+  }
+  if (process.env.CODEX_THREAD_ID && commandExists('codex')) return 'codex';
+  if (process.env.CLAUDECODE && commandExists('claude')) return 'claude';
+  const preferred = process.env.PAIR_DEFAULT_RUNTIME;
+  if (preferred && ['codex', 'claude'].includes(preferred) && commandExists(preferred)) return preferred;
+  if (commandExists('codex')) return 'codex';
+  if (commandExists('claude')) return 'claude';
+  fail('neither codex nor claude is on PATH');
+}
+
+function git(root, args, options = {}) {
+  return childProcess.spawnSync('git', args, { cwd: root, encoding: 'utf8', ...options });
+}
+
+function gitRoot() {
+  const result = childProcess.spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+  if (result.status !== 0) fail('not in a git repository');
+  return result.stdout.trim();
+}
+
+function readJson(file, fallback = null) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function readWorkLinkage(root, plan) {
+  const planStateDigest = sha256(plan);
+  const contractDigest = planContractDigest(plan);
+  const mirrorFile = path.join(root, '.pair', 'spec.md');
+  if (!fs.existsSync(mirrorFile)) {
+    return {
+      workId: null,
+      specDigest: null,
+      planDigest: contractDigest,
+      planStateDigest,
+      decisionRecordIds: [],
+    };
+  }
+  const mirror = fs.readFileSync(mirrorFile, 'utf8');
+  const canonicalPath = mirror.match(/^Canonical: (.+)$/m)?.[1];
+  const specDigest = mirror.match(/^Canonical SHA-256: ([a-f0-9]{64})$/m)?.[1];
+  if (!canonicalPath || !specDigest) throw new Error('active pair spec is not a canonical digest-linked mirror');
+  const resolvedRoot = fs.realpathSync(root);
+  const canonicalFile = path.resolve(resolvedRoot, canonicalPath);
+  if (canonicalFile !== resolvedRoot && !canonicalFile.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error('canonical spec path escapes the repository root');
+  }
+  if (!fs.existsSync(canonicalFile)) throw new Error(`canonical spec does not exist: ${canonicalPath}`);
+  const realCanonicalFile = fs.realpathSync(canonicalFile);
+  if (!realCanonicalFile.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error('canonical spec resolves outside the repository root');
+  }
+  const spec = fs.readFileSync(realCanonicalFile, 'utf8');
+  if (sha256(spec) !== specDigest) throw new Error('canonical spec digest does not match active pair mirror');
+  const expectedMirror = [
+    '<!-- GENERATED ACTIVE MIRROR',
+    `Canonical: ${canonicalPath}`,
+    `Canonical SHA-256: ${specDigest}`,
+    '-->',
+    spec,
+  ].join('\n');
+  if (mirror !== expectedMirror) throw new Error('active pair mirror bytes do not match the canonical spec');
+  const workDirectory = path.dirname(realCanonicalFile);
+  const work = validateWorkDirectory(workDirectory);
+  const expectedCanonicalPath = `docs/work/${work.work_id}/spec.md`;
+  if (workDirectory !== path.join(resolvedRoot, 'docs', 'work', work.work_id)
+    || canonicalPath !== expectedCanonicalPath) {
+    throw new Error('canonical Work index is not stored at its Work ID path');
+  }
+  if (!work || work.spec?.path !== canonicalPath || work.spec?.sha256 !== specDigest || !work.work_id) {
+    throw new Error('canonical Work index does not match the active pair mirror');
+  }
+  if (work.plan && work.plan.sha256 !== contractDigest) {
+    throw new Error('approved Pair plan digest does not match the current plan contract');
+  }
+  const decisionRecordIds = (work.decision_records || [])
+    .map(reference => path.basename(reference, '.md'))
+    .sort();
+  return {
+    workId: work.work_id,
+    specDigest,
+    planDigest: work.plan?.sha256 || contractDigest,
+    planStateDigest,
+    decisionRecordIds,
+  };
+}
+
+function readLedger(file) {
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).map(line => {
+    try { return JSON.parse(line); } catch { return null; }
+  }).filter(Boolean);
+}
+
+function appendJsonLine(file, value) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.appendFileSync(file, `${JSON.stringify(value)}\n`, { mode: 0o600 });
+}
+
+function recoverActiveAttempt(paths) {
+  if (!fs.existsSync(paths.active)) return false;
+  const active = readJson(paths.active);
+  if (!active?.attemptId) {
+    fs.rmSync(paths.active, { force: true });
+    return false;
+  }
+  const alreadyCompleted = readLedger(paths.ledger)
+    .some(record => record.event === 'attempt.completed' && record.attemptId === active.attemptId);
+  if (!alreadyCompleted) {
+    appendJsonLine(paths.ledger, {
+      event: 'attempt.completed',
+      ...active,
+      status: 'interrupted',
+      finishedAt: new Date().toISOString(),
+      disposition: 'regenerated',
+      action: 'retry-infrastructure',
+      cause: 'environment-failure',
+      success: false,
+      valid: false,
+      totalCost: null,
+      costSource: 'unknown',
+    });
+  }
+  fs.rmSync(paths.active, { force: true });
+  console.log(`pair-loop: recovered interrupted attempt ${active.attemptId}; retrying task ${active.taskId}`);
+  return true;
+}
+
+function routesFor(runtime) {
+  if (runtime === 'claude') {
+    return [
+      { id: 'claude-haiku-low', runtime, model: process.env.PAIR_CLAUDE_LOW_MODEL || 'haiku', effort: 'low', strength: 1, expectedCost: 0.05 },
+      { id: 'claude-sonnet-medium', runtime, model: process.env.PAIR_CLAUDE_MEDIUM_MODEL || 'sonnet', effort: 'medium', strength: 2, expectedCost: 0.25 },
+      { id: 'claude-opus-high', runtime, model: process.env.PAIR_CLAUDE_HIGH_MODEL || 'opus', effort: 'high', strength: 3, expectedCost: 0.8 },
+      { id: 'claude-opus-max', runtime, model: process.env.PAIR_CLAUDE_CRITICAL_MODEL || 'opus', effort: 'max', strength: 4, expectedCost: 1.2 },
+    ];
+  }
+  return [
+    { id: 'codex-default-low', runtime, model: process.env.PAIR_CODEX_LOW_MODEL || 'default', effort: 'low', strength: 1, expectedCost: 0.1 },
+    { id: 'codex-default-medium', runtime, model: process.env.PAIR_CODEX_MEDIUM_MODEL || 'default', effort: 'medium', strength: 2, expectedCost: 0.3 },
+    { id: 'codex-default-high', runtime, model: process.env.PAIR_CODEX_HIGH_MODEL || 'default', effort: 'high', strength: 3, expectedCost: 0.7 },
+    { id: 'codex-default-xhigh', runtime, model: process.env.PAIR_CODEX_CRITICAL_MODEL || 'default', effort: 'xhigh', strength: 4, expectedCost: 1.0 },
+  ];
+}
+
+function taskHistory(ledger, taskId, repoId) {
+  return ledger.filter(record => record.taskId === taskId
+    && record.event === 'attempt.completed'
+    && (!repoId || record.repositoryId === repoId));
+}
+
+function repositoryId(root) {
+  const remote = git(root, ['config', '--get', 'remote.origin.url']);
+  const identity = remote.status === 0 && remote.stdout.trim() ? remote.stdout.trim() : root;
+  return require('node:crypto').createHash('sha256').update(identity).digest('hex').slice(0, 16);
+}
+
+function chooseRoute(task, runtime, ledger, options, repoId) {
+  const routes = routesFor(runtime);
+  if (options.model || options.effort) {
+    return {
+      id: `${runtime}-${options.model || 'default'}-${options.effort || 'default'}`,
+      runtime,
+      model: options.model || 'default',
+      effort: options.effort || 'default',
+      strength: 4,
+    };
+  }
+  const prior = taskHistory(ledger, task.id, repoId);
+  const last = prior.at(-1);
+  const strongest = routes.at(-1);
+  const spent = prior.reduce((sum, attempt) => {
+    if (Number.isFinite(attempt.totalCost)) return sum + attempt.totalCost;
+    return attempt.valid ? sum + (routes.find(route => route.id === attempt.routeId)?.expectedCost || 0) : sum;
+  }, 0);
+  if (spent >= strongest.expectedCost) return strongest;
+  if (last?.action === 'escalate') {
+    const current = routes.find(route => route.id === last.routeId);
+    return routes.find(route => route.strength > (current?.strength || 1)) || routes.at(-1);
+  }
+  if (last?.action === 'retry-infrastructure') return routes.find(route => route.id === last.routeId) || selectRoute(task, routes, ledger);
+  if (last?.action === 'retry-context' || last?.action === 'redesign') {
+    const current = routes.find(route => route.id === last.routeId);
+    return routes.find(route => route.strength > (current?.strength || 1)) || strongest;
+  }
+  if (last?.action === 'local-fix') return routes.find(route => route.id === last.routeId) || selectRoute(task, routes, ledger);
+  const localHistory = ledger.filter(record => record.repositoryId === repoId);
+  const localSamples = localHistory.filter(record => record.event === 'attempt.completed' && record.valid).length;
+  return selectRoute(task, routes, localSamples >= 5 ? localHistory : ledger);
+}
+
+function workerPrompt(task, planPath, priorReview) {
+  const reviewContext = priorReview?.findings?.length
+    ? `\nThe previous review findings for this task are:\n${JSON.stringify(priorReview.findings, null, 2)}\nAddress them without expanding scope.`
+    : '';
+  return `Work exactly one pair-plan task as the delegated implementation worker.\n\nTask ${task.id}: ${task.text}\nProfile: ${JSON.stringify({ type: task.type, complexity: task.complexity, risk: task.risk, scope: task.scope, uncertainty: task.uncertainty })}\nAcceptance criteria: ${task.acceptanceCriteria?.join(', ') || 'read the plan mapping'}\nOwned files: ${task.files.join(', ') || 'verification-only; do not expand ownership'}\nRequired verification: ${task.verify || 'read the plan'}\nPlan: ${planPath}\n\nRead the applicable AGENTS.md plus the plan's Intent Contract, Implementation Context, Capability Evidence, and Simplicity Contract before editing. Use repository and framework capabilities named in the evidence; do not invent APIs, wrappers, factories, registries, ports, or orchestration that the plan does not justify. Prefer the framework-native baseline and deep modules with small interfaces. If a load-bearing API or capability is absent from the pinned dependency/version, return blocked with a blocker beginning 'incorrect-plan:' and cite the observed evidence instead of approximating it with custom architecture. Follow TDD order, make the smallest complete implementation, and run the exact focused verification. Do not edit any file under .pair/. Do not work on another task.${reviewContext}\nReturn only the requested structured result.`;
+}
+
+function runCommand(command, outputFile, timeoutMs) {
+  const result = childProcess.spawnSync(command.file, command.args, {
+    cwd: command.cwd,
+    encoding: 'utf8',
+    env: { ...process.env, PAIR_STOP_GATE: 'off', CLAUDE_STOP_GATE: 'off' },
+    timeout: timeoutMs,
+  });
+  fs.writeFileSync(outputFile, result.stdout || '', { mode: 0o600 });
+  return result;
+}
+
+function parseWorkerResult(runtime, raw, outputPath) {
+  if (runtime === 'codex') return readJson(outputPath, { status: 'blocked', summary: 'missing structured output', files_changed: [], tests: [], blocker: 'missing structured output' });
+  const envelope = readJsonFromString(raw);
+  const candidate = envelope?.structured_output || envelope?.result || envelope;
+  if (typeof candidate === 'string') return readJsonFromString(candidate) || { status: 'blocked', summary: candidate, files_changed: [], tests: [], blocker: 'unstructured result' };
+  return candidate || { status: 'blocked', summary: 'missing structured output', files_changed: [], tests: [], blocker: 'missing structured output' };
+}
+
+function readJsonFromString(raw) {
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+function isExpectedFailingTestTask(task) {
+  return task.type === 'test'
+    && (task.phase === 'red' || /\b(failing|red[- ]green|characterization)\s+tests?\b/i.test(task.text));
+}
+
+function verify(root, task, workerResult) {
+  const diffCheck = git(root, ['diff', '--check']);
+  if (diffCheck.status !== 0) return { status: 'fail', command: 'git diff --check', output: `${diffCheck.stdout}${diffCheck.stderr}`.trim() };
+  const verifyScript = path.join(root, '.pair', 'verify.sh');
+  const expectsFailure = isExpectedFailingTestTask(task);
+  if (!expectsFailure && fs.existsSync(verifyScript) && (fs.statSync(verifyScript).mode & 0o111)) {
+    const result = childProcess.spawnSync(verifyScript, [], { cwd: root, encoding: 'utf8', timeout: 15 * 60 * 1000 });
+    return { status: result.status === 0 ? 'pass' : 'fail', command: '.pair/verify.sh', output: `${result.stdout}${result.stderr}`.trim().slice(-2000) };
+  }
+
+  const reported = (workerResult.tests || []).filter(test => test.status !== 'not-run' && test.command?.trim());
+  if (reported.length === 0) {
+    return {
+      status: 'fail',
+      command: 'git diff --check + replayed worker verification',
+      output: 'no replayable verification command was reported; add .pair/verify.sh or run a focused check',
+    };
+  }
+
+  const results = reported.map(test => {
+    const run = childProcess.spawnSync('bash', ['-lc', test.command], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: Number(process.env.PAIR_VERIFY_COMMAND_TIMEOUT_MS || 15 * 60 * 1000),
+    });
+    return {
+      command: test.command,
+      status: run.status,
+      output: `${run.stdout || ''}${run.stderr || ''}`.trim().slice(-1000),
+    };
+  });
+  const reproducedExpectedFailure = expectsFailure && results.some(result => result.status !== 0);
+  const passed = expectsFailure
+    ? reproducedExpectedFailure
+    : results.every(result => result.status === 0);
+  return {
+    status: passed ? 'pass' : 'fail',
+    command: 'git diff --check + replayed worker verification',
+    output: expectsFailure && reproducedExpectedFailure
+      ? 'expected failure reproduced by coordinator command replay'
+      : results.map(result => `${result.status === 0 ? 'PASS' : 'FAIL'}: ${result.command}${result.output ? `\n${result.output}` : ''}`).join('\n').slice(-2000),
+  };
+}
+
+function resolveBase(root) {
+  const remote = git(root, ['rev-parse', '--abbrev-ref', 'origin/HEAD']);
+  if (remote.status === 0 && remote.stdout.trim() && remote.stdout.trim() !== 'origin/HEAD') return remote.stdout.trim();
+  for (const ref of ['origin/main', 'origin/master', 'main', 'master']) {
+    if (git(root, ['rev-parse', '--verify', '--quiet', ref]).status === 0) return ref;
+  }
+  return 'HEAD';
+}
+
+function reviewPrompt(task, base, planPath) {
+  return `Independently review the complete current change for task ${task.id}: ${task.text}.\nBase: ${base}\nPlan: ${planPath}\n\nInspect staged, unstaged, committed, and untracked changes. Read the plan's Intent Contract, Capability Evidence, Simplicity Contract, task mapping, and acceptance criteria. Verify every finding with targeted code reads. Check correctness, regressions, security, and tests, then apply the deletion test: flag pass-through wrappers, one-adapter interfaces, speculative factories/registries, duplicated framework capability, unplanned public types, and layer-oriented work that does not serve an acceptance criterion. Verify framework-sensitive API claims against the pinned dependency, repository usage, or cited official evidence; an invented or unavailable API is a BLOCKER and normally requires redesign. Missing required tests or unmet acceptance criteria are BLOCKERs. Set recommended_action to approve, local-fix, rewrite, or redesign; use redesign when the plan or architecture is wrong and implementation retries cannot fix it. Do not edit files. Return only the requested structured result.`;
+}
+
+function runReview({ runtime, route, root, task, planPath, scratchDir, attemptId, timeoutMs, dryRun, anchor = false }) {
+  const schema = readJson(REVIEW_SCHEMA_PATH);
+  const outputPath = path.join(scratchDir, `${attemptId}.review-result.json`);
+  const rawPath = path.join(scratchDir, `${attemptId}.review-events.jsonl`);
+  const base = resolveBase(root);
+  const reviewEffort = anchor ? 'xhigh' : (task.risk === 'low' ? 'medium' : (task.risk === 'critical' ? 'xhigh' : 'high'));
+  let command;
+  if (runtime === 'codex') {
+    const reviewModel = anchor
+      ? (process.env.PAIR_CODEX_ANCHOR_MODEL || 'default')
+      : (process.env.PAIR_CODEX_REVIEW_MODEL || 'default');
+    const args = ['exec', 'review', '--uncommitted', '--json', '--ephemeral', '--output-schema', REVIEW_SCHEMA_PATH, '--output-last-message', outputPath, '-c', `model_reasoning_effort="${reviewEffort}"`];
+    if (reviewModel !== 'default') args.push('--model', reviewModel);
+    args.push(reviewPrompt(task, base, planPath));
+    command = { file: 'codex', args, cwd: root };
+  } else {
+    const reviewModel = anchor
+      ? (process.env.PAIR_CLAUDE_ANCHOR_MODEL || 'opus')
+      : (process.env.PAIR_CLAUDE_REVIEW_MODEL || (task.risk === 'low' ? 'sonnet' : 'opus'));
+    command = {
+      file: 'claude',
+      args: ['-p', reviewPrompt(task, base, planPath), '--output-format', 'json', '--no-session-persistence', '--permission-mode', 'dontAsk', '--disallowedTools', 'Edit,Write,MultiEdit,NotebookEdit,Task', '--json-schema', JSON.stringify(schema), '--model', reviewModel, '--effort', anchor ? 'max' : (task.risk === 'low' ? 'medium' : 'high')],
+      cwd: root,
+    };
+  }
+  if (dryRun) return { status: 0, command, review: { verdict: 'approve', recommended_action: 'approve', summary: 'dry run', findings: [] }, usage: null };
+  const result = runCommand(command, rawPath, timeoutMs);
+  const review = runtime === 'codex' ? readJson(outputPath) : parseWorkerResult('claude', result.stdout || '', outputPath);
+  return { status: result.status ?? 1, command, review: review || { verdict: 'fix-needed', recommended_action: 'rewrite', summary: 'review failed', findings: [] }, usage: parseRuntimeUsage(runtime, result.stdout || '') };
+}
+
+function shouldRunAnchorReview(attemptId, task, review) {
+  if (review.verdict !== 'approve' || task.risk === 'critical') return false;
+  const rate = Number(process.env.PAIR_ANCHOR_REVIEW_RATE || 0.1);
+  if (!(rate > 0)) return false;
+  const bucket = Number.parseInt(attemptId.slice(-2), 16) / 255;
+  return bucket < Math.min(rate, 1);
+}
+
+function writeReviewFiles(root, review) {
+  const dir = path.join(root, '.pair');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'review.json'), `${JSON.stringify(review, null, 2)}\n`);
+  const findings = review.findings.length === 0
+    ? 'No findings.'
+    : review.findings.map(finding => `### ${finding.severity}: ${finding.title}\n- **File:** \`${finding.file}:${finding.line}\`\n- **Issue:** ${finding.detail}\n- **Suggested fix:** ${finding.suggestion}`).join('\n\n');
+  fs.writeFileSync(path.join(dir, 'review.md'), `## Summary\n${review.summary}\n\n## Findings\n${findings}\n\n## Verdict\n${review.verdict}\n`);
+}
+
+function completeTask(planPath, task) {
+  const lines = fs.readFileSync(planPath, 'utf8').split(/\r?\n/);
+  const index = task.line - 1;
+  if (!lines[index]?.match(/^\s*[-*]\s+\[ \]/)) throw new Error(`Task ${task.id} moved while the attempt was running`);
+  lines[index] = lines[index].replace('[ ]', '[x]');
+  fs.writeFileSync(planPath, lines.join('\n'));
+}
+
+function addRecoveryContext(planPath, task, context) {
+  const lines = fs.readFileSync(planPath, 'utf8').split(/\r?\n/);
+  const index = task.line - 1;
+  const marker = `  - Pair-v3 recovery context for ${task.id}:`;
+  const value = `${marker} ${String(context || 'Re-read the task and repository evidence before retrying.').replace(/\s+/g, ' ').slice(0, 1200)}`;
+  if (lines[index + 1]?.startsWith(marker)) lines[index + 1] = value;
+  else lines.splice(index + 1, 0, value);
+  fs.writeFileSync(planPath, lines.join('\n'));
+}
+
+function runOne(root, runtime, options, paths) {
+  const plan = fs.readFileSync(paths.plan, 'utf8');
+  const task = nextOpenTask(plan);
+  if (!task) return { done: true };
+  const ledger = readLedger(paths.ledger);
+  const repoId = repositoryId(root);
+  const prior = taskHistory(ledger, task.id, repoId);
+  if (prior.length >= options.maxAttempts) fail(`task ${task.id} reached the ${options.maxAttempts}-attempt safety cap`);
+  const route = chooseRoute(task, runtime, ledger, options, repoId);
+  const baselineCommit = git(root, ['rev-parse', 'HEAD']).stdout.trim();
+  const baseline = git(root, ['rev-parse', 'HEAD^{tree}']).stdout.trim();
+  let linkage;
+  try {
+    linkage = readWorkLinkage(root, plan);
+  } catch (error) {
+    fail(error.message);
+  }
+  const attempt = createAttempt({
+    task,
+    route,
+    policyVersion: POLICY_VERSION,
+    baseline,
+    ...linkage,
+  });
+  attempt.baselineCommit = baselineCommit;
+  attempt.repositoryId = repoId;
+
+  const prompt = workerPrompt(task, paths.plan, readJson(path.join(root, '.pair', 'review.json')));
+  const outputPath = path.join(paths.scratch, `${attempt.attemptId}.worker-result.json`);
+  const rawPath = path.join(paths.scratch, `${attempt.attemptId}.worker-events.jsonl`);
+  const schema = readJson(WORKER_SCHEMA_PATH);
+  const command = buildRuntimeCommand({ runtime, root, prompt, model: route.model, effort: route.effort, schemaPath: WORKER_SCHEMA_PATH, outputPath, schema });
+
+  console.log(`pair-loop: task ${task.id} | ${runtime} ${route.model}/${route.effort} | risk=${task.risk} complexity=${task.complexity}`);
+  if (options.dryRun) {
+    console.log(JSON.stringify({ attempt, command }, null, 2));
+    return { done: false, dryRun: true };
+  }
+
+  fs.writeFileSync(paths.active, `${JSON.stringify(attempt, null, 2)}\n`);
+  appendJsonLine(paths.ledger, { event: 'attempt.started', ...attempt });
+
+  const workerRun = runCommand(command, rawPath, Number(process.env.PAIR_TASK_TIMEOUT_MS || 60 * 60 * 1000));
+  const worker = parseWorkerResult(runtime, workerRun.stdout || '', outputPath);
+  const verification = verify(root, task, worker);
+  const reviewRun = workerRun.status === 0 && worker.status === 'completed'
+    ? runReview({ runtime, route, root, task, planPath: paths.plan, scratchDir: paths.scratch, attemptId: attempt.attemptId, timeoutMs: Number(process.env.PAIR_REVIEW_TIMEOUT_MS || 30 * 60 * 1000), dryRun: false })
+    : { status: 1, review: { verdict: 'fix-needed', recommended_action: 'rewrite', summary: 'worker did not complete', findings: [] }, usage: null };
+  const anchorRun = reviewRun.status === 0 && shouldRunAnchorReview(attempt.attemptId, task, reviewRun.review)
+    ? runReview({ runtime, route, root, task, planPath: paths.plan, scratchDir: paths.scratch, attemptId: `${attempt.attemptId}.anchor`, timeoutMs: Number(process.env.PAIR_REVIEW_TIMEOUT_MS || 30 * 60 * 1000), dryRun: false, anchor: true })
+    : null;
+  const anchorDisagrees = anchorRun?.review
+    && (anchorRun.review.verdict !== 'approve' || anchorRun.review.recommended_action !== 'approve');
+  const effectiveReview = anchorDisagrees ? anchorRun.review : reviewRun.review;
+  writeReviewFiles(root, effectiveReview);
+  const outcome = classifyOutcome({
+    workerStatus: worker.status,
+    workerBlocker: worker.blocker,
+    verification: verification.status,
+    findings: effectiveReview.findings || [],
+    priorAttempts: prior.length,
+    priorModelAttempts: prior.filter(record => record.valid).length,
+    runtimeStatus: workerRun.status ?? 1,
+    reviewStatus: anchorRun ? (anchorRun.status ?? 1) : (reviewRun.status ?? 1),
+    recommendedAction: effectiveReview.recommended_action,
+  });
+  const workerUsage = parseRuntimeUsage(runtime, workerRun.stdout || '');
+  const measuredCosts = [workerUsage.costUsd, reviewRun.usage?.costUsd, anchorRun?.usage?.costUsd].filter(Number.isFinite);
+  const totalCost = measuredCosts.length > 0
+    ? measuredCosts.reduce((sum, value) => sum + value, 0)
+    : route.expectedCost ?? null;
+  const completed = {
+    event: 'attempt.completed',
+    ...attempt,
+    status: 'completed',
+    finishedAt: new Date().toISOString(),
+    worker,
+    verification,
+    review: effectiveReview,
+    primaryReview: reviewRun.review,
+    anchorReview: anchorRun?.review || null,
+    reviewCalibration: anchorRun ? {
+      sampled: true,
+      missedFindings: Math.max(0, (anchorRun.review.findings || []).length - (reviewRun.review.findings || []).length),
+    } : { sampled: false, missedFindings: 0 },
+    usage: { worker: workerUsage, reviewer: reviewRun.usage, anchorReviewer: anchorRun?.usage || null },
+    totalCost,
+    costSource: measuredCosts.length > 0 ? 'runtime' : 'route-estimate',
+    success: outcome.disposition === 'accepted',
+    valid: workerRun.status === 0 && reviewRun.status === 0 && (!anchorRun || anchorRun.status === 0),
+    ...outcome,
+  };
+  appendJsonLine(paths.ledger, completed);
+  fs.rmSync(paths.active, { force: true });
+
+  if (outcome.action === 'complete-task') completeTask(paths.plan, task);
+  if (outcome.action === 'retry-context') addRecoveryContext(paths.plan, task, worker.blocker);
+  if (outcome.action === 'redesign') {
+    const context = [effectiveReview.summary, ...(effectiveReview.findings || []).map(finding => finding.suggestion)].join(' ');
+    addRecoveryContext(paths.plan, task, context);
+  }
+  console.log(`pair-loop: task ${task.id} -> ${outcome.disposition} (${outcome.action})`);
+  if (outcome.action === 'stop') fail(`task ${task.id} stopped: ${outcome.cause}`);
+  return { done: false, action: outcome.action };
+}
+
+function main() {
+  const options = parseArgs(process.argv.slice(2));
+  if (options.help) {
+    console.log('Usage: pair-task [--runtime codex|claude|auto] [--model MODEL] [--effort LEVEL] [--once] [--dry-run] [--max-attempts N]');
+    return;
+  }
+  const root = gitRoot();
+  const runtime = resolveRuntime(options.runtime);
+  const pairPlan = path.join(root, '.pair', 'plan.md');
+  const loopPlan = path.join(root, '.claude-loop.md');
+  const plan = fs.existsSync(pairPlan) ? pairPlan : loopPlan;
+  if (!fs.existsSync(plan)) fail('no .pair/plan.md or .claude-loop.md; create a plan first');
+  const validator = path.join(SCRIPT_DIR, 'validate-plan');
+  if (plan === pairPlan && process.env.PAIR_SKIP_PLAN_VALIDATION !== '1') {
+    if (!fs.existsSync(validator)) fail(`canonical plan validator is missing: ${validator}`);
+    const validation = childProcess.spawnSync(process.execPath, [validator, plan], { cwd: root, encoding: 'utf8' });
+    if (validation.status !== 0) fail((validation.stdout || validation.stderr || 'plan validation failed').trim());
+  }
+  const dataDir = process.env.PAIR_DATA_DIR || path.join(os.homedir(), '.local', 'share', 'pair-v3');
+  const scratchBase = process.env.CLAUDE_SCRATCH_DIR || process.env.PAIR_SCRATCH_DIR || path.join(dataDir, 'scratch');
+  const scratch = path.join(scratchBase, path.basename(root), 'pair-v3');
+  fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(path.join(root, '.pair'), { recursive: true });
+  const paths = {
+    plan,
+    active: path.join(root, '.pair', 'active-attempt.json'),
+    ledger: path.join(dataDir, 'attempts.jsonl'),
+    scratch,
+  };
+  recoverActiveAttempt(paths);
+
+  while (true) {
+    const result = runOne(root, runtime, options, paths);
+    if (result.done || result.dryRun || options.once) break;
+  }
+  if (!nextOpenTask(fs.readFileSync(plan, 'utf8'))) console.log('pair-loop: all plan tasks complete');
+}
+
+if (require.main === module) main();
+
+module.exports = { addRecoveryContext, isExpectedFailingTestTask, readWorkLinkage, recoverActiveAttempt, verify };

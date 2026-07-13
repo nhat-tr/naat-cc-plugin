@@ -3,8 +3,10 @@ const test = require('node:test');
 
 const {
   annotationSummary,
+  deriveCommittedChoices,
   groupAnnotationsByComponent,
   isChoiceSelected,
+  mergeChoiceState,
   normalizeFeedbackDraft,
   readResponseError,
   reconcileChoices,
@@ -32,6 +34,37 @@ test('multiselect groups retain independent selected values', () => {
   choices = reconcileChoices(choices, chat, { selected: true, multiselect: true });
 
   assert.deepEqual(choices, [email, chat]);
+});
+
+test('Session Store Choices stay committed while Draft Choices override only their own group', () => {
+  const events = [{
+    type: 'user.turn',
+    choices: [
+      { groupId: 'layout', componentId: 'layout-a', value: 'layout-a', label: 'Layout A' },
+      { groupId: 'channels', componentId: 'channel-email', value: 'email', label: 'Email' },
+    ],
+  }, {
+    type: 'user.turn',
+    choices: [
+      { groupId: 'layout', componentId: 'layout-b', value: 'layout-b', label: 'Layout B' },
+      { groupId: 'channels', componentId: 'channel-chat', value: 'chat', label: 'Chat' },
+    ],
+  }];
+  const committed = deriveCommittedChoices(events, { channels: true, layout: false });
+  assert.deepEqual(committed.map(choice => choice.componentId), [
+    'channel-email',
+    'layout-b',
+    'channel-chat',
+  ]);
+
+  const displayed = mergeChoiceState(committed, [{
+    groupId: 'layout', componentId: 'layout-c', value: 'layout-c', label: 'Layout C',
+  }]);
+  assert.deepEqual(displayed.map(choice => choice.componentId), [
+    'channel-email',
+    'channel-chat',
+    'layout-c',
+  ]);
 });
 
 test('saved feedback drafts restore chat, idempotency key, and visible choice state', () => {

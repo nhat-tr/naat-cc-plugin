@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "id": "EVD-003-performance",
+  "work_id": "work-20260712-visual-companion-vnext",
+  "kind": "performance",
+  "acceptance_criteria": [
+    "AC-21",
+    "AC-22",
+    "AC-23"
+  ],
+  "decision_record_ids": [
+    "DR-001-visual-companion-vnext"
+  ],
+  "source": "skills/brainstorming/e2e/all-workspaces.performance.spec.ts",
+  "recorded_at": "2026-07-13T08:57:51.353Z",
+  "result": {
+    "status": "passed",
+    "runtime": "Playwright 1.61.1 headless Chromium",
+    "samples": 1,
+    "budgets": {
+      "standalone_max_bytes": 3145728,
+      "standalone_generation_ms": 1000,
+      "open_to_interactive_ms": 3000,
+      "interaction_response_ms": 250,
+      "feedback_persistence_ms": 500,
+      "max_long_task_ms": 50,
+      "max_dom_nodes": 5000
+    },
+    "workspace_metrics": {
+      "product": {
+        "export_bytes": 1208294,
+        "generation_ms": 47.2075,
+        "open_to_interactive_ms": 221.635959,
+        "interaction_ms": 20,
+        "dom_nodes": 434,
+        "observed_long_tasks": []
+      },
+      "architecture": {
+        "export_bytes": 1395340,
+        "generation_ms": 52.130792,
+        "open_to_interactive_ms": 1080.887041,
+        "interaction_ms": 43.5,
+        "dom_nodes": 4124,
+        "observed_long_tasks": []
+      },
+      "research": {
+        "export_bytes": 1202902,
+        "generation_ms": 51.964791,
+        "open_to_interactive_ms": 193.631208,
+        "interaction_ms": 16.4,
+        "dom_nodes": 267,
+        "observed_long_tasks": []
+      },
+      "business": {
+        "export_bytes": 1201646,
+        "generation_ms": 49.484583,
+        "open_to_interactive_ms": 223.13525,
+        "interaction_ms": 16,
+        "dom_nodes": 240,
+        "observed_long_tasks": []
+      },
+      "review": {
+        "export_bytes": 1217600,
+        "generation_ms": 49.319125,
+        "open_to_interactive_ms": 233.9015,
+        "interaction_ms": 5.6,
+        "dom_nodes": 599,
+        "observed_long_tasks": []
+      }
+    },
+    "combined_stress": {
+      "changed_files": 300,
+      "architecture_nodes": 200,
+      "architecture_edges": 320,
+      "feedback_persistence_ms": 141.608833,
+      "review_dom_nodes": 3815,
+      "architecture_dom_nodes": 4124
+    },
+    "network_requests": 0,
+    "page_errors": 0
+  }
+}

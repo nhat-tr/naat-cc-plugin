@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "profile": "technical",
+  "audience": "Visual Companion feature reviewers",
+  "title": "Feature Review Workbench layout direction",
+  "summary": "Choose between persistent review context and a guided single-surface drill-down.",
+  "sections": [
+    {
+      "kind": "mockup",
+      "id": "review-three-pane",
+      "title": "Primary skeleton · Three-pane density",
+      "summary": "Navigation, source context, and evidence stay visible together while whole-feature approval remains separate from file Viewed progress.",
+      "device": "desktop",
+      "regions": [
+        {
+          "id": "review-toolbar",
+          "title": "Work and patch-set controls",
+          "detail": "One toolbar owns Review Slice scope and whole-feature state.",
+          "tone": "neutral",
+          "span": 12,
+          "elements": [
+            { "kind": "heading", "text": "Feature Review Workbench" },
+            { "kind": "input", "control": "select", "label": "Review Slice", "value": "0.2 · Design directions" },
+            { "kind": "badge", "label": "Patch set current", "tone": "positive" }
+          ]
+        },
+        {
+          "id": "review-navigator",
+          "title": "Intent navigator",
+          "detail": "Spec AC, Review Slices, and expected ownership.",
+          "tone": "neutral",
+          "span": 3,
+          "elements": [
+            { "kind": "list", "items": [
+              { "title": "AC-1", "meta": "active" },
+              { "title": "Task 0.2", "meta": "6 files" },
+              { "title": "Whole feature", "meta": "open" }
+            ] }
+          ]
+        },
+        {
+          "id": "review-source",
+          "title": "Source context",
+          "detail": "Actual hunks, symbols, and findings occupy the largest pane.",
+          "tone": "accent",
+          "span": 5,
+          "elements": [
+            { "kind": "tabs", "labels": ["Changes", "Symbols", "Findings"], "active": 0 },
+            { "kind": "placeholder", "label": "Selected hunk and source context" },
+            { "kind": "button", "label": "Mark file Viewed", "variant": "secondary" }
+          ]
+        },
+        {
+          "id": "review-evidence",
+          "title": "Verification and governance",
+          "detail": "Evidence, quality obligations, decisions, and outcomes remain in view.",
+          "tone": "neutral",
+          "span": 4,
+          "elements": [
+            { "kind": "list", "items": [
+              { "title": "Focused test", "meta": "passed" },
+              { "title": "EQC-A11Y", "meta": "open" },
+              { "title": "DR-001", "meta": "accepted" }
+            ] },
+            { "kind": "button", "label": "Record verdict", "variant": "primary" }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "decision",
+      "id": "review-layout-choice",
+      "title": "Choose the Feature Review Workbench skeleton",
+      "summary": "The rival is a descriptive layout direction, not a new domain term in UBIQUITOUS_LANGUAGE.md.",
+      "groupId": "review-layout",
+      "multiselect": false,
+      "options": [
+        {
+          "id": "review-three-pane-option",
+          "label": "Three-pane density",
+          "detail": "Keep intent navigation, selected source, and evidence/governance visible as coordinated panes.",
+          "points": ["9/10 · Preserves cross-reference context during dense review.", "Requires a deliberate mobile collapse and density controls."],
+          "tone": "accent",
+          "score": 9,
+          "recommended": true
+        },
+        {
+          "id": "review-single-pane-option",
+          "label": "Single-pane progressive drill-down",
+          "detail": "Move from intent to Review Slice to source to evidence in one focused surface with a breadcrumb trail.",
+          "points": ["8/10 · Lower visual load and simpler narrow-width behavior.", "Reviewers repeatedly lose simultaneous intent, source, and evidence context."],
+          "tone": "neutral",
+          "score": 8,
+          "recommended": false
+        }
+      ]
+    }
+  ]
+}

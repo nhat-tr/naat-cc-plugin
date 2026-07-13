@@ -5,19 +5,101 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { SessionStore } = require('./session-store.cjs');
+const { withVisualStateLock } = require('./legacy-visual-import.cjs');
 const { renderStandalone } = require('./standalone.cjs');
 const { normalizeVisualDocument } = require('./visual-document.cjs');
+const {
+  resolveReviewEvidence,
+  resolveReviewSource,
+} = require('./review-workspace-data.cjs');
 
 const COOKIE_NAME = 'brainstorm_session';
 const MAX_REQUEST_BYTES = 64 * 1024;
+const DEFAULT_SSE_HEARTBEAT_MS = 15_000;
+const MIN_SSE_HEARTBEAT_MS = 10;
+const MAX_SSE_HEARTBEAT_MS = 60_000;
+const REVIEW_SOURCE_ID_PATTERN = /^source-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const EVIDENCE_RECORD_ID_PATTERN = /^EVD-[0-9]{3}-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SHELL_DIR = path.resolve(__dirname, '../assets/visual-shell');
 const SECURITY_HEADERS = {
   'Cache-Control': 'no-store',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
   'Referrer-Policy': 'no-referrer',
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
 };
+
+function normalizeDocument(value) {
+  if (value?.version !== 2) return normalizeVisualDocument(value);
+  const { normalizeWorkspaceDocument } = require('./workspace-document.cjs');
+  const { normalizeKnownWorkspaceContent } = require('./workspace-content.cjs');
+  return normalizeWorkspaceDocument(value, {
+    contentValidator: normalizeKnownWorkspaceContent,
+  });
+}
+
+function readRegularJson(file, label) {
+  let descriptor;
+  try {
+    descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    if (error.code === 'ELOOP') throw new Error(`${label} must be a regular file and must not be a symlink`);
+    throw new Error(`${label} could not be read`);
+  }
+  let contents;
+  try {
+    if (!fs.fstatSync(descriptor).isFile()) {
+      throw new Error(`${label} must be a regular file and must not be a symlink`);
+    }
+    contents = fs.readFileSync(descriptor, 'utf8');
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  try {
+    return JSON.parse(contents);
+  } catch {
+    throw new Error(`${label} contains invalid JSON`);
+  }
+}
+
+function readVisualFormat(file) {
+  const value = readRegularJson(file, 'visual format metadata');
+  if (value == null) return null;
+  if (value.version !== 1 || ![1, 2].includes(value.active_version)
+    || value.v1_document !== 'content/screen.json'
+    || value.v2_document !== 'content/workspace.json'
+    || Object.keys(value).some(key => !['version', 'active_version', 'v1_document', 'v2_document'].includes(key))) {
+    throw new Error('visual format metadata is malformed');
+  }
+  return value;
+}
+
+function readDeliveryState(file, durableSeq) {
+  const value = readRegularJson(file, 'delivery state metadata');
+  if (value == null) return { listening: false, deliveredThrough: 0 };
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || value.version !== 1
+    || typeof value.listening !== 'boolean'
+    || !Number.isInteger(value.deliveredThrough)
+    || value.deliveredThrough < 0
+    || value.deliveredThrough > (durableSeq ?? 0)
+    || Object.keys(value).some(key => !['version', 'listening', 'deliveredThrough'].includes(key))) {
+    throw new Error('delivery state metadata is malformed');
+  }
+  return { listening: value.listening, deliveredThrough: value.deliveredThrough };
+}
+
+function atomicWrite(file, contents, mode = 0o600) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, contents, { mode, flag: 'wx' });
+    fs.renameSync(temporary, file);
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
 const WAITING_DOCUMENT = normalizeVisualDocument({
   profile: 'technical',
   audience: 'Brainstorming participants',
@@ -110,6 +192,24 @@ function sameOrigin(request) {
   }
 }
 
+function reviewQueryId(requestUrl, pattern) {
+  const keys = [...new Set(requestUrl.searchParams.keys())];
+  if (keys.some(key => !['id', 'token'].includes(key))) return null;
+  if (requestUrl.searchParams.getAll('id').length !== 1
+    || requestUrl.searchParams.getAll('token').length > 1) return null;
+  const id = requestUrl.searchParams.get('id');
+  return typeof id === 'string' && id.length <= 200 && pattern.test(id) ? id : null;
+}
+
+function reviewPathId(requestUrl, relativePath) {
+  const prefix = 'api/review/evidence/';
+  if (!relativePath.startsWith(prefix)) return null;
+  const id = relativePath.slice(prefix.length);
+  const keys = [...new Set(requestUrl.searchParams.keys())];
+  if (keys.some(key => key !== 'token') || requestUrl.searchParams.getAll('token').length > 1) return '';
+  return id.length <= 200 && EVIDENCE_RECORD_ID_PATTERN.test(id) ? id : '';
+}
+
 function createBrainstormServer(options = {}) {
   const host = options.host || '127.0.0.1';
   const port = options.port ?? 0;
@@ -124,9 +224,15 @@ function createBrainstormServer(options = {}) {
   const sessionDir = path.resolve(options.sessionDir
     || process.env.BRAINSTORM_DIR
     || path.join(process.env.CLAUDE_SCRATCH_DIR || path.join(os.homedir(), '.claude-scratch'), 'brainstorm'));
+  const repositoryRoot = path.resolve(options.repositoryRoot || process.cwd());
   const contentDir = path.join(sessionDir, 'content');
   const stateDir = path.join(sessionDir, 'state');
   const screenPath = path.join(contentDir, 'screen.json');
+  const workspacePath = path.join(contentDir, 'workspace.json');
+  const formatPath = path.join(stateDir, 'visual-format.json');
+  const deliveryStatePath = path.join(stateDir, 'delivery-state.json');
+  const serverInfoPath = path.join(stateDir, 'server-info');
+  const serverStoppedPath = path.join(stateDir, 'server-stopped');
   // Artifacts live in the working repo (<repo>/.artifacts/brainstorm/<session>) by default so
   // they are a normal, discoverable by-product of the session — not buried in scratch. The
   // rolling visual.html is refreshed on every screen and feedback change; the Save button pins
@@ -138,7 +244,18 @@ function createBrainstormServer(options = {}) {
   const sessionId = options.sessionId || crypto.randomBytes(12).toString('hex');
   const ownerPid = options.ownerPid ?? null;
   const idleTimeoutMs = options.idleTimeoutMs ?? 30 * 60 * 1_000;
+  const sseHeartbeatMs = options.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
+  const sseSetInterval = options.sseSetInterval || setInterval;
+  const sseClearInterval = options.sseClearInterval || clearInterval;
   if (!/^[a-zA-Z0-9_-]{8,128}$/.test(sessionId)) throw new TypeError('sessionId must be a URL-safe identifier');
+  if (!Number.isInteger(sseHeartbeatMs)
+    || sseHeartbeatMs < MIN_SSE_HEARTBEAT_MS
+    || sseHeartbeatMs > MAX_SSE_HEARTBEAT_MS) {
+    throw new TypeError(`sseHeartbeatMs must be an integer between ${MIN_SSE_HEARTBEAT_MS} and ${MAX_SSE_HEARTBEAT_MS}`);
+  }
+  if (typeof sseSetInterval !== 'function' || typeof sseClearInterval !== 'function') {
+    throw new TypeError('SSE interval scheduler must provide set and clear functions');
+  }
 
   const basePath = `/session/${sessionId}/`;
   fs.mkdirSync(contentDir, { recursive: true, mode: 0o700 });
@@ -148,6 +265,7 @@ function createBrainstormServer(options = {}) {
   const shell = fs.readFileSync(path.join(SHELL_DIR, 'index.html'), 'utf8');
   const shellScript = fs.readFileSync(path.join(SHELL_DIR, 'app.js'));
   const shellStyles = fs.readFileSync(path.join(SHELL_DIR, 'styles.css'));
+  const shellWorker = fs.readFileSync(path.join(SHELL_DIR, 'elk-worker.min.js'));
   const store = new SessionStore(stateDir);
   const eventClients = new Set();
   const debounceTimers = new Map();
@@ -159,8 +277,31 @@ function createBrainstormServer(options = {}) {
   }
 
   function readScreen() {
-    if (!fs.existsSync(screenPath)) return WAITING_DOCUMENT;
-    return normalizeVisualDocument(JSON.parse(fs.readFileSync(screenPath, 'utf8')));
+    const format = readVisualFormat(formatPath);
+    const activePath = format?.active_version === 2 ? workspacePath : screenPath;
+    const value = readRegularJson(activePath, 'visual document');
+    if (value == null && format != null) throw new Error('active Visual Document is unavailable');
+    return value == null ? WAITING_DOCUMENT : normalizeDocument(value);
+  }
+
+  function readState() {
+    return withVisualStateLock(sessionDir, () => store.withSnapshotLock(session => {
+      const durableSeq = session.events
+        .filter(event => event.type === 'user.turn')
+        .at(-1)?.seq ?? null;
+      const delivery = readDeliveryState(deliveryStatePath, durableSeq);
+      return {
+        screen: readScreen(),
+        session,
+        deliveryEvidence: {
+          connection: 'open',
+          listening: delivery.listening,
+          durableSeq,
+          deliveredThrough: delivery.deliveredThrough,
+          acknowledgedThrough: Math.min(session.cursor, durableSeq ?? 0),
+        },
+      };
+    }));
   }
 
   function shellHtml() {
@@ -180,15 +321,16 @@ function createBrainstormServer(options = {}) {
       shell,
       styles: shellStyles,
       script: shellScript,
+      worker: shellWorker,
       screen: readScreen(),
-      session: store.snapshot(),
+      session: store.strictSnapshot(),
     });
   }
 
   function writeLiveExport() {
     try {
       ensureArtifactDir();
-      fs.writeFileSync(exportPath, renderCurrent(), { mode: 0o600 });
+      atomicWrite(exportPath, renderCurrent());
     } catch (error) {
       // A write failure (or an invalid screen.json) must never break the live session; the
       // previous good artifact stays in place until the next successful refresh.
@@ -200,12 +342,27 @@ function createBrainstormServer(options = {}) {
     ensureArtifactDir();
     const existing = fs.readdirSync(artifactDir).filter(name => /^visual-\d+\.html$/.test(name)).length;
     const file = path.join(artifactDir, `visual-${String(existing + 1).padStart(3, '0')}.html`);
-    fs.writeFileSync(file, renderCurrent(), { mode: 0o600 });
+    atomicWrite(file, renderCurrent());
     return file;
   }
 
-  function sendEvent(event, value = {}) {
+  function writeEvent(response, event, value = {}) {
     const payload = `event: ${event}\ndata: ${JSON.stringify(value)}\n\n`;
+    response.write(payload);
+  }
+
+  function sendEvent(event, value = {}) {
+    for (const response of eventClients) {
+      try {
+        writeEvent(response, event, value);
+      } catch {
+        eventClients.delete(response);
+      }
+    }
+  }
+
+  function sendComment(comment) {
+    const payload = `: ${comment}\n\n`;
     for (const response of eventClients) {
       try {
         response.write(payload);
@@ -240,8 +397,65 @@ function createBrainstormServer(options = {}) {
       sendText(response, 200, shellScript, 'application/javascript; charset=utf-8', cookieHeaders);
       return;
     }
+    if (request.method === 'GET' && relativePath === 'assets/elk-worker.min.js') {
+      sendText(response, 200, shellWorker, 'application/javascript; charset=utf-8', cookieHeaders);
+      return;
+    }
     if (request.method === 'GET' && relativePath === 'assets/styles.css') {
       sendText(response, 200, shellStyles, 'text/css; charset=utf-8', cookieHeaders);
+      return;
+    }
+
+    const reviewEvidencePathId = reviewPathId(requestUrl, relativePath);
+    const isReviewRoute = relativePath === 'api/review/source'
+      || relativePath === 'api/review/evidence'
+      || reviewEvidencePathId !== null;
+    if (isReviewRoute) {
+      if (!sameOrigin(request)) {
+        sendJson(response, 403, { error: 'cross-origin review request rejected' }, cookieHeaders);
+        return;
+      }
+      if (request.method !== 'GET') {
+        sendJson(response, 405, { error: 'review endpoint is read-only' }, {
+          ...cookieHeaders,
+          Allow: 'GET',
+        });
+        return;
+      }
+
+      // Authenticated opaque evidence lookup exposes only typed Review projections.
+      if (relativePath === 'api/review/source') {
+        const sourceId = reviewQueryId(requestUrl, REVIEW_SOURCE_ID_PATTERN);
+        if (sourceId == null) {
+          sendJson(response, 400, { error: 'invalid review source request' }, cookieHeaders);
+          return;
+        }
+        try {
+          sendJson(response, 200, resolveReviewSource(readScreen(), sourceId, { repositoryRoot }), cookieHeaders);
+        } catch {
+          sendJson(response, 404, { error: 'review source is unavailable' }, cookieHeaders);
+        }
+        return;
+      }
+
+      const evidenceId = relativePath === 'api/review/evidence'
+        ? reviewQueryId(requestUrl, EVIDENCE_RECORD_ID_PATTERN)
+        : reviewEvidencePathId;
+      if (!evidenceId) {
+        sendJson(response, 400, { error: 'invalid review evidence request' }, cookieHeaders);
+        return;
+      }
+      try {
+        const result = resolveReviewEvidence(readScreen(), evidenceId);
+        sendJson(
+          response,
+          200,
+          relativePath === 'api/review/evidence' ? result : result.evidence,
+          cookieHeaders,
+        );
+      } catch {
+        sendJson(response, 404, { error: 'review evidence is unavailable' }, cookieHeaders);
+      }
       return;
     }
     if (request.method === 'GET' && relativePath === 'api/screen') {
@@ -256,6 +470,14 @@ function createBrainstormServer(options = {}) {
       sendJson(response, 200, store.snapshot(), cookieHeaders);
       return;
     }
+    if (request.method === 'GET' && relativePath === 'api/state') {
+      try {
+        sendJson(response, 200, readState(), cookieHeaders);
+      } catch {
+        sendJson(response, 422, { error: 'visual state is unavailable' }, cookieHeaders);
+      }
+      return;
+    }
     if (request.method === 'GET' && relativePath === 'api/events') {
       response.writeHead(200, {
         ...SECURITY_HEADERS,
@@ -266,6 +488,7 @@ function createBrainstormServer(options = {}) {
       response.write(': connected\n\n');
       eventClients.add(response);
       request.on('close', () => eventClients.delete(response));
+      writeEvent(response, 'resync', { reason: 'connected' });
       return;
     }
     if (request.method === 'POST' && relativePath === 'api/save') {
@@ -287,11 +510,37 @@ function createBrainstormServer(options = {}) {
         return;
       }
       try {
-        const record = store.appendBrowserTurn(await readJsonBody(request));
-        sendJson(response, 201, record, cookieHeaders);
-        sendEvent('session', { seq: record.seq });
+        const body = await readJsonBody(request);
+        const result = withVisualStateLock(sessionDir, () => {
+          const retryClientTurnId = typeof body?.clientTurnId === 'string' ? body.clientTurnId.trim() : '';
+          const existing = retryClientTurnId
+            ? store.snapshot().events.find(event => event.type === 'user.turn'
+              && event.clientTurnId === retryClientTurnId)
+            : null;
+          if (existing) return { record: existing, created: false };
+          const currentDocument = readScreen();
+          if (currentDocument.version === 2) {
+            const revision = body?.screen?.revision;
+            if (typeof revision !== 'string' || !/^[a-f0-9]{8}$/.test(revision)) {
+              const error = new TypeError('Feedback Batch Revision must be 8 lowercase hexadecimal characters');
+              error.statusCode = 400;
+              throw error;
+            }
+            if (revision !== currentDocument.revision) {
+              const error = new Error('Feedback Batch Revision is stale and does not match the current Visual Document');
+              error.statusCode = 409;
+              throw error;
+            }
+          }
+          return { record: store.appendBrowserTurn(body), created: true };
+        });
+        sendJson(response, 201, result.record, cookieHeaders);
+        if (result.created) {
+          sendEvent('session', { seq: result.record.seq });
+        }
       } catch (error) {
-        sendJson(response, error instanceof RangeError ? 413 : 400, { error: error.message }, cookieHeaders);
+        const status = error.statusCode || (error instanceof RangeError ? 413 : 400);
+        sendJson(response, status, { error: error.message }, cookieHeaders);
       }
       return;
     }
@@ -308,7 +557,7 @@ function createBrainstormServer(options = {}) {
 
   const contentWatcher = fs.watch(contentDir, (_eventType, filename) => {
     // Some platforms report a null filename; fall through rather than miss the refresh.
-    if (filename != null && String(filename) !== 'screen.json') return;
+    if (filename != null && !['screen.json', 'workspace.json'].includes(String(filename))) return;
     if (debounceTimers.has('screen')) clearTimeout(debounceTimers.get('screen'));
     debounceTimers.set('screen', setTimeout(() => {
       debounceTimers.delete('screen');
@@ -320,15 +569,26 @@ function createBrainstormServer(options = {}) {
   contentWatcher.on('error', error => console.error(`brainstorm content watcher failed: ${error.message}`));
 
   const stateWatcher = fs.watch(stateDir, (_eventType, filename) => {
-    if (filename != null && !['session.jsonl', 'agent-cursor.json'].includes(String(filename))) return;
-    if (debounceTimers.has('session')) clearTimeout(debounceTimers.get('session'));
-    debounceTimers.set('session', setTimeout(() => {
-      debounceTimers.delete('session');
-      sendEvent('session');
-      writeLiveExport();
-    }, 40));
+    if (filename != null && !['session.jsonl', 'agent-cursor.json', 'visual-format.json', 'delivery-state.json'].includes(String(filename))) return;
+    const events = filename == null
+      ? ['screen', 'session', 'delivery']
+      : [String(filename) === 'visual-format.json'
+        ? 'screen'
+        : String(filename) === 'delivery-state.json' ? 'delivery' : 'session'];
+    for (const event of events) {
+      const timerKey = `state-${event}`;
+      if (debounceTimers.has(timerKey)) clearTimeout(debounceTimers.get(timerKey));
+      debounceTimers.set(timerKey, setTimeout(() => {
+        debounceTimers.delete(timerKey);
+        sendEvent(event);
+        if (event !== 'delivery') writeLiveExport();
+      }, 40));
+    }
   });
   stateWatcher.on('error', error => console.error(`brainstorm state watcher failed: ${error.message}`));
+
+  const heartbeat = sseSetInterval(() => sendComment('heartbeat'), sseHeartbeatMs);
+  heartbeat.unref?.();
 
   function ownerAlive() {
     if (!ownerPid) return true;
@@ -371,7 +631,8 @@ function createBrainstormServer(options = {}) {
           visual_file: exportPath,
         };
         const { connection_url: _connectionUrl, ...safeInfo } = info;
-        fs.writeFileSync(path.join(stateDir, 'server-info'), `${JSON.stringify(safeInfo)}\n`, { mode: 0o600 });
+        fs.rmSync(serverStoppedPath, { force: true });
+        fs.writeFileSync(serverInfoPath, `${JSON.stringify(safeInfo)}\n`, { mode: 0o600 });
         writeLiveExport();
         resolve(info);
       });
@@ -381,16 +642,18 @@ function createBrainstormServer(options = {}) {
   function close(reason = 'closed') {
     if (closing) return Promise.resolve();
     closing = true;
+    const safeReason = ['closed', 'idle timeout', 'owner process exited'].includes(reason) ? reason : 'closed';
     clearInterval(lifecycleCheck);
+    sseClearInterval(heartbeat);
     for (const timer of debounceTimers.values()) clearTimeout(timer);
     contentWatcher.close();
     stateWatcher.close();
+    sendEvent('closed', { reason: safeReason });
     for (const response of eventClients) response.end();
     eventClients.clear();
-    const infoFile = path.join(stateDir, 'server-info');
-    if (fs.existsSync(infoFile)) fs.rmSync(infoFile, { force: true });
+    if (fs.existsSync(serverInfoPath)) fs.rmSync(serverInfoPath, { force: true });
     if (fs.existsSync(stateDir)) {
-      fs.writeFileSync(path.join(stateDir, 'server-stopped'), `${JSON.stringify({ reason, timestamp: Date.now() })}\n`, { mode: 0o600 });
+      fs.writeFileSync(serverStoppedPath, `${JSON.stringify({ reason: safeReason, timestamp: Date.now() })}\n`, { mode: 0o600 });
     }
     if (!server.listening) return Promise.resolve();
     return new Promise(resolve => {

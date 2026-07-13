@@ -5,6 +5,8 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { createBrainstormServer } = require('../scripts/server.cjs');
+const { normalizeKnownWorkspaceContent } = require('../scripts/workspace-content.cjs');
+const { normalizeWorkspaceDocument, WORKSPACE_KINDS } = require('../scripts/workspace-document.cjs');
 const { createScratchDirectory } = require('./test-support');
 
 const sessionCli = path.resolve(__dirname, '../scripts/visual-session.cjs');
@@ -24,6 +26,21 @@ function processOutput(child) {
   child.stderr.on('data', chunk => { stderr += chunk; });
   return new Promise(resolve => {
     child.on('close', status => resolve({ status, stdout, stderr }));
+  });
+}
+
+function firstOutputLine(stream, timeoutMs = 5_000) {
+  return new Promise((resolve, reject) => {
+    let output = '';
+    const timeout = setTimeout(() => reject(new Error('timed out waiting for Visual Session startup')), timeoutMs);
+    stream.setEncoding('utf8');
+    stream.on('data', chunk => {
+      output += chunk;
+      const newline = output.indexOf('\n');
+      if (newline < 0) return;
+      clearTimeout(timeout);
+      resolve(output.slice(0, newline));
+    });
   });
 }
 
@@ -237,6 +254,104 @@ test('scaffold command produces a screen the server accepts without a 422 repair
   assert.deepEqual(screenPayload.sections.map(section => section.kind), [
     'anchor', 'flow', 'cards', 'decision', 'callout',
   ]);
+});
+
+test('workspace scaffold command emits a canonical v2 draft for every Workspace Kind', t => {
+  const outputDir = createScratchDirectory(t, 'workspace-scaffold-integration');
+  const workId = 'work-20260713-scaffold-contract';
+
+  for (const workspaceKind of WORKSPACE_KINDS) {
+    const output = path.join(outputDir, `${workspaceKind}-workspace.json`);
+    const scaffolded = runSession(
+      'scaffold',
+      '--workspace-kind', workspaceKind,
+      '--work-id', workId,
+      '--title', `${workspaceKind} workspace draft`,
+      '--output', output,
+    );
+    assert.equal(scaffolded.status, 0, `${workspaceKind}: ${scaffolded.stderr}`);
+
+    const result = JSON.parse(scaffolded.stdout);
+    const document = JSON.parse(fs.readFileSync(output, 'utf8'));
+    const normalized = normalizeWorkspaceDocument(document, {
+      contentValidator: normalizeKnownWorkspaceContent,
+    });
+
+    assert.deepEqual(document, normalized, `${workspaceKind} scaffold must already be canonical`);
+    assert.equal(document.version, 2);
+    assert.equal(document.work_id, workId);
+    assert.equal(document.workspace_kind, workspaceKind);
+    assert.equal(document.title, `${workspaceKind} workspace draft`);
+    assert.equal(document.read_only, false);
+    assert.deepEqual(result, {
+      type: 'workspace.scaffolded',
+      workspace_file: output,
+      work_id: workId,
+      workspace_kind: workspaceKind,
+      revision: document.revision,
+    });
+  }
+});
+
+test('fresh Visual Session supports the documented v1 to v2 migration, Publish, and backout lifecycle', async t => {
+  const scratchRoot = createScratchDirectory(t, 'fresh-v2-session');
+  const projectDir = path.join(scratchRoot, 'project');
+  const environment = { ...process.env, CLAUDE_SCRATCH_DIR: scratchRoot };
+  const started = childProcess.spawn(
+    process.execPath,
+    [sessionCli, 'start', '--project-dir', projectDir],
+    { encoding: 'utf8', env: environment, stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let info;
+  t.after(() => {
+    if (info?.session_dir) {
+      childProcess.spawnSync(path.resolve(__dirname, '../scripts/stop-server.sh'), [info.session_dir], {
+        encoding: 'utf8',
+        env: environment,
+      });
+    }
+    if (started.exitCode == null) started.kill('SIGTERM');
+  });
+
+  info = JSON.parse(await firstOutputLine(started.stdout));
+  const legacyFile = path.join(info.content_dir, 'screen.json');
+  assert.equal(fs.existsSync(legacyFile), true, 'fresh Start must persist its v1 compatibility document');
+  assert.equal(JSON.parse(fs.readFileSync(legacyFile, 'utf8')).version, 1);
+
+  const migrated = childProcess.spawnSync(process.execPath, [
+    sessionCli,
+    'migrate',
+    '--work-id', 'work-20260712-visual-companion-vnext',
+    '--workspace-kind', 'review',
+    '--session-dir', info.session_dir,
+  ], { encoding: 'utf8', env: environment });
+  assert.equal(migrated.status, 0, migrated.stderr);
+
+  const published = childProcess.spawnSync(process.execPath, [
+    sessionCli,
+    'publish',
+    '--document', path.resolve(__dirname, '../fixtures/feature-review-work.json'),
+    '--session-dir', info.session_dir,
+  ], { encoding: 'utf8', env: environment });
+  assert.equal(published.status, 0, published.stderr);
+
+  const root = await fetch(info.connection_url);
+  const cookie = root.headers.get('set-cookie').split(';')[0];
+  const activeV2 = await fetch(`${info.url}${info.base_path}api/screen`, { headers: { Cookie: cookie } });
+  const v2Document = await activeV2.json();
+  assert.equal(activeV2.status, 200);
+  assert.equal(v2Document.version, 2);
+  assert.equal(v2Document.workspace_kind, 'review');
+
+  const backedOut = childProcess.spawnSync(process.execPath, [
+    sessionCli,
+    'backout',
+    '--session-dir', info.session_dir,
+  ], { encoding: 'utf8', env: environment });
+  assert.equal(backedOut.status, 0, backedOut.stderr);
+  const activeV1 = await fetch(`${info.url}${info.base_path}api/screen`, { headers: { Cookie: cookie } });
+  assert.equal(activeV1.status, 200);
+  assert.equal((await activeV1.json()).version, 1);
 });
 
 test('server rejects plaintext non-loopback binding without explicit risk acceptance', t => {

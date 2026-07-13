@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "CHG-002-persistent-session-hygiene",
+  "work_id": "work-20260712-visual-companion-vnext",
+  "acceptance_criteria": [
+    "AC-19",
+    "AC-24"
+  ],
+  "decision_record_ids": [
+    "DR-001-visual-companion-vnext"
+  ],
+  "summary": "Classified explicitly persistent .brainstorm Visual Session state as gitignored machine-local data and excluded only that exact directory from repository portability scanning, with a regression contract for both boundaries.",
+  "files": [
+    ".gitignore",
+    "scripts/ci/validate-runtime-assets.js",
+    "skills/brainstorming/tests/dependency-manifest.test.js"
+  ],
+  "recorded_at": "2026-07-13T09:15:34Z"
+}

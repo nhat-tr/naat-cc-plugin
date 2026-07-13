@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "id": "CHG-003-fresh-session-lifecycle",
+  "work_id": "work-20260712-visual-companion-vnext",
+  "acceptance_criteria": [
+    "AC-8",
+    "AC-14",
+    "AC-20",
+    "AC-24"
+  ],
+  "decision_record_ids": [
+    "DR-001-visual-companion-vnext"
+  ],
+  "summary": "Persisted the normalized v1 compatibility document on fresh Visual Session Start so the documented migration, v2 Publish, and byte-preserving backout lifecycle is executable; added an end-to-end regression and appended the final manual accessibility audit as EVD-006 without mutating EVD-004.",
+  "files": [
+    "skills/brainstorming/scripts/visual-session.cjs",
+    "skills/brainstorming/tests/visual-session.integration.test.js",
+    "docs/work/work-20260712-visual-companion-vnext/evidence/accessibility-review.json",
+    "docs/work/work-20260712-visual-companion-vnext/evidence/EVD-006-accessibility-review.json",
+    "docs/work/work-20260712-visual-companion-vnext/work.json"
+  ],
+  "recorded_at": "2026-07-13T09:18:56.420Z"
+}

@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Engineering Quality Contract Input",
+  "type": "object",
+  "properties": {
+    "workId": { "$ref": "#/$defs/work_id" },
+    "facts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/fact" },
+      "uniqueItems": true
+    },
+    "obligations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/obligation" },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "exclusions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/exclusion" },
+      "uniqueItems": true
+    }
+  },
+  "required": ["workId", "facts", "obligations", "exclusions"],
+  "additionalProperties": false,
+  "$defs": {
+    "non_blank_text": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "work_id": {
+      "type": "string",
+      "pattern": "^work-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "obligation_id": {
+      "type": "string",
+      "pattern": "^EQC-[A-Z0-9]+(?:-[A-Z0-9]+)*$"
+    },
+    "approval_provenance_id": {
+      "type": "string",
+      "pattern": "^APR-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$"
+    },
+    "fact": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$"
+    },
+    "protected_domain": {
+      "enum": ["security", "privacy", "accessibility", "safety", "compliance"]
+    },
+    "quality": {
+      "oneOf": [
+        { "$ref": "#/$defs/protected_domain" },
+        {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$",
+          "not": { "$ref": "#/$defs/protected_domain" }
+        }
+      ]
+    },
+    "obligation": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/obligation_id" },
+        "quality": { "$ref": "#/$defs/quality" },
+        "activation": { "enum": ["always", "fact"] },
+        "activationFacts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/fact" },
+          "uniqueItems": true
+        },
+        "impact": { "enum": ["ordinary", "high"] },
+        "owner": { "$ref": "#/$defs/non_blank_text" },
+        "status": { "enum": ["inactive", "active", "open", "not_applicable"] }
+      },
+      "required": ["id", "quality", "activation", "activationFacts", "impact", "owner", "status"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "activation": { "const": "always" } },
+            "required": ["activation"]
+          },
+          "then": {
+            "properties": { "activationFacts": { "maxItems": 0 } }
+          },
+          "else": {
+            "properties": { "activationFacts": { "minItems": 1 } }
+          }
+        }
+      ]
+    },
+    "exclusion": {
+      "type": "object",
+      "properties": {
+        "obligationId": { "$ref": "#/$defs/obligation_id" },
+        "status": { "const": "not_applicable" },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/non_blank_text" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "decider": { "$ref": "#/$defs/non_blank_text" },
+        "reviewer": { "$ref": "#/$defs/non_blank_text" },
+        "owner": { "$ref": "#/$defs/non_blank_text" },
+        "residualRisk": { "$ref": "#/$defs/non_blank_text" },
+        "approval": { "$ref": "#/$defs/approval" }
+      },
+      "required": [
+        "obligationId",
+        "status",
+        "evidence",
+        "decider",
+        "reviewer",
+        "owner",
+        "residualRisk",
+        "approval"
+      ],
+      "additionalProperties": false
+    },
+    "approval": {
+      "type": "object",
+      "properties": {
+        "state": { "enum": ["pending", "approved", "rejected"] },
+        "approvedBy": { "$ref": "#/$defs/non_blank_text" },
+        "provenanceId": { "$ref": "#/$defs/approval_provenance_id" }
+      },
+      "required": ["state", "approvedBy", "provenanceId"],
+      "additionalProperties": false
+    }
+  }
+}

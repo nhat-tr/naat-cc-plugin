@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nhat.dev/schemas/brainstorming/product-workspace.schema.json",
+  "title": "Product Concept Studio content",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "layout_direction",
+    "fixture",
+    "recommendation",
+    "concepts",
+    "difference_lens"
+  ],
+  "properties": {
+    "layout_direction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "mobile", "desktop", "evidence_ref"],
+      "properties": {
+        "id": { "const": "device-aware-triptych" },
+        "mobile": { "const": "three_up" },
+        "desktop": { "const": "stacked_with_difference_lens" },
+        "evidence_ref": { "$ref": "#/$defs/nonEmptyText" }
+      }
+    },
+    "fixture": { "$ref": "#/$defs/fixture" },
+    "recommendation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["concept_id", "disclosure", "rationale"],
+      "properties": {
+        "concept_id": { "$ref": "#/$defs/identifier" },
+        "disclosure": { "const": "after_inspection_or_provisional_choice" },
+        "rationale": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "items": { "$ref": "#/$defs/nonEmptyText" }
+        }
+      }
+    },
+    "concepts": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "$ref": "#/$defs/concept" }
+    },
+    "difference_lens": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "dimensions"],
+      "properties": {
+        "title": { "$ref": "#/$defs/nonEmptyText" },
+        "dimensions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 12,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "label", "values"],
+            "properties": {
+              "id": { "$ref": "#/$defs/identifier" },
+              "label": { "$ref": "#/$defs/nonEmptyText" },
+              "values": {
+                "type": "object",
+                "minProperties": 3,
+                "maxProperties": 3,
+                "propertyNames": { "$ref": "#/$defs/identifier" },
+                "additionalProperties": { "$ref": "#/$defs/nonEmptyText" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "textList": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 12,
+      "items": { "$ref": "#/$defs/nonEmptyText" }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "device", "scope", "fidelity", "data"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "device": { "enum": ["responsive_web", "desktop", "mobile", "tablet"] },
+        "scope": { "$ref": "#/$defs/nonEmptyText" },
+        "fidelity": { "enum": ["structural", "interaction_detailed", "production_detailed"] },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["work_title", "revision", "pending_count", "feedback_batches"],
+          "properties": {
+            "work_title": { "$ref": "#/$defs/nonEmptyText" },
+            "revision": { "type": "string", "pattern": "^[a-f0-9]{8,64}$" },
+            "pending_count": { "type": "integer", "minimum": 0, "maximum": 10000 },
+            "feedback_batches": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "author", "summary", "state"],
+                "properties": {
+                  "id": { "$ref": "#/$defs/identifier" },
+                  "author": { "$ref": "#/$defs/nonEmptyText" },
+                  "summary": { "$ref": "#/$defs/nonEmptyText" },
+                  "state": { "enum": ["queued", "delivered", "acknowledged"] }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "concept": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "slot", "title", "strategy", "preview", "focus"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "slot": { "enum": ["A", "B", "C"] },
+        "title": { "$ref": "#/$defs/nonEmptyText" },
+        "strategy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "difference_kind", "summary"],
+          "properties": {
+            "id": { "$ref": "#/$defs/identifier" },
+            "difference_kind": { "enum": ["information_architecture", "interaction_model"] },
+            "summary": { "$ref": "#/$defs/nonEmptyText" }
+          }
+        },
+        "preview": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["primary_action", "regions"],
+          "properties": {
+            "primary_action": { "$ref": "#/$defs/nonEmptyText" },
+            "regions": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "label", "role", "items"],
+                "properties": {
+                  "id": { "$ref": "#/$defs/identifier" },
+                  "label": { "$ref": "#/$defs/nonEmptyText" },
+                  "role": { "enum": ["navigation", "main", "complementary"] },
+                  "items": { "$ref": "#/$defs/textList" }
+                }
+              }
+            }
+          }
+        },
+        "focus": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["states", "responsive", "accessibility", "handoff"],
+          "properties": {
+            "states": {
+              "type": "array",
+              "minItems": 4,
+              "maxItems": 4,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "label", "detail"],
+                "properties": {
+                  "id": { "enum": ["default", "loading", "empty", "error"] },
+                  "label": { "$ref": "#/$defs/nonEmptyText" },
+                  "detail": { "$ref": "#/$defs/nonEmptyText" }
+                }
+              }
+            },
+            "responsive": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["viewport", "behavior"],
+                "properties": {
+                  "viewport": { "enum": ["mobile", "desktop"] },
+                  "behavior": { "$ref": "#/$defs/nonEmptyText" }
+                }
+              }
+            },
+            "accessibility": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["landmarks", "keyboard_order", "announcements", "reduced_motion"],
+              "properties": {
+                "landmarks": { "$ref": "#/$defs/textList" },
+                "keyboard_order": { "$ref": "#/$defs/textList" },
+                "announcements": { "$ref": "#/$defs/textList" },
+                "reduced_motion": { "$ref": "#/$defs/nonEmptyText" }
+              }
+            },
+            "handoff": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["component_boundaries", "data_contracts", "events", "implementation_notes"],
+              "properties": {
+                "component_boundaries": { "$ref": "#/$defs/textList" },
+                "data_contracts": { "$ref": "#/$defs/textList" },
+                "events": { "$ref": "#/$defs/textList" },
+                "implementation_notes": { "$ref": "#/$defs/textList" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

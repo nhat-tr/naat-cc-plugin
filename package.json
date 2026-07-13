@@ -2,9 +2,35 @@
   "name": "nhat-dev-toolkit",
   "version": "0.1.0",
   "private": true,
-  "description": "Claude Code plugin for senior developer workflow",
+  "description": "Multi-runtime toolkit for senior developer workflows",
+  "packageManager": "npm@11.17.0",
   "scripts": {
+    "build:brainstorming": "node scripts/build-visual-shell.mjs",
     "generate:runtime-assets": "node scripts/generate-runtime-assets.js --write",
-    "validate": "node scripts/generate-runtime-assets.js --check && node scripts/ci/validate-runtime-assets.js && node scripts/ci/validate-agents.js && node scripts/ci/validate-commands.js && node scripts/ci/validate-skills.js && node scripts/ci/validate-contexts.js && node scripts/ci/validate-global-instructions.js && node scripts/ci/validate-hooks.js && npm --prefix infra run typecheck && npm --prefix infra/observability-index run test && node scripts/ci/validate-bin-smoke.js"
+    "test:brainstorming": "node --test skills/brainstorming/tests/*.test.js",
+    "test:brainstorming:a11y": "playwright test --config skills/brainstorming/playwright.config.ts --project=a11y",
+    "test:brainstorming:e2e": "playwright test --config skills/brainstorming/playwright.config.ts --project=e2e",
+    "test:brainstorming:performance": "playwright test --config skills/brainstorming/playwright.config.ts --project=performance",
+    "test:brainstorming:visual": "playwright test --config skills/brainstorming/playwright.config.ts --project=visual",
+    "test:pair": "node --test skills/pair-v3/tests/*.test.js",
+    "typecheck:brainstorming": "tsc --project skills/brainstorming/tsconfig.json",
+    "validate": "node scripts/generate-runtime-assets.js --check && node scripts/ci/validate-runtime-assets.js && node scripts/ci/validate-agents.js && node scripts/ci/validate-commands.js && node scripts/ci/validate-skills.js && node scripts/ci/validate-contexts.js && node scripts/ci/validate-global-instructions.js && node scripts/ci/validate-hooks.js && npm run test:brainstorming && npm run test:pair && npm --prefix infra run typecheck && npm --prefix infra/observability-index run test && node scripts/ci/validate-bin-smoke.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@xyflow/react": "12.11.2",
+    "ajv": "8.20.0",
+    "elkjs": "0.11.1",
+    "lucide-react": "1.24.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.61.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "esbuild": "0.28.1",
+    "typescript": "7.0.2"
   }
 }

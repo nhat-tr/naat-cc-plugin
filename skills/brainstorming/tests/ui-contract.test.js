@@ -13,21 +13,24 @@ test('the injected companion supports React-compatible annotation and shared-ses
   const app = read('assets/visual-shell/app.js');
   const styles = read('assets/visual-shell/styles.css');
   const shell = read('assets/visual-shell/index.html');
+  const appSource = read('ui/app/VisualCompanionApp.tsx');
+  const feedbackSource = read('ui/shared/FeedbackPanel.tsx');
+  const hostSource = read('ui/app/WorkspaceHost.tsx');
+  const styleSource = read('ui/styles/shell.css');
 
   assert.match(shell, /visual-shell-root/);
-  assert.match(app, /data-brainstorm-id/);
-  assert.match(app, /annotation/i);
-  assert.match(app, /annotation-badge/i);
-  assert.match(styles, /annotation-badge/);
-  assert.match(app, /feedback batch/i);
-  assert.match(app, /Waiting for Codex or Claude/i);
-  assert.doesNotMatch(app, /visual ready/i);
-  assert.match(app, /state\.submitting/);
-  assert.match(app, /history\.replaceState/);
-  assert.match(styles, /data-profile="technical"/);
-  assert.match(styles, /data-profile="product"/);
-  assert.match(styles, /data-profile="business"/);
-  assert.match(styles, /@media \(max-width: 980px\)[\s\S]*data-profile="business"[\s\S]*grid-column:\s*span 12/);
+  assert.match(hostSource, /data-brainstorm-id/);
+  assert.match(feedbackSource, /annotation/i);
+  assert.match(styles, /thread-state/);
+  assert.match(feedbackSource, /feedback batch/i);
+  assert.match(appSource, /api\/feedback/);
+  assert.doesNotMatch(`${app}\n${appSource}\n${feedbackSource}`, /visual ready/i);
+  assert.match(appSource, /submitting/);
+  assert.match(appSource, /history\.replaceState/);
+  assert.match(styleSource, /data-profile="technical"/);
+  assert.match(styleSource, /data-profile="product"/);
+  assert.match(styleSource, /data-profile="business"/);
+  assert.match(styleSource, /@media \(max-width: 980px\)[\s\S]*data-profile="business"[\s\S]*grid-column:\s*span 12/);
 });
 
 test('the skill teaches the exact-session visual loop without a second agent', () => {
@@ -35,8 +38,20 @@ test('the skill teaches the exact-session visual loop without a second agent', (
   const guide = read('visual-companion.md');
 
   assert.match(skill, /live visual interview/i);
+  assert.match(skill, /Product Concept Studio.*Architecture Canvas.*Research Evidence Board.*Business Reasoning Canvas.*Feature Review Workbench/is);
+  assert.match(skill, /workspace\.json.*v1 compatibility/is);
   assert.match(guide, /screen\.json/);
   assert.match(guide, /technical.*product.*business/is);
+  assert.match(guide, /\| Product Concept Studio \| `product`/);
+  assert.match(guide, /\| Architecture Canvas \| `architecture`/);
+  assert.match(guide, /\| Research Evidence Board \| `research`/);
+  assert.match(guide, /\| Business Reasoning Canvas \| `business`/);
+  assert.match(guide, /\| Feature Review Workbench \| `review`/);
+  for (const workspaceKind of ['product', 'architecture', 'research', 'business', 'review']) {
+    assert.match(guide, new RegExp(`--workspace-kind ${workspaceKind}`, 'u'));
+  }
+  assert.match(guide, /visual-session\.cjs migrate[\s\S]*--work-id[\s\S]*--workspace-kind/i);
+  assert.match(guide, /visual-session\.cjs backout/i);
   assert.match(guide, /visual-session\.cjs wait --timeout-ms 900000/i);
   assert.doesNotMatch(guide, /session-bridge\.cjs wait/);
   assert.match(guide, /data-brainstorm-id/);

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "verdict": { "enum": ["approve", "fix-needed"] },
+    "recommended_action": { "enum": ["approve", "local-fix", "rewrite", "redesign"] },
+    "summary": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": { "enum": ["BLOCKER", "MAJOR", "MINOR"] },
+          "file": { "type": "string" },
+          "line": { "type": "integer", "minimum": 1 },
+          "title": { "type": "string" },
+          "detail": { "type": "string" },
+          "suggestion": { "type": "string" }
+        },
+        "required": ["severity", "file", "line", "title", "detail", "suggestion"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["verdict", "recommended_action", "summary", "findings"],
+  "additionalProperties": false
+}

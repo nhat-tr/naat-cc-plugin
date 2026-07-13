@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "profile": "technical",
+  "audience": "Visual Companion research reviewers",
+  "title": "Research Evidence Board layout direction",
+  "summary": "Choose the primary axis for claims, sources, contradictions, confidence, and unknowns.",
+  "sections": [
+    {
+      "kind": "mockup",
+      "id": "research-confidence-columns",
+      "title": "Primary skeleton · Confidence columns",
+      "summary": "Claims move between explicit confidence bands while source and contradiction links remain attached.",
+      "device": "desktop",
+      "regions": [
+        {
+          "id": "research-toolbar",
+          "title": "Evidence controls",
+          "detail": "Decision relevance remains a filter and label rather than the board axis.",
+          "tone": "neutral",
+          "span": 12,
+          "elements": [
+            { "kind": "heading", "text": "Research Evidence Board" },
+            { "kind": "input", "control": "select", "label": "Decision relevance", "value": "All decisions" },
+            { "kind": "badge", "label": "2 contradictions", "tone": "warning" }
+          ]
+        },
+        {
+          "id": "research-high",
+          "title": "High confidence",
+          "detail": "Converging primary sources.",
+          "tone": "positive",
+          "span": 4,
+          "elements": [
+            { "kind": "list", "items": [
+              { "title": "Durable Wait persists", "meta": "3 sources" },
+              { "title": "MCP returns active turn", "meta": "2 sources" }
+            ] }
+          ]
+        },
+        {
+          "id": "research-medium",
+          "title": "Medium confidence",
+          "detail": "Supported but contradicted or incomplete.",
+          "tone": "accent",
+          "span": 4,
+          "elements": [
+            { "kind": "list", "items": [
+              { "title": "Idle adapter ordering", "meta": "1 contradiction" },
+              { "title": "Layout budget", "meta": "measure" }
+            ] }
+          ]
+        },
+        {
+          "id": "research-low",
+          "title": "Low confidence / unknown",
+          "detail": "Material unknowns stay visible and cannot look like evidence.",
+          "tone": "warning",
+          "span": 4,
+          "elements": [
+            { "kind": "list", "items": [
+              { "title": "Claude preview support", "meta": "unknown" },
+              { "title": "300-file interaction", "meta": "unmeasured" }
+            ] }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "decision",
+      "id": "research-layout-choice",
+      "title": "Choose the Research Evidence Board axis",
+      "summary": "Both retain confidence and decision relevance; the choice decides which one controls spatial scanning.",
+      "groupId": "research-layout",
+      "multiselect": false,
+      "options": [
+        {
+          "id": "research-confidence-option",
+          "label": "Confidence columns",
+          "detail": "Place claims by confidence and expose decision relevance as a filter, chip, and linked context.",
+          "points": ["9/10 · Makes uncertainty and contradiction immediately legible.", "A reviewer may need a filter to isolate one decision."],
+          "tone": "accent",
+          "score": 9,
+          "recommended": true
+        },
+        {
+          "id": "research-decision-option",
+          "label": "Decision-relevance grouping",
+          "detail": "Group evidence under the decision it can change and show confidence inside each group.",
+          "points": ["8/10 · Keeps evidence close to action and intent.", "Confidence distribution becomes harder to scan across decisions."],
+          "tone": "neutral",
+          "score": 8,
+          "recommended": false
+        }
+      ]
+    }
+  ]
+}

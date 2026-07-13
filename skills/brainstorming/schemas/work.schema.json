@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Work",
+  "type": "object",
+  "properties": {
+    "schema": { "const": 1 },
+    "work_id": { "$ref": "#/$defs/work_id" },
+    "title": { "$ref": "#/$defs/non_blank_text" },
+    "status": { "$ref": "#/$defs/non_blank_text" },
+    "spec": { "$ref": "#/$defs/digest_reference" },
+    "active_pair_mirror": { "const": ".pair/spec.md" },
+    "plan": {
+      "type": "object",
+      "properties": {
+        "path": { "const": ".pair/plan.md" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "status": { "$ref": "#/$defs/non_blank_text" },
+        "independent_review": { "$ref": "#/$defs/non_blank_text" }
+      },
+      "required": ["path", "sha256", "status", "independent_review"],
+      "additionalProperties": false
+    },
+    "engineering_quality_contract": {
+      "type": "object",
+      "properties": {
+        "path": { "$ref": "#/$defs/canonical_spec_path" },
+        "section": { "const": "Engineering Quality Contract" },
+        "status": { "const": "approved" }
+      },
+      "required": ["path", "section", "status"],
+      "additionalProperties": false
+    },
+    "decision_records": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/decision_record_path" },
+      "uniqueItems": true
+    },
+    "decision_supersessions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/decision_supersession" },
+      "uniqueItems": true
+    },
+    "approved_visual_revision": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{8,64}$"
+    },
+    "changes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/change_record_path" },
+      "uniqueItems": true
+    },
+    "outcomes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/outcome_record_path" },
+      "uniqueItems": true
+    },
+    "evidence_records": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/evidence_record_path" },
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "schema",
+    "work_id",
+    "title",
+    "status",
+    "spec",
+    "active_pair_mirror",
+    "engineering_quality_contract",
+    "decision_records",
+    "decision_supersessions",
+    "changes",
+    "outcomes",
+    "evidence_records"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "non_blank_text": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "work_id": {
+      "type": "string",
+      "pattern": "^work-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "work_id_collision_suffix": {
+      "$comment": "On a same-day same-slug collision, append the first 12 lowercase hexadecimal characters of the SHA-256 digest of the originally approved canonical spec bytes to the requested Work ID.",
+      "type": "string",
+      "pattern": "^[a-f0-9]{12}$",
+      "minLength": 12,
+      "maxLength": 12
+    },
+    "decision_record_id": {
+      "type": "string",
+      "pattern": "^DR-[0-9]{3}-[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "canonical_spec_path": {
+      "type": "string",
+      "pattern": "^docs/work/work-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*/spec\\.md$"
+    },
+    "decision_record_path": {
+      "type": "string",
+      "pattern": "^docs/work/work-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*/decisions/DR-[0-9]{3}-[a-z0-9]+(?:-[a-z0-9]+)*\\.md$"
+    },
+    "change_record_path": {
+      "type": "string",
+      "pattern": "^docs/work/work-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*/changes/CHG-[0-9]{3}-[a-z0-9]+(?:-[a-z0-9]+)*\\.json$"
+    },
+    "outcome_record_path": {
+      "type": "string",
+      "pattern": "^docs/work/work-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*/outcomes/OUT-[0-9]{3}-[a-z0-9]+(?:-[a-z0-9]+)*\\.md$"
+    },
+    "evidence_record_path": {
+      "type": "string",
+      "pattern": "^docs/work/work-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*/evidence/EVD-[0-9]{3}-[a-z0-9]+(?:-[a-z0-9]+)*\\.json$"
+    },
+    "digest_reference": {
+      "type": "object",
+      "properties": {
+        "path": { "$ref": "#/$defs/canonical_spec_path" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      },
+      "required": ["path", "sha256"],
+      "additionalProperties": false
+    },
+    "decision_supersession": {
+      "type": "object",
+      "properties": {
+        "predecessor": { "$ref": "#/$defs/decision_record_id" },
+        "successor": { "$ref": "#/$defs/decision_record_id" }
+      },
+      "required": ["predecessor", "successor"],
+      "additionalProperties": false
+    }
+  }
+}

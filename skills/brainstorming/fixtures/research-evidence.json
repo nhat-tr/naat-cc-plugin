@@ -1,0 +1,188 @@
+{
+  "version": 2,
+  "work_id": "work-20260712-visual-companion-vnext",
+  "workspace_kind": "research",
+  "title": "Research Evidence Board",
+  "evidence_refs": [
+    {
+      "id": "EVD-wait-durability",
+      "label": "Durable Wait persistence test"
+    },
+    {
+      "id": "EVD-restart-recovery",
+      "label": "Server restart recovery log"
+    },
+    {
+      "id": "EVD-mcp-protocol",
+      "label": "MCP wait_for_feedback protocol capture"
+    },
+    {
+      "id": "EVD-active-turn",
+      "label": "Active-turn delivery trace"
+    },
+    {
+      "id": "EVD-adapter-order",
+      "label": "Idle adapter ordering trace"
+    },
+    {
+      "id": "EVD-queue-fallback",
+      "label": "Queue fallback measurement"
+    },
+    {
+      "id": "EVD-preview-probe",
+      "label": "Claude preview latency probe"
+    }
+  ],
+  "revision": "df45873a",
+  "frames": [
+    {
+      "id": "board",
+      "title": "Evidence board",
+      "component_ids": [
+        "claim-durable-wait",
+        "claim-mcp-active-turn",
+        "claim-idle-ordering",
+        "claim-parallel-delivery",
+        "claim-preview-latency",
+        "unknown-claude-preview",
+        "unknown-300-file"
+      ]
+    }
+  ],
+  "components": [
+    {
+      "id": "claim-durable-wait",
+      "frame_id": "board",
+      "label": "Durable Wait persists across a server restart"
+    },
+    {
+      "id": "claim-mcp-active-turn",
+      "frame_id": "board",
+      "label": "MCP returns the oldest batch to the active turn"
+    },
+    {
+      "id": "claim-idle-ordering",
+      "frame_id": "board",
+      "label": "Idle adapter preserves batch ordering"
+    },
+    {
+      "id": "claim-parallel-delivery",
+      "frame_id": "board",
+      "label": "Parallel delivery reorders batches under load"
+    },
+    {
+      "id": "claim-preview-latency",
+      "frame_id": "board",
+      "label": "Preview latency stays within the budget"
+    },
+    {
+      "id": "unknown-claude-preview",
+      "frame_id": "board",
+      "label": "Whether Claude preview builds accept channels"
+    },
+    {
+      "id": "unknown-300-file",
+      "frame_id": "board",
+      "label": "300-file review interaction performance"
+    }
+  ],
+  "decisions": [],
+  "feedback_threads": [
+    {
+      "id": "thread-idle-ordering",
+      "component_id": "claim-idle-ordering",
+      "revision": "0a2bec94",
+      "type": "annotation",
+      "status": "open",
+      "comment": "Confirm the ordering guarantee against the queue fallback path.",
+      "replies": []
+    }
+  ],
+  "content": {
+    "decision_relevance_options": [
+      "All decisions",
+      "Delivery reliability",
+      "Runtime support",
+      "Performance budget"
+    ],
+    "claims": [
+      {
+        "component_id": "claim-durable-wait",
+        "confidence": "high",
+        "source_refs": [
+          "EVD-wait-durability",
+          "EVD-restart-recovery",
+          "EVD-mcp-protocol"
+        ],
+        "decision_relevance": [
+          "Delivery reliability"
+        ]
+      },
+      {
+        "component_id": "claim-mcp-active-turn",
+        "confidence": "high",
+        "source_refs": [
+          "EVD-mcp-protocol",
+          "EVD-active-turn"
+        ],
+        "decision_relevance": [
+          "Delivery reliability"
+        ]
+      },
+      {
+        "component_id": "claim-idle-ordering",
+        "confidence": "medium",
+        "source_refs": [
+          "EVD-adapter-order"
+        ],
+        "contradicts": [
+          "claim-parallel-delivery"
+        ],
+        "decision_relevance": [
+          "Delivery reliability",
+          "Runtime support"
+        ]
+      },
+      {
+        "component_id": "claim-parallel-delivery",
+        "confidence": "medium",
+        "source_refs": [
+          "EVD-queue-fallback"
+        ],
+        "contradicts": [
+          "claim-idle-ordering"
+        ],
+        "decision_relevance": [
+          "Delivery reliability"
+        ]
+      },
+      {
+        "component_id": "claim-preview-latency",
+        "confidence": "low",
+        "source_refs": [
+          "EVD-preview-probe"
+        ],
+        "decision_relevance": [
+          "Performance budget"
+        ]
+      }
+    ],
+    "unknowns": [
+      {
+        "component_id": "unknown-claude-preview",
+        "note": "No installed preview build available to test",
+        "decision_relevance": [
+          "Runtime support"
+        ]
+      },
+      {
+        "component_id": "unknown-300-file",
+        "note": "Not yet measured at target scale",
+        "decision_relevance": [
+          "Performance budget"
+        ]
+      }
+    ]
+  },
+  "read_only": true
+}

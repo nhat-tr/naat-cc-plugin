@@ -6,7 +6,15 @@
       "global_instruction_path": "~/.claude/CLAUDE.md",
       "agents_dir": "~/.claude/agents",
       "commands_dir": "~/.claude/commands",
-      "contexts_dir": "~/.claude/contexts"
+      "contexts_dir": "~/.claude/contexts",
+      "delivery": {
+        "registration": "channel",
+        "server": "visual-companion-channel",
+        "entrypoint": "skills/brainstorming/scripts/claude-channel-server.mjs",
+        "capability": "claude/channel",
+        "notification": "notifications/claude/channel",
+        "acknowledgement_tool": "ack_feedback"
+      }
     },
     "codex": {
       "display_name": "Codex",
@@ -17,7 +25,24 @@
       "skill_dirs": [
         "~/.codex/skills",
         "~/.agents/skills"
-      ]
+      ],
+      "delivery": {
+        "active": {
+          "registration": "mcp",
+          "server": "visual-companion-feedback",
+          "entrypoint": "skills/brainstorming/scripts/visual-mcp-server.mjs",
+          "capability": "wait_for_feedback",
+          "tool_timeout_sec": 900
+        },
+        "idle": {
+          "registration": "app_server",
+          "adapter": "skills/brainstorming/scripts/codex-app-server-adapter.cjs",
+          "methods": [
+            "thread/resume",
+            "turn/start"
+          ]
+        }
+      }
     },
     "copilot": {
       "display_name": "GitHub Copilot",
@@ -143,7 +168,8 @@
       "type": "skill",
       "canonical_file": "skills/brainstorming/SKILL.md",
       "supported_runtimes": [
-        "claude"
+        "claude",
+        "codex"
       ]
     },
     "skill.csharp-dotnet": {
@@ -180,6 +206,30 @@
       "canonical_file": "skills/pair-v2/SKILL.md",
       "supported_runtimes": [
         "claude"
+      ]
+    },
+    "skill.pair-v3": {
+      "type": "workflow_skill",
+      "canonical_file": "skills/pair-v3/SKILL.md",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
+    "skill.pair-promote": {
+      "type": "skill",
+      "canonical_file": "skills/pair-promote/SKILL.md",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
+    "skill.loop-plan": {
+      "type": "skill",
+      "canonical_file": "skills/loop-plan/SKILL.md",
+      "supported_runtimes": [
+        "claude",
+        "codex"
       ]
     },
     "skill.session-replay-note": {
@@ -274,6 +324,30 @@
         "codex"
       ]
     },
+    "cli.pair-loop": {
+      "type": "cli",
+      "canonical_file": "bin/pair-loop",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
+    "cli.pair-report": {
+      "type": "cli",
+      "canonical_file": "bin/pair-report",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
+    "cli.work-lineage": {
+      "type": "cli",
+      "canonical_file": "skills/brainstorming/scripts/work-lineage.cjs",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
     "skill.mermaid-validate": {
       "type": "skill",
       "canonical_file": "skills/mermaid-validate/SKILL.md",
@@ -291,6 +365,27 @@
     "agent.pair-reviewer": {
       "type": "agent",
       "canonical_file": "agents/pair-reviewer.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "runtime.visual-companion-feedback": {
+      "type": "runtime_entrypoint",
+      "canonical_file": "skills/brainstorming/scripts/visual-mcp-server.mjs",
+      "supported_runtimes": [
+        "codex"
+      ]
+    },
+    "runtime.codex-app-server-adapter": {
+      "type": "runtime_adapter",
+      "canonical_file": "skills/brainstorming/scripts/codex-app-server-adapter.cjs",
+      "supported_runtimes": [
+        "codex"
+      ]
+    },
+    "runtime.visual-companion-channel": {
+      "type": "runtime_entrypoint",
+      "canonical_file": "skills/brainstorming/scripts/claude-channel-server.mjs",
       "supported_runtimes": [
         "claude"
       ]

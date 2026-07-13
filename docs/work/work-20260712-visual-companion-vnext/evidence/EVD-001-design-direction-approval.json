@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "id": "EVD-001-design-direction-approval",
+  "work_id": "work-20260712-visual-companion-vnext",
+  "kind": "design-direction-approval",
+  "acceptance_criteria": [
+    "AC-1"
+  ],
+  "decision_record_ids": [
+    "DR-001-visual-companion-vnext"
+  ],
+  "source": "Visual Sessions mriclxqu-e55848307778 (Product) and mricddho-75c249e68610 (other Choices)",
+  "recorded_at": "2026-07-12T22:13:34Z",
+  "result": {
+    "status": "approved",
+    "reviewed_fixtures": [
+      "skills/brainstorming/fixtures/design-directions/product.json",
+      "skills/brainstorming/fixtures/design-directions/architecture.json",
+      "skills/brainstorming/fixtures/design-directions/research.json",
+      "skills/brainstorming/fixtures/design-directions/business.json",
+      "skills/brainstorming/fixtures/design-directions/review.json"
+    ],
+    "choices": [
+      {
+        "workspace_kind": "Product",
+        "group_id": "product-layout",
+        "option_id": "product-device-aware-option",
+        "label": "Device-aware triptych",
+        "visual_session_id": "mriclxqu-e55848307778",
+        "screen_revision": "76f2aba4",
+        "feedback_batch_sequence": 1
+      },
+      {
+        "workspace_kind": "Architecture",
+        "group_id": "architecture-layout",
+        "option_id": "architecture-exclusive-option",
+        "label": "Exclusive view modes",
+        "visual_session_id": "mricddho-75c249e68610",
+        "screen_revision": "c2a86bee",
+        "feedback_batch_sequence": 3
+      },
+      {
+        "workspace_kind": "Research",
+        "group_id": "research-layout",
+        "option_id": "research-confidence-option",
+        "label": "Confidence columns",
+        "visual_session_id": "mricddho-75c249e68610",
+        "screen_revision": "fb2f1ce3",
+        "feedback_batch_sequence": 5
+      },
+      {
+        "workspace_kind": "Business",
+        "group_id": "business-layout",
+        "option_id": "business-journey-option",
+        "label": "Journey spine",
+        "visual_session_id": "mricddho-75c249e68610",
+        "screen_revision": "18c30c8a",
+        "feedback_batch_sequence": 7
+      },
+      {
+        "workspace_kind": "Review",
+        "group_id": "review-layout",
+        "option_id": "review-three-pane-option",
+        "label": "Three-pane density",
+        "visual_session_id": "mricddho-75c249e68610",
+        "screen_revision": "09ab40a7",
+        "feedback_batch_sequence": 9
+      }
+    ],
+    "annotations": [],
+    "final_acknowledgements": [
+      {
+        "visual_session_id": "mricddho-75c249e68610",
+        "sequence": 10
+      },
+      {
+        "visual_session_id": "mriclxqu-e55848307778",
+        "sequence": 2
+      }
+    ]
+  }
+}

@@ -1,0 +1,609 @@
+{
+  "version": 2,
+  "work_id": "work-20260712-visual-companion-vnext",
+  "workspace_kind": "review",
+  "title": "Feature Review Workbench",
+  "evidence_refs": [
+    {
+      "id": "EVD-001-design-direction-approval",
+      "label": "Approved three-pane Review direction"
+    },
+    {
+      "id": "EVD-002-review-contract",
+      "label": "Review Workspace contract tests"
+    },
+    {
+      "id": "EVD-003-review-functional",
+      "label": "Feature Review Workbench browser verification"
+    },
+    {
+      "id": "EVD-004-review-server",
+      "label": "Authenticated source evidence boundary"
+    },
+    {
+      "id": "EVD-005-review-pilot",
+      "label": "Manual Review pilot outcome"
+    }
+  ],
+  "revision": "1e7c6a8b",
+  "frames": [
+    {
+      "id": "workbench",
+      "title": "Feature review",
+      "component_ids": [
+        "ac-1",
+        "ac-6",
+        "ac-15",
+        "ac-16",
+        "ac-18",
+        "slice-10-1",
+        "slice-10-3",
+        "slice-10-4",
+        "source-review-test",
+        "source-review-server",
+        "source-review-renderer",
+        "finding-evidence-boundary",
+        "quality-a11y",
+        "decision-dr-001",
+        "outcome-review-pilot"
+      ]
+    }
+  ],
+  "components": [
+    {
+      "id": "ac-1",
+      "frame_id": "workbench",
+      "label": "AC-1: five purpose-built Workspace Kinds"
+    },
+    {
+      "id": "ac-6",
+      "frame_id": "workbench",
+      "label": "AC-6: navigate intent through review evidence"
+    },
+    {
+      "id": "ac-15",
+      "frame_id": "workbench",
+      "label": "AC-15: govern Engineering Quality Contract obligations"
+    },
+    {
+      "id": "ac-16",
+      "frame_id": "workbench",
+      "label": "AC-16: build deterministic Review Slice manifests"
+    },
+    {
+      "id": "ac-18",
+      "frame_id": "workbench",
+      "label": "AC-18: patch-set-specific review progress"
+    },
+    {
+      "id": "slice-10-1",
+      "frame_id": "workbench",
+      "label": "Review Slice 10.1: Review contract tests"
+    },
+    {
+      "id": "slice-10-3",
+      "frame_id": "workbench",
+      "label": "Review Slice 10.3: Feature Review Workbench"
+    },
+    {
+      "id": "slice-10-4",
+      "frame_id": "workbench",
+      "label": "Review Slice 10.4: aggregate quality verification"
+    },
+    {
+      "id": "source-review-test",
+      "frame_id": "workbench",
+      "label": "Review Workspace contract test changes"
+    },
+    {
+      "id": "source-review-server",
+      "frame_id": "workbench",
+      "label": "Authenticated source evidence endpoint changes"
+    },
+    {
+      "id": "source-review-renderer",
+      "frame_id": "workbench",
+      "label": "Feature Review Workbench renderer changes"
+    },
+    {
+      "id": "finding-evidence-boundary",
+      "frame_id": "workbench",
+      "label": "Finding: stale evidence boundary remains open"
+    },
+    {
+      "id": "quality-a11y",
+      "frame_id": "workbench",
+      "label": "EQC-A11Y accessibility obligation"
+    },
+    {
+      "id": "decision-dr-001",
+      "frame_id": "workbench",
+      "label": "DR-001: Structured Visual Companion vNext"
+    },
+    {
+      "id": "outcome-review-pilot",
+      "frame_id": "workbench",
+      "label": "OUT-001: Review pilot outcome"
+    }
+  ],
+  "decisions": [],
+  "feedback_threads": [
+    {
+      "id": "thread-evidence-boundary",
+      "component_id": "finding-evidence-boundary",
+      "revision": "11111111",
+      "type": "finding",
+      "status": "outdated",
+      "comment": "Recheck the authenticated source evidence boundary after the server patch changed.",
+      "replies": []
+    }
+  ],
+  "content": {
+    "canonical_spec": {
+      "path": "docs/work/work-20260712-visual-companion-vnext/spec.md",
+      "digest": "d62ef7f2a2fd38b616816b506fc011c1e7bc658e5dae9a5ca5471d4a1b51e9bc",
+      "acceptance_criteria": [
+        {
+          "id": "AC-1",
+          "component_id": "ac-1",
+          "title": "Five purpose-built Workspace Kinds render distinct layouts"
+        },
+        {
+          "id": "AC-6",
+          "component_id": "ac-6",
+          "title": "Review navigation links intent, source, evidence, and lineage"
+        },
+        {
+          "id": "AC-15",
+          "component_id": "ac-15",
+          "title": "Engineering Quality Contract obligations govern review closure"
+        },
+        {
+          "id": "AC-16",
+          "component_id": "ac-16",
+          "title": "Review Slice manifests are deterministic from the approved plan and Patch Set"
+        },
+        {
+          "id": "AC-18",
+          "component_id": "ac-18",
+          "title": "Review progress and whole-feature verdict have distinct lifecycles"
+        }
+      ]
+    },
+    "review_slices": [
+      {
+        "component_id": "slice-10-1",
+        "task_id": "10.1",
+        "stream_id": "10",
+        "title": "Review contract tests",
+        "acceptance_criteria": ["AC-1", "AC-15", "AC-16", "AC-18", "AC-6"],
+        "expected_files": [
+          "skills/brainstorming/e2e/feature-review-workbench.spec.ts",
+          "skills/brainstorming/fixtures/feature-review-work.json",
+          "skills/brainstorming/tests/review-workspace.test.js"
+        ],
+        "verification_command": "node --test skills/brainstorming/tests/review-workspace.test.js && npx playwright test skills/brainstorming/e2e/feature-review-workbench.spec.ts",
+        "actual_changes": [
+          {
+            "component_id": "source-review-test",
+            "path": "skills/brainstorming/tests/review-workspace.test.js",
+            "hunk_id": "1111111111111111111111111111111111111111111111111111111111111111",
+            "symbols": ["compileReviewSchema", "reviewFixture"],
+            "claimed_by": ["10.1"],
+            "acceptance_criteria": ["AC-1", "AC-15", "AC-16", "AC-18", "AC-6"],
+            "evidence_ids": ["EVD-002-review-contract"],
+            "source_preview": {
+              "start_line": 1,
+              "end_line": 212,
+              "lines": ["Review schema contract", "Review Slice and patch-set linkage", "Patch-set invalidation assertions"]
+            }
+          }
+        ],
+        "verification": ["EVD-002-review-contract"],
+        "finding_ids": []
+      },
+      {
+        "component_id": "slice-10-3",
+        "task_id": "10.3",
+        "stream_id": "10",
+        "title": "Feature Review Workbench",
+        "acceptance_criteria": ["AC-1", "AC-15", "AC-16", "AC-18", "AC-20", "AC-21", "AC-22", "AC-6"],
+        "expected_files": [
+          "skills/brainstorming/schemas/review-workspace.schema.json",
+          "skills/brainstorming/scripts/review-workspace-data.cjs",
+          "skills/brainstorming/scripts/server.cjs",
+          "skills/brainstorming/ui/app/workspace-map.ts",
+          "skills/brainstorming/ui/workspaces/review/FeatureReviewWorkbench.tsx",
+          "skills/brainstorming/ui/workspaces/review/ReviewNavigator.tsx",
+          "skills/brainstorming/ui/workspaces/review/SourceEvidencePanel.tsx",
+          "skills/brainstorming/ui/workspaces/review/review.css"
+        ],
+        "verification_command": "node --test skills/brainstorming/tests/review-workspace.test.js && npx playwright test skills/brainstorming/e2e/feature-review-workbench.spec.ts",
+        "actual_changes": [
+          {
+            "component_id": "source-review-server",
+            "path": "skills/brainstorming/scripts/server.cjs",
+            "hunk_id": "2222222222222222222222222222222222222222222222222222222222222222",
+            "symbols": ["createBrainstormServer", "handleRequest"],
+            "claimed_by": ["10.3", "10.4"],
+            "acceptance_criteria": ["AC-18", "AC-19", "AC-6"],
+            "evidence_ids": ["EVD-004-review-server"],
+            "source_preview": {
+              "start_line": 402,
+              "end_line": 449,
+              "lines": ["Authenticated opaque evidence lookup", "Same-origin mutation boundary", "Secret-safe error response"]
+            }
+          },
+          {
+            "component_id": "source-review-renderer",
+            "path": "skills/brainstorming/ui/workspaces/review/FeatureReviewWorkbench.tsx",
+            "hunk_id": "3333333333333333333333333333333333333333333333333333333333333333",
+            "symbols": ["FeatureReviewWorkbench"],
+            "claimed_by": ["10.3"],
+            "acceptance_criteria": ["AC-1", "AC-18", "AC-20", "AC-21", "AC-22", "AC-6"],
+            "evidence_ids": ["EVD-003-review-functional"],
+            "source_preview": {
+              "start_line": 1,
+              "end_line": 284,
+              "lines": ["Intent navigator", "Selected source context", "Verification and governance evidence"]
+            }
+          }
+        ],
+        "verification": ["EVD-003-review-functional", "EVD-004-review-server"],
+        "finding_ids": ["finding-evidence-boundary"]
+      },
+      {
+        "component_id": "slice-10-4",
+        "task_id": "10.4",
+        "stream_id": "10",
+        "title": "Aggregate quality verification",
+        "acceptance_criteria": ["AC-19", "AC-20", "AC-21", "AC-22", "AC-23", "AC-8"],
+        "expected_files": [
+          "skills/brainstorming/assets/visual-shell/styles.css",
+          "skills/brainstorming/playwright.config.ts",
+          "skills/brainstorming/scripts/server.cjs",
+          "skills/brainstorming/scripts/standalone.cjs",
+          "skills/brainstorming/ui/app/VisualCompanionApp.tsx",
+          "skills/brainstorming/ui/styles/shell.css"
+        ],
+        "verification_command": "npm run test:brainstorming:a11y && npm run test:brainstorming:visual && npm run test:brainstorming:performance",
+        "actual_changes": [
+          {
+            "component_id": "source-review-server",
+            "path": "skills/brainstorming/scripts/server.cjs",
+            "hunk_id": "2222222222222222222222222222222222222222222222222222222222222222",
+            "symbols": ["createBrainstormServer", "handleRequest"],
+            "claimed_by": ["10.3", "10.4"],
+            "acceptance_criteria": ["AC-18", "AC-19", "AC-6"],
+            "evidence_ids": ["EVD-004-review-server"],
+            "source_preview": {
+              "start_line": 402,
+              "end_line": 449,
+              "lines": ["Authenticated opaque evidence lookup", "Same-origin mutation boundary", "Secret-safe error response"]
+            }
+          }
+        ],
+        "verification": ["EVD-004-review-server"],
+        "finding_ids": ["finding-evidence-boundary"]
+      }
+    ],
+    "cross_slice_changes": [
+      {
+        "path": "skills/brainstorming/scripts/server.cjs",
+        "hunk_id": "2222222222222222222222222222222222222222222222222222222222222222",
+        "claimed_by": ["10.3", "10.4"]
+      }
+    ],
+    "unmapped_changes": [
+      {
+        "path": "README.md",
+        "hunk_id": "4444444444444444444444444444444444444444444444444444444444444444"
+      }
+    ],
+    "patch_set": {
+      "schema": 1,
+      "patch_set_id": "6373120baf9ce0f0b11f9ce0e4d445a8ab380c6e58ecfa6c0c2f1fb6559a8deb",
+      "attempt_id": "10.3-attempt-001",
+      "work_id": "work-20260712-visual-companion-vnext",
+      "spec_digest": "d62ef7f2a2fd38b616816b506fc011c1e7bc658e5dae9a5ca5471d4a1b51e9bc",
+      "plan_digest": "82cf1ad298b0d436230e70512777348c013de016f0d11b74d76c5eac4a0ad12c",
+      "decision_record_ids": ["DR-001-visual-companion-vnext"],
+      "base_tree": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "head_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "files": [
+        {
+          "path": "README.md",
+          "patch_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+          "acceptance_criteria": [],
+          "attribution": { "kind": "unmapped" }
+        },
+        {
+          "path": "skills/brainstorming/scripts/server.cjs",
+          "patch_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+          "acceptance_criteria": ["AC-18", "AC-19", "AC-6"],
+          "attribution": { "kind": "cross_slice", "review_slice_ids": ["10.3", "10.4"] }
+        },
+        {
+          "path": "skills/brainstorming/tests/review-workspace.test.js",
+          "patch_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+          "acceptance_criteria": ["AC-1", "AC-15", "AC-16", "AC-18", "AC-6"],
+          "attribution": { "kind": "review_slice", "review_slice_ids": ["10.1"] }
+        },
+        {
+          "path": "skills/brainstorming/ui/workspaces/review/FeatureReviewWorkbench.tsx",
+          "patch_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+          "acceptance_criteria": ["AC-1", "AC-18", "AC-20", "AC-21", "AC-22", "AC-6"],
+          "attribution": { "kind": "review_slice", "review_slice_ids": ["10.3"] }
+        }
+      ]
+    },
+    "patch_set_review": {
+      "schema": 1,
+      "patch_set_id": "6373120baf9ce0f0b11f9ce0e4d445a8ab380c6e58ecfa6c0c2f1fb6559a8deb",
+      "attempt_id": "10.3-attempt-001",
+      "work_id": "work-20260712-visual-companion-vnext",
+      "base_tree": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "head_tree": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "file_reviews": [
+        {
+          "path": "README.md",
+          "patch_digest": "4444444444444444444444444444444444444444444444444444444444444444",
+          "acceptance_criteria": [],
+          "viewed": false,
+          "viewed_patch_set_id": null
+        },
+        {
+          "path": "skills/brainstorming/scripts/server.cjs",
+          "patch_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+          "acceptance_criteria": ["AC-18", "AC-19", "AC-6"],
+          "viewed": false,
+          "viewed_patch_set_id": null
+        },
+        {
+          "path": "skills/brainstorming/tests/review-workspace.test.js",
+          "patch_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+          "acceptance_criteria": ["AC-1", "AC-15", "AC-16", "AC-18", "AC-6"],
+          "viewed": true,
+          "viewed_patch_set_id": "6373120baf9ce0f0b11f9ce0e4d445a8ab380c6e58ecfa6c0c2f1fb6559a8deb"
+        },
+        {
+          "path": "skills/brainstorming/ui/workspaces/review/FeatureReviewWorkbench.tsx",
+          "patch_digest": "3333333333333333333333333333333333333333333333333333333333333333",
+          "acceptance_criteria": ["AC-1", "AC-18", "AC-20", "AC-21", "AC-22", "AC-6"],
+          "viewed": true,
+          "viewed_patch_set_id": "6373120baf9ce0f0b11f9ce0e4d445a8ab380c6e58ecfa6c0c2f1fb6559a8deb"
+        }
+      ],
+      "acceptance_evidence": {
+        "AC-1": {
+          "status": "current",
+          "patch_set_id": "6373120baf9ce0f0b11f9ce0e4d445a8ab380c6e58ecfa6c0c2f1fb6559a8deb",
+          "evidence_ids": ["EVD-002-review-contract", "EVD-003-review-functional"]
+        },
+        "AC-6": {
+          "status": "outdated",
+          "patch_set_id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "evidence_ids": ["EVD-004-review-server"]
+        },
+        "AC-15": {
+          "status": "current",
+          "patch_set_id": "6373120baf9ce0f0b11f9ce0e4d445a8ab380c6e58ecfa6c0c2f1fb6559a8deb",
+          "evidence_ids": ["EVD-002-review-contract"]
+        },
+        "AC-16": {
+          "status": "current",
+          "patch_set_id": "6373120baf9ce0f0b11f9ce0e4d445a8ab380c6e58ecfa6c0c2f1fb6559a8deb",
+          "evidence_ids": ["EVD-002-review-contract"]
+        },
+        "AC-18": {
+          "status": "current",
+          "patch_set_id": "6373120baf9ce0f0b11f9ce0e4d445a8ab380c6e58ecfa6c0c2f1fb6559a8deb",
+          "evidence_ids": ["EVD-002-review-contract"]
+        }
+      },
+      "whole_feature_verdict": {
+        "verdict": "rejected",
+        "patch_set_id": "6373120baf9ce0f0b11f9ce0e4d445a8ab380c6e58ecfa6c0c2f1fb6559a8deb",
+        "acceptance_criteria": ["AC-1", "AC-15", "AC-16", "AC-18", "AC-19", "AC-20", "AC-21", "AC-22", "AC-6"],
+        "evidence_ids": ["EVD-005-review-pilot"]
+      },
+      "viewed_progress": { "viewed": 2, "total": 4 },
+      "can_approve": false
+    },
+    "patch_set_invalidations": [
+      {
+        "id": "invalidation-review-server",
+        "previous_patch_set_id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "current_patch_set_id": "6373120baf9ce0f0b11f9ce0e4d445a8ab380c6e58ecfa6c0c2f1fb6559a8deb",
+        "path": "skills/brainstorming/scripts/server.cjs",
+        "affected_acceptance_criteria": ["AC-6", "AC-19"],
+        "reason": "The authenticated evidence endpoint changed after its prior verification."
+      }
+    ],
+    "evidence_records": [
+      {
+        "schema": 1,
+        "id": "EVD-001-design-direction-approval",
+        "work_id": "work-20260712-visual-companion-vnext",
+        "kind": "design-direction-approval",
+        "acceptance_criteria": ["AC-1", "AC-6"],
+        "decision_record_ids": ["DR-001-visual-companion-vnext"],
+        "source": "Visual Companion design-direction review",
+        "recorded_at": "2026-07-12T12:00:00.000Z",
+        "result": { "choice": "three-pane density" }
+      },
+      {
+        "schema": 1,
+        "id": "EVD-002-review-contract",
+        "work_id": "work-20260712-visual-companion-vnext",
+        "kind": "test",
+        "acceptance_criteria": ["AC-1", "AC-15", "AC-16", "AC-18"],
+        "decision_record_ids": ["DR-001-visual-companion-vnext"],
+        "source": "skills/brainstorming/tests/review-workspace.test.js",
+        "recorded_at": "2026-07-13T09:00:00.000Z",
+        "result": { "status": "passed", "tests": 7 }
+      },
+      {
+        "schema": 1,
+        "id": "EVD-003-review-functional",
+        "work_id": "work-20260712-visual-companion-vnext",
+        "kind": "browser-test",
+        "acceptance_criteria": ["AC-1", "AC-6", "AC-18"],
+        "decision_record_ids": ["DR-001-visual-companion-vnext"],
+        "source": "skills/brainstorming/e2e/feature-review-workbench.spec.ts",
+        "recorded_at": "2026-07-13T09:10:00.000Z",
+        "result": { "status": "passed", "browser": "chromium" }
+      },
+      {
+        "schema": 1,
+        "id": "EVD-004-review-server",
+        "work_id": "work-20260712-visual-companion-vnext",
+        "kind": "integration-test",
+        "acceptance_criteria": ["AC-6", "AC-19"],
+        "decision_record_ids": ["DR-001-visual-companion-vnext"],
+        "source": "authenticated Review evidence endpoint",
+        "recorded_at": "2026-07-13T09:20:00.000Z",
+        "result": { "status": "outdated", "reason": "patch changed again" }
+      },
+      {
+        "schema": 1,
+        "id": "EVD-005-review-pilot",
+        "work_id": "work-20260712-visual-companion-vnext",
+        "kind": "manual-review",
+        "acceptance_criteria": ["AC-6", "AC-18"],
+        "decision_record_ids": ["DR-001-visual-companion-vnext"],
+        "source": "manual Feature Review Workbench pilot",
+        "recorded_at": "2026-07-13T09:30:00.000Z",
+        "result": { "verdict": "rejected", "viewed_files": 2, "total_files": 4 }
+      }
+    ],
+    "source_evidence": [
+      {
+        "id": "source-review-test",
+        "component_id": "source-review-test",
+        "path": "skills/brainstorming/tests/review-workspace.test.js",
+        "hunk_id": "1111111111111111111111111111111111111111111111111111111111111111",
+        "symbols": ["compileReviewSchema", "reviewFixture"],
+        "start_line": 1,
+        "end_line": 212
+      },
+      {
+        "id": "source-review-server",
+        "component_id": "source-review-server",
+        "path": "skills/brainstorming/scripts/server.cjs",
+        "hunk_id": "2222222222222222222222222222222222222222222222222222222222222222",
+        "symbols": ["createBrainstormServer", "handleRequest"],
+        "start_line": 402,
+        "end_line": 449
+      },
+      {
+        "id": "source-review-renderer",
+        "component_id": "source-review-renderer",
+        "path": "skills/brainstorming/ui/workspaces/review/FeatureReviewWorkbench.tsx",
+        "hunk_id": "3333333333333333333333333333333333333333333333333333333333333333",
+        "symbols": ["FeatureReviewWorkbench"],
+        "start_line": 1,
+        "end_line": 284
+      }
+    ],
+    "verification_evidence": [
+      {
+        "evidence_ref": "EVD-002-review-contract",
+        "status": "current",
+        "patch_set_id": "6373120baf9ce0f0b11f9ce0e4d445a8ab380c6e58ecfa6c0c2f1fb6559a8deb",
+        "acceptance_criteria": ["AC-1", "AC-15", "AC-16", "AC-18"]
+      },
+      {
+        "evidence_ref": "EVD-003-review-functional",
+        "status": "current",
+        "patch_set_id": "6373120baf9ce0f0b11f9ce0e4d445a8ab380c6e58ecfa6c0c2f1fb6559a8deb",
+        "acceptance_criteria": ["AC-1", "AC-18", "AC-6"]
+      },
+      {
+        "evidence_ref": "EVD-004-review-server",
+        "status": "outdated",
+        "patch_set_id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "acceptance_criteria": ["AC-19", "AC-6"]
+      }
+    ],
+    "findings": [
+      {
+        "id": "finding-evidence-boundary",
+        "component_id": "finding-evidence-boundary",
+        "severity": "high",
+        "status": "open",
+        "title": "Source evidence boundary changed after verification",
+        "detail": "The server hunk changed again, so only AC-6 and AC-19 evidence is outdated.",
+        "acceptance_criteria": ["AC-6", "AC-19"],
+        "review_slice_id": "10.3",
+        "path": "skills/brainstorming/scripts/server.cjs",
+        "hunk_id": "2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    ],
+    "quality_contract": {
+      "workId": "work-20260712-visual-companion-vnext",
+      "facts": ["browser_input", "keyboard_interaction"],
+      "obligations": [
+        {
+          "id": "EQC-BASE",
+          "quality": "intent_maintainability",
+          "activation": "always",
+          "activationFacts": [],
+          "impact": "ordinary",
+          "owner": "Pair coordinator",
+          "status": "open",
+          "activatedBy": []
+        },
+        {
+          "id": "EQC-A11Y",
+          "component_id": "quality-a11y",
+          "quality": "accessibility",
+          "activation": "fact",
+          "activationFacts": ["keyboard_interaction"],
+          "impact": "high",
+          "owner": "Frontend reviewer",
+          "status": "not_applicable",
+          "activatedBy": ["keyboard_interaction"],
+          "exclusion": {
+            "obligationId": "EQC-A11Y",
+            "status": "not_applicable",
+            "evidence": ["EVD-005-review-pilot"],
+            "decider": "Product owner",
+            "reviewer": "Frontend CODEOWNER",
+            "owner": "Frontend reviewer",
+            "residualRisk": "The fixture has no write interaction beyond shared feedback controls.",
+            "approval": {
+              "state": "approved",
+              "approvedBy": "Frontend CODEOWNER",
+              "provenanceId": "APR-review-a11y"
+            },
+            "state": "approved"
+          }
+        }
+      ],
+      "canClose": false
+    },
+    "decision_records": [
+      {
+        "id": "DR-001-visual-companion-vnext",
+        "component_id": "decision-dr-001",
+        "title": "Structured Visual Companion vNext",
+        "status": "accepted",
+        "acceptance_criteria": ["AC-1", "AC-6", "AC-15", "AC-16", "AC-18"],
+        "evidence_refs": ["EVD-001-design-direction-approval"]
+      }
+    ],
+    "outcomes": [
+      {
+        "id": "OUT-001-review-pilot",
+        "component_id": "outcome-review-pilot",
+        "decision_record_ids": ["DR-001-visual-companion-vnext"],
+        "source": "manual_review",
+        "result": "Review context stayed visible, but stale server evidence blocked approval.",
+        "evidence_refs": ["EVD-005-review-pilot"],
+        "recorded_at": "2026-07-13T09:30:00.000Z"
+      }
+    ]
+  },
+  "read_only": false
+}

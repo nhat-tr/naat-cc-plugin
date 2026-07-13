@@ -5,11 +5,11 @@ Multi-runtime developer toolkit for **Claude Code**, **Codex**, and **GitHub Cop
 ## Runtime Support
 
 <!-- BEGIN GENERATED:runtime-support -->
-| Runtime | Supported Assets |
-|--------|-------------------|
-| Claude Code | Commands, agents, skills, CLI wrappers |
-| Codex | Compatible skills, generated global AGENTS |
-| GitHub Copilot | Repo instructions, path instructions, compatible skills |
+| Runtime | Supported Asset Types |
+|--------|-----------------------|
+| Claude Code | `agent`, `cli`, `command`, `runtime_entrypoint`, `skill`, `workflow_skill` |
+| Codex | `cli`, `runtime_adapter`, `runtime_entrypoint`, `skill`, `workflow_skill` |
+| GitHub Copilot | `skill` |
 <!-- END GENERATED:runtime-support -->
 
 Runtime/asset mapping source of truth:
@@ -102,18 +102,36 @@ Notes:
 | Skill | Purpose |
 |-------|---------|
 | `aspire` | Aspire local-dev diagnostics — logs, traces, state, DB queries for a running AppHost |
-| `brainstorming` | Turn a vague idea into an approved spec before any implementation |
+| `brainstorming` | Turn a vague idea into an approved spec, with an optional live annotatable visual interview |
 | `csharp-dotnet` | C#/.NET implementation guidance (.NET 10, C# 14, EF Core 10, ASP.NET Core 10, NUnit) |
 | `kube-vuln` | Triage container-image vulnerabilities (Trivy reports) in a Kubernetes namespace |
 | `mermaid-validate` | Validate Mermaid diagram blocks right after they're written or edited |
 | `module-deepening` | Tactical refactoring heuristics — deletion test, depth-as-leverage, two-adapter rule |
 | `pair-v2` | Headless doer/reviewer pair-programming workflow; `.pair/` state, stop-gate enforced |
+| `pair-v3` | Automatic Codex/Claude task routing with verification, review, escalation, and quality/cost evidence |
 | `session-replay-note` | Turn a coding-agent session into a teaching-oriented Obsidian demo (notes + Canvas) |
 | `typescript` | TypeScript implementation guidance — React/Next.js, Node, type safety, testing |
 | `ubiquitous-language` | Extract a domain-term glossary from the conversation into `UBIQUITOUS_LANGUAGE.md` |
 | `web-design-guidelines` | Review UI code for Web Interface Guidelines compliance |
 
-#### Pair v2 workflow
+Visual interviews use one shared shell with five purpose-built Workspace Kinds.
+See the [Visual Companion operating guide](skills/brainstorming/visual-companion.md)
+for Workspace Kind selection and executable per-kind scaffold commands.
+
+#### Pair workflows
+
+Pair v3 is the runtime-neutral execution path for an implementable pair plan.
+Run `pair-loop --runtime auto`; it selects the next unchecked task, routes it to
+Codex or Claude, verifies and independently reviews the result, records the
+attempt in `~/.local/share/pair-v3/attempts.jsonl`, and completes, retries, or
+escalates the task automatically. `pair-report` summarizes quality, rework,
+findings, tokens, and measured cost by route and task profile.
+
+Pair v2 remains available as an archived workflow and compatibility surface.
+Pair-v3 owns canonical plan validation and implementation review for both Codex
+and Claude.
+
+##### Pair v2 legacy details
 
 `pair-v2` is a `workflow_skill`, not a plain guidance skill — it ships executable
 scripts under `skills/pair-v2/scripts/`:
@@ -122,8 +140,9 @@ scripts under `skills/pair-v2/scripts/`:
   context against the working-tree diff + plan, writes `.pair/review.md` /
   `.pair/review.json`, and appends BLOCKER findings back into `.pair/plan.md`
   as unchecked tasks. Use `/pair-promote` first to produce the plan it reviews.
-- `validate-plan.sh` — preflight check that `.pair/plan.md` is an implementable
-  plan (not a sketch or a spec); exit 0 = implementable.
+- `validate-plan.sh` — compatibility wrapper around the shared pair-v3 parser.
+  It enforces intent/capability/simplicity contracts, stable task and AC IDs,
+  grounded files, profiles, dependency order, TDD order, and exact verification.
 - `workflow-metrics` — measures agent-workflow friction (interrupts, tool
   rejections, stop-gate blocks, pair-review runs, etc.) from Claude Code
   session JSONLs, so a workflow change can be judged on evidence.
@@ -136,22 +155,25 @@ scripts under `skills/pair-v2/scripts/`:
 
 ##### How to run it (end to end)
 
-1. **Spec** — in nvim, `<leader>pi` creates `.pair/spec.md` from a skeleton
-   (or let the `brainstorming` skill write it). Fill in Purpose + Acceptance
-   Criteria; optionally list Suggested Streams.
+1. **Spec** — let `brainstorming` write `.pair/spec.md` with approved Purpose,
+   Rejection Criteria, Contrasts, stable acceptance-criterion IDs, and matching
+   verification. Promotion—not brainstorming—owns implementation streams.
 2. **Promote** — in the Claude Code session for that repo (terminal, not nvim),
    type `/pair-promote` (optionally `/pair-promote path/to/spec.md`, or right
-   after plan mode to promote that plan). It reads the spec, explores the
-   codebase, and writes `.pair/plan.md` — TDD-shaped (failing-test task first
-   per stream, integration test mandatory) and validated by `validate-plan.sh`
-   before it reports done. (`<leader>pc` re-runs the validator any time.)
-3. **Challenge (optional but cheap)** — `<leader>pC` runs the reviewer in
-   `--plan` mode: it critiques the plan itself against the spec (AC coverage,
-   TDD compliance, decomposition, grounding) before any code exists. Plan
-   BLOCKERs append to `plan.md` like code ones do.
-4. **Implement** — work the plan in the normal Claude session (or a `/loop`
-   seeded by `/loop-plan`), tests first. The Stop-hook gate blocks premature
-   "done" while unchecked tasks remain or `.pair/verify.sh` fails.
+   after plan mode to promote that plan). It reads the spec and repository,
+   verifies pinned dependency capabilities, starts from the framework-native
+   baseline, and writes `.pair/plan.md` with Intent, Capability Evidence, and
+   Simplicity contracts. Failing focused and integration tests precede the
+   implementation they verify. Pair-v3's `validate-plan` is canonical; the old
+   `validate-plan.sh` path delegates to it. (`<leader>pc` re-runs it any time.)
+3. **Challenge when risk warrants** — `<leader>pC` runs the reviewer in `--plan`
+   mode. Use it for high/critical risk, cross-stack work, migrations, and newly
+   verified dependencies. It checks intent, evidence, AC coverage, TDD,
+   dependency order, grounding, and speculative abstractions. A BLOCKER keeps
+   the plan invalid until it is revised or explicitly rebutted.
+4. **Implement** — run `pair-loop --runtime auto` (`--once` for one task).
+   Pair-v3 revalidates the plan before delegation, verifies independently, and
+   reviews each task. The Stop-hook gate blocks premature completion.
 5. **Review** — `<leader>pv` in nvim (or run `pair-review` in a terminal).
    The reviewer runs in a fresh context, BLOCKERs land in `.pair/plan.md`
    (the gate holds the doer until they're fixed), and findings auto-import
@@ -219,7 +241,7 @@ kibana-traffic prod regrinding --from now-6h
 aspire-logs --resource DT-Core --level Error,Warning --last 5m
 aspire-logs --list-resources
 aspire-logs --resource RG-Core --grep "connection" --follow
-aspire-logs --resource RG-Core --level Error -o /tmp/diag.txt
+aspire-logs --resource RG-Core --level Error -o "$CLAUDE_SCRATCH_DIR/my-project/aspire/diag.txt"
 
 aspire-traces --resource DT-Core --errors --last 5m
 aspire-traces --id abc123def456    # full span waterfall

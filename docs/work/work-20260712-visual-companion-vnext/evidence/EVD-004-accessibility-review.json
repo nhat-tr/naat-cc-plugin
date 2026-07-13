@@ -1,0 +1,171 @@
+{
+  "schema": 1,
+  "id": "EVD-004-accessibility-review",
+  "work_id": "work-20260712-visual-companion-vnext",
+  "kind": "accessibility-review",
+  "acceptance_criteria": [
+    "AC-20",
+    "AC-23"
+  ],
+  "decision_record_ids": [
+    "DR-001-visual-companion-vnext"
+  ],
+  "source": "Manual source review and Playwright accessibility compatibility suite",
+  "recorded_at": "2026-07-13T08:45:10Z",
+  "result": {
+    "status": "passed_with_residual_risks",
+    "review_method": "Manual WCAG-oriented source review corroborated by the aggregate standalone browser suite",
+    "workspace_kinds": [
+      "product",
+      "architecture",
+      "research",
+      "business",
+      "review"
+    ],
+    "automated_verification": {
+      "command": "npx playwright test --config skills/brainstorming/playwright.config.ts --project=a11y --reporter=line",
+      "result": "passed",
+      "tests": 5,
+      "passed": 5,
+      "failed": 0,
+      "desktop_mobile_scans": 10,
+      "viewports": [
+        "1440x900",
+        "390x844"
+      ],
+      "wcag_tags": [
+        "wcag2a",
+        "wcag2aa",
+        "wcag21aa",
+        "wcag22aa"
+      ],
+      "blocking_axe_findings": 0,
+      "network_requests": 0,
+      "page_errors": 0,
+      "source_path": "skills/brainstorming/e2e/accessibility-compatibility.spec.ts"
+    },
+    "manual_review": {
+      "keyboard_and_tab_behavior": {
+        "status": "passed_source_review_and_automated_sample",
+        "observations": [
+          "Workspace Frame tabs use a roving tab stop with Arrow keys, Home, End, selected state, and controlled tabpanels.",
+          "Product state tabs use Arrow keys, Home, End, and roving focus; comparison, responsive, and feedback commands remain native buttons and selects.",
+          "Architecture state tabs move focus with horizontal Arrow keys; named camera and focus controls are native controls; the topology surface exposes keyboard zoom and focusable React Flow nodes and edges.",
+          "Review Acceptance Criterion tabs support Arrow keys, Home, and End. Its source tree implements roving focus, Arrow navigation, Home, End, expand and collapse, activation, and typeahead.",
+          "The browser suite focused an in-scope purpose control in every Workspace Kind and exercised ArrowDown, Home, and End on the Review tree in both viewports."
+        ],
+        "source_paths": [
+          "skills/brainstorming/ui/shared/FrameNavigator.tsx",
+          "skills/brainstorming/ui/app/WorkspaceHost.tsx",
+          "skills/brainstorming/ui/workspaces/product/ProductConceptStudio.tsx",
+          "skills/brainstorming/ui/workspaces/architecture/ArchitectureCanvas.tsx",
+          "skills/brainstorming/ui/workspaces/research/ResearchEvidenceBoard.tsx",
+          "skills/brainstorming/ui/workspaces/business/BusinessReasoningCanvas.tsx",
+          "skills/brainstorming/ui/workspaces/review/ReviewNavigator.tsx",
+          "skills/brainstorming/e2e/accessibility-compatibility.spec.ts"
+        ]
+      },
+      "visible_focus": {
+        "status": "passed",
+        "observations": [
+          "Buttons, inputs, textareas, selects, tabs, zero-tabindex surfaces, and selectable Components receive a three-pixel focus outline with offset.",
+          "Each automated desktop and mobile scan confirmed that a purpose control accepted focus, exposed a visible outline, and remained inside the viewport."
+        ],
+        "source_paths": [
+          "skills/brainstorming/ui/styles/shell.css",
+          "skills/brainstorming/e2e/accessibility-compatibility.spec.ts"
+        ]
+      },
+      "semantics_and_labels": {
+        "status": "passed",
+        "observations": [
+          "Frame tabs and tabpanels are linked by aria-controls and aria-labelledby; the workspace main region announces updates politely.",
+          "Feedback regions, form controls, status and alert messages, Product prototype regions, Architecture controls, ports and React Flow graph elements, Research confidence columns, Business sections, and Review navigation use native landmarks or explicit valid names.",
+          "Architecture edges retain one accessible name on the React Flow edge wrapper, non-interactive ports are named graphical symbols, and the pending feedback collection is a named group.",
+          "The aggregate axe scan reported no critical or serious WCAG-tagged semantic or label finding in any of the ten scans."
+        ],
+        "source_paths": [
+          "skills/brainstorming/ui/app/VisualCompanionApp.tsx",
+          "skills/brainstorming/ui/app/WorkspaceHost.tsx",
+          "skills/brainstorming/ui/shared/FeedbackPanel.tsx",
+          "skills/brainstorming/ui/shared/FrameNavigator.tsx",
+          "skills/brainstorming/ui/workspaces/product/PrototypeFrame.tsx",
+          "skills/brainstorming/ui/workspaces/architecture/ArchitectureCanvas.tsx",
+          "skills/brainstorming/ui/workspaces/architecture/architecture-nodes.tsx",
+          "skills/brainstorming/ui/workspaces/research/ResearchEvidenceBoard.tsx",
+          "skills/brainstorming/ui/workspaces/business/BusinessReasoningCanvas.tsx",
+          "skills/brainstorming/ui/workspaces/review/ReviewNavigator.tsx",
+          "skills/brainstorming/ui/workspaces/review/FeatureReviewWorkbench.tsx"
+        ]
+      },
+      "non_color_state": {
+        "status": "passed_source_review",
+        "observations": [
+          "Product selection and responsive state use aria-pressed or aria-selected plus visible labels.",
+          "Architecture exposes Current and Proposed text, change text, scenario labels, focus labels, and typed node and edge names in addition to color styling.",
+          "Research renders explicit confidence headings, Contradicts text, Source evidence labels, and Unknown labels.",
+          "Business renders numbered Journey stages and visible Assumption, Economics, Risk, Experiment, Outcome, and Evidence kind labels.",
+          "Review renders selected and viewed attributes together with Viewed, Not viewed, Expected only, status, severity, and finding text."
+        ],
+        "source_paths": [
+          "skills/brainstorming/ui/workspaces/product/ConceptWall.tsx",
+          "skills/brainstorming/ui/workspaces/product/ProductConceptStudio.tsx",
+          "skills/brainstorming/ui/workspaces/architecture/ArchitectureCanvas.tsx",
+          "skills/brainstorming/ui/workspaces/architecture/architecture-nodes.tsx",
+          "skills/brainstorming/ui/workspaces/research/ResearchEvidenceBoard.tsx",
+          "skills/brainstorming/ui/workspaces/business/BusinessReasoningCanvas.tsx",
+          "skills/brainstorming/ui/workspaces/review/ReviewNavigator.tsx",
+          "skills/brainstorming/ui/workspaces/review/FeatureReviewWorkbench.tsx"
+        ]
+      },
+      "reduced_motion": {
+        "status": "passed",
+        "observations": [
+          "The shared reduced-motion rule removes animation and transition timing and forces automatic scrolling; Product and Architecture add workspace-specific suppression.",
+          "Every automated scan emulated reduced motion and found no active animation, moving transition, or smooth-scroll behavior."
+        ],
+        "source_paths": [
+          "skills/brainstorming/ui/styles/shell.css",
+          "skills/brainstorming/ui/workspaces/product/product.css",
+          "skills/brainstorming/ui/workspaces/architecture/architecture.css",
+          "skills/brainstorming/e2e/accessibility-compatibility.spec.ts"
+        ]
+      },
+      "reflow_and_mobile": {
+        "status": "passed_at_390px_and_source_reviewed_for_320px",
+        "observations": [
+          "All five 390x844 standalone scans rendered offline without horizontal document overflow.",
+          "Shared min-width, overflow-wrap, single-column composition, compact control, and max-width 360px rules apply at 320px.",
+          "Product preserves the three-way comparison with compact labels, while Architecture, Research, Business, and Review collapse their main grids and panes before 320px.",
+          "The automated command did not execute a 320px viewport; 320px support in this record is a source-level review, not runtime geometry evidence."
+        ],
+        "source_paths": [
+          "skills/brainstorming/ui/styles/shell.css",
+          "skills/brainstorming/ui/workspaces/product/product.css",
+          "skills/brainstorming/ui/workspaces/architecture/architecture.css",
+          "skills/brainstorming/ui/workspaces/research/research.css",
+          "skills/brainstorming/ui/workspaces/business/business.css",
+          "skills/brainstorming/ui/workspaces/review/review.css",
+          "skills/brainstorming/e2e/accessibility-compatibility.spec.ts"
+        ]
+      },
+      "standalone_offline": {
+        "status": "passed",
+        "observations": [
+          "Each Workspace Kind was generated as a standalone file, opened with the browser offline, and produced no non-file network request or page error."
+        ],
+        "source_paths": [
+          "skills/brainstorming/e2e/accessibility-compatibility.spec.ts",
+          "skills/brainstorming/scripts/standalone.cjs"
+        ]
+      }
+    },
+    "residual_risks": [
+      "The aggregate gate asserts zero critical or serious axe findings; this record does not claim that every moderate or minor advisory is absent.",
+      "The automated keyboard check samples one purpose control per Workspace Kind and the main Review tree keys; it does not exhaustively traverse every focusable control or validate subjective focus order.",
+      "No screen-reader session, speech-output review, operating-system high-contrast review, or touch assistive-technology review was performed in this evidence cycle.",
+      "The runtime mobile scan is 390 pixels wide. A dedicated 320-pixel browser geometry and text-reflow run remains necessary before claiming runtime proof at that width.",
+      "The Architecture Canvas uses an application-style graph with a dense 200-node fixture; its screen-reader interaction model and discoverability still require manual assistive-technology review."
+    ]
+  }
+}

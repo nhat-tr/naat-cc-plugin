@@ -142,7 +142,7 @@ function restoreBackup(target, dryRun, operations) {
   }
 }
 
-function runGenerator(mode, dryRun, operations) {
+function runGenerator(mode, dryRun, operations, quiet = false) {
   operations.push({ action: 'generate_repo_assets', mode });
   if (dryRun) {
     return;
@@ -150,7 +150,7 @@ function runGenerator(mode, dryRun, operations) {
 
   childProcess.execFileSync('node', ['scripts/generate-runtime-assets.js', mode], {
     cwd: ROOT_DIR,
-    stdio: 'inherit',
+    stdio: quiet ? ['ignore', 'ignore', 'inherit'] : 'inherit',
   });
 }
 
@@ -209,6 +209,7 @@ function installClaudeGlobal(manifest, pluginDir, dryRun, operations) {
     dryRun,
     operations
   );
+  declareRuntimeDelivery(manifest, 'claude', dryRun, operations);
 }
 
 function uninstallClaudeGlobal(manifest, dryRun, operations) {
@@ -321,6 +322,113 @@ function uninstallCliTools(manifest, runtime, dryRun, operations) {
   }
 }
 
+function runtimeDeliveryEntries(manifest, runtime) {
+  const delivery = manifest.runtimes?.[runtime]?.delivery;
+  if (!delivery) return [];
+  const values = runtime === 'codex' ? [delivery.active, delivery.idle] : [delivery];
+  return values.filter(Boolean).map(value => ({
+    ...value,
+    ...(value.entrypoint ? { entrypoint: path.join(ROOT_DIR, value.entrypoint) } : {}),
+    ...(value.adapter ? { adapter: path.join(ROOT_DIR, value.adapter) } : {}),
+  }));
+}
+
+function codexMcpConfiguration(server) {
+  const result = childProcess.spawnSync('codex', ['mcp', 'get', server, '--json'], {
+    encoding: 'utf8',
+    env: process.env,
+  });
+  if (result.error?.code === 'ENOENT') return { installed: false, configuration: null };
+  if (result.status !== 0) return { installed: true, configuration: null };
+  try {
+    return { installed: true, configuration: JSON.parse(result.stdout) };
+  } catch {
+    throw new Error('Codex MCP registration returned invalid diagnostics');
+  }
+}
+
+function registerCodexActiveDelivery(entry) {
+  const current = codexMcpConfiguration(entry.server);
+  if (!current.installed) return;
+  const expectedArgs = [entry.entrypoint];
+  if (current.configuration) {
+    const transport = current.configuration.transport;
+    if (transport?.type === 'stdio'
+      && transport.command === process.execPath
+      && JSON.stringify(transport.args || []) === JSON.stringify(expectedArgs)) {
+      return;
+    }
+    throw new Error(`Codex MCP server ${entry.server} already has unmanaged configuration`);
+  }
+  const added = childProcess.spawnSync('codex', [
+    'mcp', 'add', entry.server, '--', process.execPath, entry.entrypoint,
+  ], {
+    encoding: 'utf8',
+    env: process.env,
+  });
+  if (added.status !== 0) throw new Error(`Codex MCP server ${entry.server} could not be registered`);
+}
+
+function declareRuntimeDelivery(manifest, runtime, dryRun, operations) {
+  for (const entry of runtimeDeliveryEntries(manifest, runtime)) {
+    operations.push({
+      action: 'register_runtime_delivery',
+      runtime,
+      ...entry,
+      dry_run: dryRun,
+    });
+    if (!dryRun && runtime === 'codex' && entry.registration === 'mcp') {
+      registerCodexActiveDelivery(entry);
+    }
+  }
+}
+
+function managedPairHook(entry) {
+  return (entry.hooks || []).some(hook => typeof hook.command === 'string' && hook.command.includes('my-claude-code/hooks/stop-gate.sh'));
+}
+
+function installCodexHooks(codexDir, pluginDir, dryRun, operations) {
+  const source = path.join(ROOT_DIR, 'hooks', 'hooks.json');
+  const target = path.join(codexDir, 'hooks.json');
+  operations.push({ action: 'merge_hooks', source, target });
+  if (dryRun) return;
+
+  let current = { hooks: {} };
+  if (fs.existsSync(target)) {
+    current = JSON.parse(fs.readFileSync(target, 'utf8'));
+    if (!current.hooks) current = { hooks: current };
+  }
+  const incoming = JSON.parse(fs.readFileSync(source, 'utf8'));
+  for (const [event, entries] of Object.entries(incoming.hooks || incoming)) {
+    const existing = (current.hooks[event] || []).filter(entry => !managedPairHook(entry));
+    const rendered = entries.map(entry => ({
+      ...entry,
+      hooks: (entry.hooks || []).map(hook => ({
+        ...hook,
+        command: typeof hook.command === 'string' && hook.command.includes('my-claude-code/hooks/stop-gate.sh')
+          ? `bash ${JSON.stringify(path.join(pluginDir, 'hooks', 'stop-gate.sh'))}`
+          : hook.command,
+      })),
+    }));
+    current.hooks[event] = [...existing, ...rendered];
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, `${JSON.stringify(current, null, 2)}\n`);
+}
+
+function uninstallCodexHooks(codexDir, dryRun, operations) {
+  const target = path.join(codexDir, 'hooks.json');
+  operations.push({ action: 'remove_hooks', target });
+  if (dryRun || !fs.existsSync(target)) return;
+  const current = JSON.parse(fs.readFileSync(target, 'utf8'));
+  const hooks = current.hooks || current;
+  for (const event of Object.keys(hooks)) {
+    hooks[event] = hooks[event].filter(entry => !managedPairHook(entry));
+    if (hooks[event].length === 0) delete hooks[event];
+  }
+  fs.writeFileSync(target, `${JSON.stringify(current, null, 2)}\n`);
+}
+
 function installCodexGlobal(manifest, pluginDir, dryRun, operations) {
   const home = os.homedir();
   const codexDir = process.env.CODEX_HOME || path.join(home, '.codex');
@@ -334,6 +442,7 @@ function installCodexGlobal(manifest, pluginDir, dryRun, operations) {
 
   installRenderedFile(globalInstruction, path.join(codexDir, 'AGENTS.md'), pluginDir, dryRun, operations);
   installRenderedFile(globalInstruction, path.join(agentsDir, 'AGENTS.md'), pluginDir, dryRun, operations);
+  installCodexHooks(codexDir, pluginDir, dryRun, operations);
 
   for (const asset of getAssetEntries(manifest)) {
     if (!asset.supported_runtimes.includes('codex')) {
@@ -351,6 +460,8 @@ function installCodexGlobal(manifest, pluginDir, dryRun, operations) {
   }
 
   installCliTools(manifest, 'codex', dryRun, operations);
+  pruneDanglingSymlinks(skillDirs, dryRun, operations);
+  declareRuntimeDelivery(manifest, 'codex', dryRun, operations);
 }
 
 function uninstallCodexGlobal(manifest, dryRun, operations) {
@@ -363,6 +474,7 @@ function uninstallCodexGlobal(manifest, dryRun, operations) {
   restoreBackup(path.join(codexDir, 'AGENTS.md'), dryRun, operations);
   removeManagedPath(path.join(agentsDir, 'AGENTS.md'), dryRun, operations);
   restoreBackup(path.join(agentsDir, 'AGENTS.md'), dryRun, operations);
+  uninstallCodexHooks(codexDir, dryRun, operations);
 
   for (const asset of getAssetEntries(manifest)) {
     if (!asset.supported_runtimes.includes('codex')) {
@@ -475,12 +587,12 @@ function main() {
       console.error('Repo-scope uninstall is not supported for generated files.');
       process.exit(1);
     }
-    runGenerator('--write', args.dryRun, operations);
+    runGenerator('--write', args.dryRun, operations, args.json);
   } else if (scopes.includes('global') && !args.uninstall) {
     // Global installs render CLAUDE.md / AGENTS.md / codex-global.md from the
     // generated outputs — regenerate them first so template or manifest edits
     // can never ship stale instruction files (install.*.sh all land here).
-    runGenerator('--write', args.dryRun, operations);
+    runGenerator('--write', args.dryRun, operations, args.json);
   }
 
   if (scopes.includes('global')) {

@@ -1,0 +1,36 @@
+#!/usr/bin/env node
+
+const childProcess = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const { planContractDigest, validatePlan } = require('./lib/pair-core');
+
+function defaultPlanPath() {
+  const root = childProcess.spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' });
+  return path.join(root.status === 0 ? root.stdout.trim() : process.cwd(), '.pair', 'plan.md');
+}
+
+function main() {
+  const planPath = process.argv[2] || defaultPlanPath();
+  if (!fs.existsSync(planPath)) {
+    console.log(`validate-plan: ${planPath} does not exist`);
+    console.log('  ✗ no plan file — run /pair-promote first');
+    process.exit(1);
+  }
+
+  const plan = fs.readFileSync(planPath, 'utf8');
+  const result = validatePlan(plan);
+  for (const warning of result.warnings) console.log(`  ⚠ ${warning}`);
+  for (const error of result.errors) console.log(`  ✗ ${error}`);
+
+  if (!result.valid) {
+    console.log(`validate-plan: NOT implementable (${planPath})`);
+    process.exit(1);
+  }
+
+  console.log(`validate-plan: OK — ${result.tasksOpen} open / ${result.tasksTotal} total task(s) in ${planPath}`);
+  console.log(`plan contract sha256: ${planContractDigest(plan)}`);
+}
+
+main();
