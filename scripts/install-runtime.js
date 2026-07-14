@@ -325,7 +325,11 @@ function uninstallCliTools(manifest, runtime, dryRun, operations) {
 function runtimeDeliveryEntries(manifest, runtime) {
   const delivery = manifest.runtimes?.[runtime]?.delivery;
   if (!delivery) return [];
-  const values = runtime === 'codex' ? [delivery.active, delivery.idle] : [delivery];
+  const values = runtime === 'codex'
+    ? [delivery.active, delivery.idle]
+    : runtime === 'claude'
+      ? [delivery.active, delivery.channel]
+      : [delivery];
   return values.filter(Boolean).map(value => ({
     ...value,
     ...(value.entrypoint ? { entrypoint: path.join(ROOT_DIR, value.entrypoint) } : {}),

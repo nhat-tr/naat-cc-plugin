@@ -10,6 +10,8 @@ import {
   ArrowRight,
   Eye,
   Focus,
+  Maximize,
+  Minimize,
   Minus,
   Route,
   Scan,
@@ -177,6 +179,29 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
   const [viewportHeight, setViewportHeight] = useState(initialViewport.value);
   const modeTabs = useRef(new Map<ArchitectureMode, HTMLButtonElement>());
   const initialViewApplied = useRef(false);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const overlayFullscreen = useRef(false);
+  const [fullscreen, setFullscreen] = useState(false);
+
+  useEffect(() => {
+    const syncNativeFullscreen = (): void => {
+      if (overlayFullscreen.current) return;
+      setFullscreen(document.fullscreenElement === viewportRef.current);
+    };
+    document.addEventListener("fullscreenchange", syncNativeFullscreen);
+    return () => document.removeEventListener("fullscreenchange", syncNativeFullscreen);
+  }, []);
+
+  useEffect(() => {
+    if (!fullscreen || !overlayFullscreen.current) return;
+    const closeOnEscape = (event: globalThis.KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      overlayFullscreen.current = false;
+      setFullscreen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [fullscreen]);
 
   useEffect(() => {
     const updateBounds = (): void => {
@@ -464,6 +489,32 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
     storeViewportHeight(value);
   };
 
+  const toggleFullscreen = (): void => {
+    const element = viewportRef.current;
+    if (!element) return;
+    if (fullscreen) {
+      if (overlayFullscreen.current) {
+        overlayFullscreen.current = false;
+        setFullscreen(false);
+      } else if (document.fullscreenElement) {
+        void document.exitFullscreen();
+      } else {
+        setFullscreen(false);
+      }
+      return;
+    }
+    if (typeof element.requestFullscreen === "function") {
+      void element.requestFullscreen().catch(() => {
+        // Fullscreen API is unavailable (e.g. sandboxed iframe); maximize with CSS instead.
+        overlayFullscreen.current = true;
+        setFullscreen(true);
+      });
+    } else {
+      overlayFullscreen.current = true;
+      setFullscreen(true);
+    }
+  };
+
   return (
     <section
       className="architecture-canvas"
@@ -590,9 +641,11 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
             aria-label="Architecture topology viewport"
             className="architecture-viewport"
             data-architecture-viewport=""
+            data-fullscreen={fullscreen ? "" : undefined}
             data-mode={mode}
             id="architecture-topology"
             onKeyDown={handleGraphKeys}
+            ref={viewportRef}
             role="region"
             style={{ height: viewportHeight }}
             tabIndex={0}
@@ -639,6 +692,17 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
                 </div>
               </ReactFlow>
             )}
+            <button
+              aria-pressed={fullscreen}
+              className="architecture-viewport-fullscreen"
+              data-architecture-fullscreen=""
+              onClick={toggleFullscreen}
+              title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+              type="button"
+            >
+              {fullscreen ? <Minimize aria-hidden="true" size={17} /> : <Maximize aria-hidden="true" size={17} />}
+              <span className="sr-only">{fullscreen ? "Exit fullscreen" : "Fullscreen"}</span>
+            </button>
           </div>
           <PaneSeparator
             aria-controls="architecture-topology"

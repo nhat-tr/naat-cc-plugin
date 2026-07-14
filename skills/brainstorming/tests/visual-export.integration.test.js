@@ -94,9 +94,17 @@ test('writeStandaloneExport falls back to a placeholder when no screen was publi
     state_dir: path.join(sessionDir, 'state'),
   }, output);
 
-  assert.equal(written, output);
+  assert.equal(written.html, output);
   const html = fs.readFileSync(output, 'utf8');
   assert.match(html, /No visual published/);
+
+  // Agent-readable sidecars are written beside the HTML even for the placeholder document.
+  assert.equal(written.data, path.join(sessionDir, 'visual.json'));
+  assert.equal(written.interview, path.join(sessionDir, 'visual.interview.md'));
+  const digest = JSON.parse(fs.readFileSync(written.data, 'utf8'));
+  assert.equal(digest.schema, 'brainstorm-interview/v1');
+  assert.deepEqual(digest.history.events, []);
+  assert.match(fs.readFileSync(written.interview, 'utf8'), /## Interview/);
 });
 
 test('the running server maintains a live visual.html without any manual export', async t => {
@@ -130,6 +138,16 @@ test('the running server maintains a live visual.html without any manual export'
   });
   assert.equal(submitted.status, 201);
   await waitFor(() => fs.readFileSync(address.visual_file, 'utf8').includes('Keep SSE with reconnect notes.'));
+
+  // The rolling agent-readable sidecars sit beside the HTML and stay in sync with it, so a
+  // revisiting agent re-reads the interview from compact data instead of the bundle.
+  const dataFile = path.join(sessionDir, 'visual.json');
+  const interviewFile = path.join(sessionDir, 'visual.interview.md');
+  await waitFor(() => fs.existsSync(dataFile) && fs.readFileSync(interviewFile, 'utf8').includes('Keep SSE with reconnect notes.'));
+  const digest = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
+  assert.equal(digest.schema, 'brainstorm-interview/v1');
+  assert.equal(digest.history.events.some(event => event.message === 'Keep SSE with reconnect notes.'), true);
+  assert.match(fs.readFileSync(interviewFile, 'utf8'), /## Interview/);
 });
 
 test('the server saves numbered standalone snapshots into the artifact directory', async t => {
@@ -155,8 +173,15 @@ test('the server saves numbered standalone snapshots into the artifact directory
   assert.equal(fs.existsSync(firstResult.path), true);
   assert.match(fs.readFileSync(firstResult.path, 'utf8'), /Transport decision/);
 
+  // Each numbered snapshot carries matching agent-readable sidecars.
+  assert.equal(fs.existsSync(path.join(artifactDir, 'visual-001.json')), true);
+  assert.equal(fs.existsSync(path.join(artifactDir, 'visual-001.interview.md')), true);
+  const snapshotDigest = JSON.parse(fs.readFileSync(path.join(artifactDir, 'visual-001.json'), 'utf8'));
+  assert.equal(snapshotDigest.title, 'Transport decision');
+
   const second = await fetch(`${address.url}${address.base_path}api/save`, { method: 'POST', headers: { Cookie: cookie }, body: '{}' });
   assert.equal((await second.json()).file, 'visual-002.html');
+  assert.equal(fs.existsSync(path.join(artifactDir, 'visual-002.json')), true);
   // The artifact dir is self-ignoring so it never clutters the repo's git status.
   assert.equal(fs.readFileSync(path.join(artifactDir, '.gitignore'), 'utf8'), '*\n');
 });
@@ -195,4 +220,13 @@ test('a stopped scratch session leaves a standalone visual in the repo .artifact
   const html = fs.readFileSync(result.export_file, 'utf8');
   assert.match(html, /Transport decision/);
   assert.match(html, /window\.__BRAINSTORM_EMBEDDED__ =/);
+
+  // The stop output points at the agent-readable sidecars, which survive beside the HTML.
+  assert.equal(result.data_file, path.join(path.dirname(result.export_file), 'visual.json'));
+  assert.equal(result.interview_file, path.join(path.dirname(result.export_file), 'visual.interview.md'));
+  assert.equal(fs.existsSync(result.data_file), true, 'data sidecar survives scratch cleanup');
+  const digest = JSON.parse(fs.readFileSync(result.data_file, 'utf8'));
+  assert.equal(digest.title, 'Transport decision');
+  assert.equal(digest.workspace_kind, 'technical');
+  assert.match(fs.readFileSync(result.interview_file, 'utf8'), /# Transport decision — interview/);
 });

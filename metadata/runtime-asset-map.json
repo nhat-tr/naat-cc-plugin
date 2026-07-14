@@ -8,12 +8,21 @@
       "commands_dir": "~/.claude/commands",
       "contexts_dir": "~/.claude/contexts",
       "delivery": {
-        "registration": "channel",
-        "server": "visual-companion-channel",
-        "entrypoint": "skills/brainstorming/scripts/claude-channel-server.mjs",
-        "capability": "claude/channel",
-        "notification": "notifications/claude/channel",
-        "acknowledgement_tool": "ack_feedback"
+        "active": {
+          "registration": "mcp",
+          "server": "visual-companion-feedback",
+          "entrypoint": "skills/brainstorming/scripts/visual-mcp-server.mjs",
+          "capability": "wait_for_feedback",
+          "tool_timeout_sec": 900
+        },
+        "channel": {
+          "registration": "channel",
+          "server": "visual-companion-channel",
+          "entrypoint": "skills/brainstorming/scripts/claude-channel-server.mjs",
+          "capability": "claude/channel",
+          "notification": "notifications/claude/channel",
+          "acknowledgement_tool": "ack_feedback"
+        }
       }
     },
     "codex": {
@@ -373,7 +382,8 @@
       "type": "runtime_entrypoint",
       "canonical_file": "skills/brainstorming/scripts/visual-mcp-server.mjs",
       "supported_runtimes": [
-        "codex"
+        "codex",
+        "claude"
       ]
     },
     "runtime.codex-app-server-adapter": {

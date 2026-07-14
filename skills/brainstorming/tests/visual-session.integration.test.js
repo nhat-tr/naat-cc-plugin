@@ -8,6 +8,7 @@ const { createBrainstormServer } = require('../scripts/server.cjs');
 const { normalizeKnownWorkspaceContent } = require('../scripts/workspace-content.cjs');
 const { normalizeWorkspaceDocument, WORKSPACE_KINDS } = require('../scripts/workspace-document.cjs');
 const { createWorkspaceScaffold } = require('../scripts/workspace-scaffold.cjs');
+const { SessionStore } = require('../scripts/session-store.cjs');
 const { createScratchDirectory } = require('./test-support');
 
 const sessionCli = path.resolve(__dirname, '../scripts/visual-session.cjs');
@@ -416,6 +417,9 @@ test('present starts directly on a canonical v2 document and derives a stale Rev
   }));
 
   candidate.title = 'Architecture after Publish';
+  // Editing content invalidates the prior revision; drop it so Publish derives the matching one.
+  // (Publish rejects a supplied revision that does not match its content — the integrity guard.)
+  delete candidate.revision;
   fs.writeFileSync(candidateFile, `${JSON.stringify(candidate)}\n`);
   const published = childProcess.spawnSync(process.execPath, [
     sessionCli,
@@ -433,6 +437,125 @@ test('present starts directly on a canonical v2 document and derives a stale Rev
   const active = await fetch(`${info.url}${info.base_path}api/screen`, { headers: { Cookie: cookie } });
   assert.equal(active.status, 200);
   assert.equal((await active.json()).workspace_kind, 'architecture');
+});
+
+test('present reuses a live session on a workspace-kind switch instead of orphaning the browser URL', async t => {
+  const scratchRoot = createScratchDirectory(t, 'present-reuse-session');
+  const projectDir = path.join(scratchRoot, 'project');
+  const environment = { ...process.env, CLAUDE_SCRATCH_DIR: scratchRoot };
+
+  const productFile = path.join(scratchRoot, 'product-workspace.json');
+  const product = createWorkspaceScaffold({
+    workId: 'work-20260714-product-lens',
+    workspaceKind: 'product',
+    title: 'Product concepts',
+  });
+  fs.writeFileSync(productFile, `${JSON.stringify(product)}\n`);
+
+  const architectureFile = path.join(scratchRoot, 'architecture-workspace.json');
+  const architecture = createWorkspaceScaffold({
+    workId: 'work-20260714-architecture-lens',
+    workspaceKind: 'architecture',
+    title: 'Architecture canvas',
+  });
+  fs.writeFileSync(architectureFile, `${JSON.stringify(architecture)}\n`);
+
+  const presented = childProcess.spawn(
+    process.execPath,
+    [sessionCli, 'present', '--document', productFile, '--project-dir', projectDir],
+    { encoding: 'utf8', env: environment, stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let info;
+  t.after(() => {
+    if (info?.session_dir) {
+      childProcess.spawnSync(path.resolve(__dirname, '../scripts/stop-server.sh'), [info.session_dir], {
+        encoding: 'utf8',
+        env: environment,
+      });
+    }
+    if (presented.exitCode == null) presented.kill('SIGTERM');
+  });
+  info = JSON.parse(await firstOutputLine(presented.stdout));
+  assert.equal(info.type, 'visual-session-presented');
+  assert.equal(info.workspace_kind, 'product');
+
+  // Switching the workspace kind while the session is live must REUSE the running server —
+  // same port, token, and URL — so the already-open browser tab is not orphaned.
+  const represented = childProcess.spawnSync(
+    process.execPath,
+    [sessionCli, 'present', '--document', architectureFile, '--project-dir', projectDir],
+    { encoding: 'utf8', env: environment },
+  );
+  assert.equal(represented.status, 0, represented.stderr);
+  const reuse = JSON.parse(represented.stdout.trim().split('\n').pop());
+  assert.equal(reuse.type, 'visual-session-represented');
+  assert.equal(reuse.url, info.url, 'a reused session keeps the same server URL and port');
+  assert.equal(reuse.session_dir, info.session_dir, 'a reused session does not create a new session directory');
+  assert.equal(reuse.workspace_kind, 'architecture');
+  // Reuse must re-emit a working link so the agent can re-paste it instead of saying "same URL".
+  assert.equal(reuse.connection_url, info.connection_url, 'represent re-emits the original connection_url');
+
+  // The re-emitted connection URL still authenticates and now serves the architecture document.
+  const root = await fetch(reuse.connection_url);
+  const cookie = root.headers.get('set-cookie').split(';')[0];
+  const active = await fetch(`${info.url}${info.base_path}api/screen`, { headers: { Cookie: cookie } });
+  assert.equal(active.status, 200);
+  assert.equal((await active.json()).workspace_kind, 'architecture');
+
+  // status recovers the same shareable link, so a lost URL is always retrievable.
+  const statusResult = childProcess.spawnSync(
+    process.execPath,
+    [sessionCli, 'status', '--session-dir', info.session_dir],
+    { encoding: 'utf8', env: environment },
+  );
+  assert.equal(statusResult.status, 0, statusResult.stderr);
+  assert.equal(JSON.parse(statusResult.stdout).connection_url, info.connection_url);
+});
+
+test('reply accepts an inline --message and re-emits the shareable connection URL', async t => {
+  const scratchRoot = createScratchDirectory(t, 'reply-inline');
+  const projectDir = path.join(scratchRoot, 'project');
+  const environment = { ...process.env, CLAUDE_SCRATCH_DIR: scratchRoot };
+  const candidateFile = path.join(scratchRoot, 'architecture-workspace.json');
+  fs.writeFileSync(candidateFile, `${JSON.stringify(createWorkspaceScaffold({
+    workId: 'work-20260715-reply-inline',
+    workspaceKind: 'architecture',
+    title: 'Reply canvas',
+  }))}\n`);
+
+  const presented = childProcess.spawn(
+    process.execPath,
+    [sessionCli, 'present', '--document', candidateFile, '--project-dir', projectDir],
+    { encoding: 'utf8', env: environment, stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let info;
+  t.after(() => {
+    if (info?.session_dir) {
+      childProcess.spawnSync(path.resolve(__dirname, '../scripts/stop-server.sh'), [info.session_dir], {
+        encoding: 'utf8',
+        env: environment,
+      });
+    }
+    if (presented.exitCode == null) presented.kill('SIGTERM');
+  });
+  info = JSON.parse(await firstOutputLine(presented.stdout));
+
+  // A browser turn must exist for reply to acknowledge.
+  new SessionStore(info.state_dir).appendBrowserTurn({
+    message: 'Tighten the ownership boundary.',
+    annotations: [],
+    choices: [],
+  });
+
+  const replied = childProcess.spawnSync(
+    process.execPath,
+    [sessionCli, 'reply', '--message', 'Acknowledged inline — no temp file needed.', '--session-dir', info.session_dir],
+    { encoding: 'utf8', env: environment },
+  );
+  assert.equal(replied.status, 0, replied.stderr);
+  const record = JSON.parse(replied.stdout);
+  assert.equal(record.message, 'Acknowledged inline — no temp file needed.');
+  assert.equal(record.connection_url, info.connection_url, 'reply re-emits the shareable URL');
 });
 
 test('present and Publish compile Architecture Drafts without migration or manual Revision work', async t => {

@@ -73,7 +73,13 @@ Codex and Claude **must remain in foreground** because their command harnesses c
 
 The first output record contains `connection_url`, `screen_file`, `state_dir`, and `active_file`. Share `connection_url`; never persist its capability token. A restart creates a new `connection_url` and invalidates the old one.
 
-Sessions default to `$CLAUDE_SCRATCH_DIR/<repo>/brainstorm/<session-id>`. Use `--project-dir` only when the user explicitly asks to retain the visual session.
+To change the document or switch the Workspace Kind mid-review, run `present` or `publish` again — both **reuse the running session in place** (same port, token, and `connection_url`), so the open browser tab is never orphaned. `present` emits `visual-session-represented` when it reuses a live session.
+
+**When the user asks to "restart the visual server," re-presenting IS the restart** — just re-run `present`; it reuses the live session and re-renders the current document. **Never `kill` the server process and start a fresh `present`**: that cold-starts on a new port with a new token, minting a new `connection_url` and silently orphaning the open tab — the exact failure re-presenting exists to avoid. A full `stop` + fresh start is only for abandoning the session entirely, and then you must tell the user to close the old tab because its submissions go to a dead port.
+
+**Always re-paste the full `connection_url` to the user after every `present`, `publish`, represent, and `reply` — on its own line, as a real link.** Every one of those commands re-emits `connection_url` for exactly this reason, and `status` recovers it if you lost it. Never tell the user "same URL, just refresh": the link scrolls out of view over a long review, and if the port ever changed a stale link fails silently. Re-pasting the current link every time is cheap; making the user hunt for it is the most common way this companion frustrates them.
+
+Sessions default to `$CLAUDE_SCRATCH_DIR/<repo>-<hash>/brainstorm/<session-id>` (the `-<hash>` suffix disambiguates same-named repos). Run `status`, `drain`, `reply`, and `stop` from the project directory, or pass `--session-dir <dir>` to target a specific session regardless of your current directory. If the derived pointer is missing, these commands fall back to the one live session in scratch and error only when several are running at once. Use `--project-dir` only when the user explicitly asks to retain the visual session.
 
 ## Architecture Normal Path
 
@@ -170,9 +176,13 @@ After publishing the visual document and sharing the browser URL, invoke one `wa
 { "timeoutMs": 900000 }
 ```
 
-The MCP call is the primary wake boundary. It completes the already-active tool call with the oldest durable Feedback Batch, so the agent continues in the same turn without polling or starting another model process. Cancellation or timeout does not acknowledge or consume a batch.
+`wait_for_feedback` is the primary wake boundary on **both Codex and Claude Code**: the plugin's `.mcp.json` registers the `visual-companion-feedback` MCP server (`visual-mcp-server.mjs`) for Claude, and Codex registers the same server. The MCP call completes the already-active tool call with the oldest durable Feedback Batch, so the agent continues in the same turn without polling or starting another model process. Cancellation or timeout does not acknowledge or consume a batch.
 
-The CLI Wait is recovery for environments where the Visual Companion MCP server is unavailable. It preserves the same durable delivery semantics:
+**Prefer the MCP tool over a foreground CLI `wait`.** A CLI `wait` shell blocks your turn for the whole review window — often 15+ minutes of dead churn — and on timeout tempts a second blocking wait. Make the `wait_for_feedback` tool call instead. And when the user has *already* told you they submitted feedback, or asks you to "check": the batch is waiting, so pick it up immediately with one short `wait_for_feedback` (or a single `drain`) and then revise and re-present — do **not** open a fresh long wait, and do **not** start unrelated investigation while feedback is in hand. Picking up submitted feedback is always the next action, before anything else.
+
+Claude additionally exposes the `visual-companion-channel` notification (`ack_feedback` plus a research-preview capability that stays inert unless Claude is launched with `--dangerously-load-development-channels` or the plugin is allowlisted) — a supplementary idle-delivery signal, not the wake boundary.
+
+The CLI Wait below is recovery for environments where the MCP server is unavailable. It consults the same durable store as the MCP wait and preserves the same delivery semantics:
 
 ```bash
 node <skill-dir>/scripts/visual-session.cjs wait --timeout-ms 900000
@@ -182,7 +192,7 @@ Run CLI Wait as one blocking foreground command. Never launch it with a backgrou
 
 ### Runtime registration and idle delivery
 
-Runtime installs expose two distinct paths. Codex registers `visual-companion-feedback` as the active MCP Wait and the foreground Visual Session owns one `AgentConversationDelivery` worker when `CODEX_THREAD_ID` is available. That worker uses Codex App Server `thread/resume` and starts a turn only after the observed thread status is `idle`; active, missing, or failed targets remain durably queued. Claude loads `visual-companion-channel` from the plugin's `.mcp.json`; the Channel process resolves the repository's Active Session Pointer after startup, emits `notifications/claude/channel`, and advances the Reply cursor only through `ack_feedback`.
+Runtime installs expose complementary paths. Both Codex and Claude register `visual-companion-feedback` (the `wait_for_feedback` MCP Wait) from the plugin's `.mcp.json`. Codex additionally owns one `AgentConversationDelivery` worker when `CODEX_THREAD_ID` is available; that worker uses Codex App Server `thread/resume` and starts a turn only after the observed thread status is `idle`; active, missing, or failed targets remain durably queued. Claude additionally loads `visual-companion-channel`; the Channel process resolves the repository's Active Session Pointer after startup, emits `notifications/claude/channel`, and advances the Reply cursor only through `ack_feedback`.
 
 Both registered entrypoints may start before a Visual Session exists. They bind when the Active Session Pointer appears and never persist a Capability Token or Feedback Batch content in runtime evidence. Claude custom Channels remain research preview: use the development-channel flag for this plugin unless Anthropic has allowlisted it, and treat an unavailable open Channel as queued rather than delivered. See the [Codex App Server protocol](https://developers.openai.com/codex/app-server/), [Claude Channels reference](https://code.claude.com/docs/en/channels-reference), and [Claude plugin reference](https://code.claude.com/docs/en/plugins-reference).
 
@@ -204,9 +214,10 @@ Treat the returned message, annotations, choices, and screen identity as one use
 
 ```bash
 node <skill-dir>/scripts/visual-session.cjs reply \
-  --reply-to <turn-seq> \
   --message-file <scratch-response-file>
 ```
+
+`--reply-to` is optional: omit it to acknowledge the batch you were just served (the oldest unacknowledged turn), so the ack cursor always advances without recomputing the sparse global seq. Pass `--reply-to <turn-seq>` only to target a specific turn; a `--reply-to` that skips an older unacknowledged batch is refused, so an earlier batch can never be silently dropped.
 
 `wait` and `drain` include a `pending` count of unacknowledged batches (the returned turn included). After replying, drain again while `pending` was greater than 1 — the user queued another batch during your turn.
 

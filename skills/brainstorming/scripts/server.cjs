@@ -4,6 +4,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 
+const { writeInterviewSidecars } = require('./interview-export.cjs');
 const { SessionStore } = require('./session-store.cjs');
 const { withVisualStateLock } = require('./legacy-visual-import.cjs');
 const { renderStandalone } = require('./standalone.cjs');
@@ -316,21 +317,34 @@ function createBrainstormServer(options = {}) {
     if (!fs.existsSync(ignoreFile)) fs.writeFileSync(ignoreFile, '*\n', { mode: 0o600 });
   }
 
-  function renderCurrent() {
+  function currentExportState() {
+    return { screen: readScreen(), session: store.strictSnapshot() };
+  }
+
+  function renderCurrent(state) {
+    const { screen, session } = state ?? currentExportState();
     return renderStandalone({
       shell,
       styles: shellStyles,
       script: shellScript,
       worker: shellWorker,
-      screen: readScreen(),
-      session: store.strictSnapshot(),
+      screen,
+      session,
     });
+  }
+
+  // Write the agent-readable <base>.json + <base>.interview.md next to an exported HTML file
+  // so a coding agent revisiting the session re-reads compact data, not the inlined bundle.
+  function writeExportSidecars(htmlFile, state) {
+    writeInterviewSidecars(htmlFile, state.screen, state.session, atomicWrite);
   }
 
   function writeLiveExport() {
     try {
       ensureArtifactDir();
-      atomicWrite(exportPath, renderCurrent());
+      const state = currentExportState();
+      atomicWrite(exportPath, renderCurrent(state));
+      writeExportSidecars(exportPath, state);
     } catch (error) {
       // A write failure (or an invalid screen.json) must never break the live session; the
       // previous good artifact stays in place until the next successful refresh.
@@ -340,9 +354,11 @@ function createBrainstormServer(options = {}) {
 
   function saveSnapshot() {
     ensureArtifactDir();
+    const state = currentExportState();
     const existing = fs.readdirSync(artifactDir).filter(name => /^visual-\d+\.html$/.test(name)).length;
     const file = path.join(artifactDir, `visual-${String(existing + 1).padStart(3, '0')}.html`);
-    atomicWrite(file, renderCurrent());
+    atomicWrite(file, renderCurrent(state));
+    writeExportSidecars(file, state);
     return file;
   }
 

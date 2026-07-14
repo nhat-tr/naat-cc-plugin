@@ -126,7 +126,7 @@ function claudeRuntimeSurfaceProbe() {
   };
 }
 
-test('Claude plugin registers its stdio Channel entrypoint and binds it through the manifest', () => {
+test('Claude plugin registers its stdio Channel and active MCP entrypoints and binds them through the manifest', () => {
   const mcpFile = path.join(repositoryRoot, '.mcp.json');
   assert.equal(fs.existsSync(mcpFile), true, 'Claude plugin root must contain .mcp.json');
   const mcp = JSON.parse(fs.readFileSync(mcpFile, 'utf8'));
@@ -134,6 +134,13 @@ test('Claude plugin registers its stdio Channel entrypoint and binds it through 
   assert.deepEqual(server, {
     command: 'node',
     args: [`${'${CLAUDE_PLUGIN_ROOT}'}/${CLAUDE_ENTRYPOINT}`],
+  });
+  // Claude also registers the blocking wait_for_feedback MCP server, so the primary wake boundary
+  // works in-turn on Claude Code rather than collapsing to CLI wait.
+  const feedbackServer = mcp.mcpServers?.[CODEX_SERVER];
+  assert.deepEqual(feedbackServer, {
+    command: 'node',
+    args: [`${'${CLAUDE_PLUGIN_ROOT}'}/${CODEX_ACTIVE_ENTRYPOINT}`],
   });
 
   const plugin = readJson('.claude-plugin/plugin.json');
@@ -159,19 +166,26 @@ test('runtime asset manifest wires Codex active and idle delivery plus the Claud
 
   const claudeDelivery = manifest.runtimes.claude.delivery;
   assert.equal(typeof claudeDelivery, 'object');
-  assert.equal(claudeDelivery.registration, 'channel');
-  assert.equal(claudeDelivery.server, CLAUDE_SERVER);
-  assert.equal(claudeDelivery.entrypoint, CLAUDE_ENTRYPOINT);
-  assert.equal(claudeDelivery.capability, 'claude/channel');
-  assert.equal(claudeDelivery.notification, 'notifications/claude/channel');
-  assert.equal(claudeDelivery.acknowledgement_tool, 'ack_feedback');
+  assert.equal(typeof claudeDelivery.active, 'object');
+  assert.equal(claudeDelivery.active.registration, 'mcp');
+  assert.equal(claudeDelivery.active.server, CODEX_SERVER);
+  assert.equal(claudeDelivery.active.entrypoint, CODEX_ACTIVE_ENTRYPOINT);
+  assert.equal(claudeDelivery.active.capability, 'wait_for_feedback');
+  assert.equal(claudeDelivery.active.tool_timeout_sec, 900);
+  assert.equal(typeof claudeDelivery.channel, 'object');
+  assert.equal(claudeDelivery.channel.registration, 'channel');
+  assert.equal(claudeDelivery.channel.server, CLAUDE_SERVER);
+  assert.equal(claudeDelivery.channel.entrypoint, CLAUDE_ENTRYPOINT);
+  assert.equal(claudeDelivery.channel.capability, 'claude/channel');
+  assert.equal(claudeDelivery.channel.notification, 'notifications/claude/channel');
+  assert.equal(claudeDelivery.channel.acknowledgement_tool, 'ack_feedback');
 
   const assets = Object.values(manifest.assets);
   const codexActiveAsset = assets.find(asset => asset.canonical_file === CODEX_ACTIVE_ENTRYPOINT);
   const codexIdleAsset = assets.find(asset => asset.canonical_file === CODEX_IDLE_ADAPTER);
   const claudeAsset = assets.find(asset => asset.canonical_file === CLAUDE_ENTRYPOINT);
   assert.equal(codexActiveAsset?.type, 'runtime_entrypoint');
-  assert.deepEqual(codexActiveAsset?.supported_runtimes, ['codex']);
+  assert.deepEqual(codexActiveAsset?.supported_runtimes, ['codex', 'claude']);
   assert.equal(codexIdleAsset?.type, 'runtime_adapter');
   assert.deepEqual(codexIdleAsset?.supported_runtimes, ['codex']);
   assert.equal(claudeAsset?.type, 'runtime_entrypoint');
@@ -223,6 +237,14 @@ for (const registration of [
     pathField: 'entrypoint',
     runtimePath: CLAUDE_ENTRYPOINT,
     capability: 'claude/channel',
+  },
+  {
+    runtime: 'claude',
+    label: 'active MCP',
+    registration: 'mcp',
+    pathField: 'entrypoint',
+    runtimePath: CODEX_ACTIVE_ENTRYPOINT,
+    capability: 'wait_for_feedback',
   },
 ]) {
   test(`${registration.runtime} ${registration.label} registration dry-run declares wiring without mutating user configs`, t => {
@@ -294,6 +316,7 @@ test('generated asset validation and runtime install listing include active, idl
     ['codex', CODEX_ACTIVE_ENTRYPOINT],
     ['codex', CODEX_IDLE_ADAPTER],
     ['claude', CLAUDE_ENTRYPOINT],
+    ['claude', CODEX_ACTIVE_ENTRYPOINT],
   ]) {
     const listed = parseJsonOutput(runNode([
       installer,

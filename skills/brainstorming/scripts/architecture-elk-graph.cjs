@@ -6,8 +6,34 @@ const ARCHITECTURE_GRAPH_ROOT_ID = 'architecture:union';
 const COMPACT_GRAPH_EDGE_THRESHOLD = 80;
 const PORT_SIZE = 8;
 
+// Point-list metrics mirror `.architecture-node-points` in architecture.css so the
+// height reserved for a node matches the height the browser actually renders. A point
+// whose text wraps to several lines needs room for every line; the previous estimate
+// budgeted a flat 24px (roughly one line) per point, so the overflow rendered outside
+// the fixed card border.
+const POINT_LINE_HEIGHT = 13; // 0.625rem text * 1.3 line-height, in px
+const POINT_ROW_GAP = 3; // 0.2rem grid gap between points, in px
+const POINT_BLOCK_PADDING = 6; // extra grid gap above the list + slack below the last line
+// Characters that fit on one wrapped line inside the point column. The column is the
+// node width (156px) minus card padding (2 * 0.6rem), the accent + hairline borders,
+// and the list indent (1rem), leaving ~112px. Divided by the average glyph advance at
+// 0.625rem and discounted for word-wrap raggedness, this rounds down to a deliberately
+// conservative value so the estimate never under-reserves height.
+const POINT_CHARS_PER_LINE = 16;
+
+function architecturePointLineCount(point) {
+  const length = typeof point === 'string' ? point.trim().length : 0;
+  return Math.max(1, Math.ceil(length / POINT_CHARS_PER_LINE));
+}
+
 function architectureNodeHeight(node) {
-  return ARCHITECTURE_NODE_HEIGHT + (Array.isArray(node.points) ? node.points.length * 24 : 0);
+  const points = Array.isArray(node.points) ? node.points : [];
+  if (points.length === 0) return ARCHITECTURE_NODE_HEIGHT;
+  const pointsHeight = points.reduce(
+    (total, point) => total + architecturePointLineCount(point) * POINT_LINE_HEIGHT + POINT_ROW_GAP,
+    0,
+  );
+  return ARCHITECTURE_NODE_HEIGHT + pointsHeight + POINT_BLOCK_PADDING;
 }
 
 const ROUTE_SPACING_OPTIONS = {

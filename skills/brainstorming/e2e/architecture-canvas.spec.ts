@@ -308,6 +308,50 @@ test("architecture canvas renders typed large topology, ports, and nested owners
   )).toBeVisible();
 });
 
+test("architecture canvas fullscreen toggle maximizes only the graph viewport and restores it", async ({ page }) => {
+  const canvas = page.locator("[data-architecture-canvas]");
+  const viewport = page.locator("[data-architecture-viewport]");
+  const toggle = viewport.locator("[data-architecture-fullscreen]");
+  await expect(canvas).toHaveAttribute("data-layout-status", "ready");
+
+  // Exercise the CSS-overlay fallback deterministically: headless Chromium's native
+  // Fullscreen API is flaky, and the toggle falls back to the [data-fullscreen] maximize
+  // whenever requestFullscreen is unavailable (for example inside a sandboxed iframe).
+  await page.evaluate(() => {
+    delete (Element.prototype as { requestFullscreen?: unknown }).requestFullscreen;
+  });
+
+  await expect(viewport).not.toHaveAttribute("data-fullscreen", "");
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+  await toggle.click();
+  // Only the viewport is maximized; the surrounding canvas chrome is not.
+  await expect(viewport).toHaveAttribute("data-fullscreen", "");
+  await expect(canvas).not.toHaveAttribute("data-fullscreen", "");
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(toggle).toHaveAttribute("title", "Exit fullscreen");
+  expect(await viewport.evaluate(element => getComputedStyle(element).position)).toBe("fixed");
+  expect(await canvas.evaluate(element => getComputedStyle(element).position)).not.toBe("fixed");
+
+  await page.keyboard.press("Escape");
+  await expect(viewport).not.toHaveAttribute("data-fullscreen", "");
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(toggle).toHaveAttribute("title", "Fullscreen");
+});
+
+test("saving a standalone export confirms the written snapshot in the header", async ({ page }) => {
+  const saveButton = page.getByRole("button", { name: "Save standalone export" });
+  await expect(saveButton).toBeEnabled();
+  const status = page.locator(".document-actions [data-save-status]");
+  await expect(status).toHaveCount(0);
+
+  // Clicking must visibly confirm the save — the defect was a silent success that made the
+  // action look like a no-op.
+  await saveButton.click();
+  await expect(status).toHaveAttribute("data-save-status", "saved");
+  await expect(status).toContainText(/Saved visual-\d+\.html/u);
+});
+
 test("architecture canvas renders envelope Decision Options and reports them as visible Feedback Components", async ({ page }) => {
   const candidate = architectureFixture();
   const options = [
@@ -578,6 +622,8 @@ test("architecture camera controls remain one four-button row", async ({ page })
   const controls = page.locator("[data-camera-controls]");
 
   await expect(controls.getByRole("button")).toHaveCount(4);
+  // The fullscreen toggle lives on the viewport, not in the camera-controls toolbar.
+  await expect(controls.locator("[data-architecture-fullscreen]")).toHaveCount(0);
   const columns = await controls.evaluate(element => (
     getComputedStyle(element).gridTemplateColumns.split(" ").filter(Boolean)
   ));

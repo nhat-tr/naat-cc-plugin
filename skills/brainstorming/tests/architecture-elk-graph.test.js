@@ -5,6 +5,8 @@ const test = require('node:test');
 
 const ELK = require('elkjs/lib/elk.bundled.js');
 const {
+  ARCHITECTURE_NODE_HEIGHT,
+  architectureNodeHeight,
   buildArchitectureElkGraph,
 } = require('../scripts/architecture-elk-graph.cjs');
 
@@ -107,6 +109,35 @@ test('compound ownership boundary fork/join graph produces a nonblank ELK layout
     result.children[0].children.every(node => Number.isFinite(node.x) && Number.isFinite(node.y)),
     'every architecture node receives finite geometry',
   );
+});
+
+test('architectureNodeHeight reserves the base height when a node has no points', () => {
+  assert.equal(architectureNodeHeight({ points: [] }), ARCHITECTURE_NODE_HEIGHT);
+  assert.equal(architectureNodeHeight({}), ARCHITECTURE_NODE_HEIGHT);
+});
+
+test('architectureNodeHeight reserves height for every wrapped line of a point', () => {
+  const oneLine = architectureNodeHeight({ points: ['tiny point'] });
+  const wrappingPoint =
+    'Ordering table: paused -> nothing; streamed -> ui.completed then response.completed; else response.completed then ui.render';
+  const manyLines = architectureNodeHeight({ points: [wrappingPoint] });
+
+  // A single short point occupies one 13px line plus the 3px row gap and 6px block padding.
+  assert.equal(oneLine, ARCHITECTURE_NODE_HEIGHT + 13 + 3 + 6);
+
+  // A ~120-character point wraps to several lines, so it must reserve far more than the
+  // old flat 24px-per-point budget that let the overflow spill outside the card border.
+  assert.ok(
+    manyLines > ARCHITECTURE_NODE_HEIGHT + 24,
+    `expected a wrapping point to reserve more than one line of height, got ${manyLines}`,
+  );
+  assert.ok(manyLines > oneLine + 13 * 5, 'a long point reserves height for its extra wrapped lines');
+});
+
+test('architectureNodeHeight grows monotonically as point text lengthens past a wrap boundary', () => {
+  const short = architectureNodeHeight({ points: ['sixteen chars ok'] }); // 16 chars -> 1 line
+  const longer = architectureNodeHeight({ points: ['seventeen chars!!'] }); // 17 chars -> 2 lines
+  assert.equal(longer - short, 13, 'crossing a wrap boundary adds exactly one line of height');
 });
 
 test('ELK root identity cannot collide with an authored Architecture topology identity', () => {

@@ -300,6 +300,7 @@ export function VisualCompanionApp() {
   const [draft, setDraftState] = useState<FeedbackDraft>(() => normalizeFeedbackDraft());
   const [density, setDensityState] = useState<Density>("comfortable");
   const [error, setError] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<{ kind: "saved" | "error"; message: string; detail?: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [deliveryEvidence, setDeliveryEvidence] = useState<DeliveryEvidence>({
     connection: embedded ? "closed" : "reconnecting",
@@ -622,8 +623,15 @@ export function VisualCompanionApp() {
         body: "{}",
       });
       if (!response.ok) throw new Error(await readResponseError(response, `save failed: ${response.status}`));
+      const result = await response.json() as { file?: unknown; path?: unknown };
+      const file = typeof result.file === "string" ? result.file : "snapshot";
+      const savedPath = typeof result.path === "string" ? result.path : undefined;
+      setSaveStatus({ kind: "saved", message: `Saved ${file}`, detail: savedPath });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Standalone export could not be saved");
+      setSaveStatus({
+        kind: "error",
+        message: cause instanceof Error ? cause.message : "Standalone export could not be saved",
+      });
     }
   };
 
@@ -722,6 +730,17 @@ export function VisualCompanionApp() {
             <button aria-pressed={density === "compact"} className="density-button" onClick={() => setDensity("compact")} type="button">Compact</button>
           </div>
           <div className="document-actions">
+            {saveStatus ? (
+              <span
+                aria-live="polite"
+                className={`save-status save-status-${saveStatus.kind}`}
+                data-save-status={saveStatus.kind}
+                role="status"
+                title={saveStatus.detail ?? saveStatus.message}
+              >
+                {saveStatus.message}
+              </span>
+            ) : null}
             <button className="icon-button" disabled={readOnly} onClick={() => void saveStandalone()} title="Save standalone export" type="button"><Download aria-hidden="true" size={17} /><span className="sr-only">Save standalone export</span></button>
             <button className="icon-button" disabled={Boolean(embedded)} onClick={refresh} title="Refresh Visual Session" type="button"><RefreshCw aria-hidden="true" size={17} /><span className="sr-only">Refresh Visual Session</span></button>
           </div>

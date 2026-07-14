@@ -418,21 +418,48 @@ class SessionStore {
   }
 
   publishAgentReply({ replyTo, message }) {
-    if (!Number.isInteger(replyTo) || replyTo <= 0) throw new TypeError('replyTo must be a positive event sequence');
+    if (replyTo != null && (!Number.isInteger(replyTo) || replyTo <= 0)) {
+      throw new TypeError('replyTo must be a positive event sequence');
+    }
     const normalizedMessage = optionalText(message, MAX_MESSAGE_LENGTH, 'agent message');
     if (!normalizedMessage) throw new TypeError('agent message is required');
     return this._withLock(() => {
       const events = this._readEvents();
-      const target = events.find(event => event.type === 'user.turn' && event.seq === replyTo);
-      if (!target) throw new Error(`browser turn ${replyTo} does not exist`);
-      const existing = events.find(event => event.type === 'agent.message' && event.replyTo === replyTo);
+      const cursor = this._readCursorUnlocked();
+      // The batch drain/wait serves is always the oldest unacknowledged turn. Anchoring the reply
+      // to it means the ack cursor advances even when the caller does not recompute the sparse
+      // global seq — the failure that stranded the cursor and re-served the first batch forever.
+      const oldestUnacknowledged = events.find(event => event.type === 'user.turn' && event.seq > cursor) || null;
+
+      let target;
+      if (replyTo == null) {
+        if (!oldestUnacknowledged) throw new Error('no unacknowledged browser turn to reply to');
+        target = oldestUnacknowledged;
+      } else {
+        target = events.find(event => event.type === 'user.turn' && event.seq === replyTo) || null;
+        if (!target) {
+          const hint = oldestUnacknowledged
+            ? ` (oldest unacknowledged turn is ${oldestUnacknowledged.seq})`
+            : '';
+          throw new Error(`browser turn ${replyTo} does not exist${hint}`);
+        }
+        // Oldest-only guard: acknowledging a newer turn advances the cursor past an older
+        // unacknowledged batch and silently drops it. Mirror agent-conversation-delivery's ledger.
+        if (oldestUnacknowledged && target.seq > oldestUnacknowledged.seq) {
+          throw new Error(
+            `out of order: reply to oldest unacknowledged turn ${oldestUnacknowledged.seq} before ${target.seq}`,
+          );
+        }
+      }
+
+      const existing = events.find(event => event.type === 'agent.message' && event.replyTo === target.seq);
       const reply = existing || this._appendUnlocked({
         type: 'agent.message',
         role: 'agent',
-        replyTo,
+        replyTo: target.seq,
         message: normalizedMessage,
       }, events);
-      this._acknowledgeThroughUnlocked(replyTo);
+      this._acknowledgeThroughUnlocked(target.seq);
       return reply;
     });
   }

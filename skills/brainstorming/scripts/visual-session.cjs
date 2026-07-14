@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const { createBrainstormServer } = require('./server.cjs');
 const { readDeliveryState, waitForFeedback } = require('./delivery-core.cjs');
+const { writeInterviewSidecars } = require('./interview-export.cjs');
 const { SessionStore } = require('./session-store.cjs');
 const { renderStandalone } = require('./standalone.cjs');
 const { createVisualScaffold, normalizeVisualDocument } = require('./visual-document.cjs');
@@ -15,7 +16,7 @@ const SHELL_DIR = path.resolve(__dirname, '../assets/visual-shell');
 const KNOWN_OPTIONS = new Set([
   'projectDir', 'host', 'urlHost', 'port', 'ownerPid', 'output', 'profile', 'audience',
   'title', 'summary', 'kinds', 'document', 'sessionDir', 'timeoutMs', 'replyTo', 'messageFile',
-  'workId', 'workspaceKind', 'draft',
+  'message', 'workId', 'workspaceKind', 'draft',
 ]);
 
 function fail(message) {
@@ -67,6 +68,35 @@ function activeKey(root) {
 function defaultActiveFile(options = {}) {
   const root = repositoryRoot(options.projectDir || options.cwd);
   return path.join(scratchRoot(), activeKey(root), 'brainstorm', 'active-session.json');
+}
+
+// The pointer path is keyed to the caller's git root, so a command run from another directory
+// (or a non-repo cwd) derives a different key and misses a running session. When that happens,
+// scan scratch for session pointers and return the one live session — but never guess when more
+// than one is alive; the caller then reports "no active session" and the user passes --session-dir.
+function discoverLiveSession() {
+  let entries;
+  try {
+    entries = fs.readdirSync(scratchRoot(), { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const live = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const activeFile = path.join(scratchRoot(), entry.name, 'brainstorm', 'active-session.json');
+    if (!fs.existsSync(activeFile)) continue;
+    let metadata;
+    try {
+      metadata = readJson(activeFile);
+    } catch {
+      continue;
+    }
+    if (metadata.pid != null && processAlive(metadata.pid)) {
+      live.push({ ...metadata, active_file: activeFile });
+    }
+  }
+  return live.length === 1 ? live[0] : null;
 }
 
 function readJson(file) {
@@ -151,6 +181,21 @@ function processAlive(pid) {
   }
 }
 
+// Rebuild the shareable connection_url (URL + base path + capability token) for a live session so
+// every command can re-paste a working link. Returns null when the token is unavailable (e.g. a
+// legacy session started before the token was persisted) rather than emitting a broken URL.
+function sessionConnectionUrl(metadata) {
+  if (!metadata?.url || !metadata?.base_path || !metadata?.state_dir) return null;
+  let token;
+  try {
+    token = readJson(path.join(metadata.state_dir, 'capability.json')).token;
+  } catch {
+    return null;
+  }
+  if (typeof token !== 'string' || token.length === 0) return null;
+  return `${metadata.url}${metadata.base_path}?token=${encodeURIComponent(token)}`;
+}
+
 function activeMetadata(options = {}) {
   if (options.sessionDir) {
     const sessionDir = path.resolve(options.sessionDir);
@@ -176,8 +221,12 @@ function activeMetadata(options = {}) {
     };
   }
   const activeFile = path.resolve(options.activeFile || defaultActiveFile(options));
-  if (!fs.existsSync(activeFile)) fail(`no active visual session at ${activeFile}`);
-  return { ...readJson(activeFile), active_file: activeFile };
+  if (fs.existsSync(activeFile)) {
+    return { ...readJson(activeFile), active_file: activeFile };
+  }
+  const discovered = discoverLiveSession();
+  if (discovered) return discovered;
+  fail(`no active visual session at ${activeFile}`);
 }
 
 function assertLive(metadata) {
@@ -272,7 +321,10 @@ function writeStandaloneExport(metadata, outputOption) {
   const session = readSessionSnapshot(metadata.state_dir);
   const output = path.resolve(outputOption || defaultExportPath(metadata));
   atomicWrite(output, buildStandaloneHtml(screen, session));
-  return output;
+  // Emit the agent-readable sidecars next to the HTML so a later revisit re-reads the
+  // interview from compact data instead of the self-contained bundle.
+  const sidecars = writeInterviewSidecars(output, screen, session, atomicWrite);
+  return { html: output, data: sidecars.json, interview: sidecars.markdown };
 }
 
 function removeActiveIfMatching(metadata) {
@@ -376,6 +428,11 @@ async function start(options) {
   // A copy inside the session lets --session-dir commands recover the true active_file and
   // pid without re-deriving them from the caller's cwd.
   atomicJson(path.join(info.state_dir, 'session-meta.json'), metadata);
+  // The capability token is kept out of the shared active pointer (server.cjs strips it) but
+  // persisted in the session's own private, owner-only state so later commands (present reuse,
+  // publish, reply, status) can re-emit a working connection_url instead of relying on the user
+  // still having the first start's link. Same trust boundary as the served pages themselves.
+  atomicJson(path.join(info.state_dir, 'capability.json'), { token }, 0o600);
   const idleDelivery = await startCodexIdleDelivery({
     sessionStore: app.store,
     stateDir: info.state_dir,
@@ -419,26 +476,24 @@ async function start(options) {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
-async function publish(options) {
-  if (Boolean(options.document) === Boolean(options.draft)) {
-    fail('publish requires exactly one of --document FILE or --draft FILE');
+// Returns the live session's metadata for this project, or null when none is running. present
+// uses it to replace the document in place (reusing port/token/URL) instead of cold-starting.
+function liveSessionOrNull(options) {
+  let metadata;
+  try {
+    metadata = activeMetadata(options);
+  } catch {
+    return null;
   }
-  const metadata = activeMetadata(options);
-  assertLive(metadata);
-  const source = path.resolve(options.draft || options.document);
-  const document = options.draft
-    ? require('./architecture-draft.cjs').compileArchitectureDraft(
-      readRegularJson(source, 'Architecture Draft'),
-    )
-    : normalizeAuthoredDocument(readRegularJson(source, 'Visual Document candidate'));
-  const roundTrip = normalizeDocument(document);
-  if (JSON.stringify(roundTrip) !== JSON.stringify(document)) {
-    fail('visual document normalization is not stable; screen was not replaced');
-  }
-  const { preflightWorkspaceDocument } = require('./workspace-render-preflight.cjs');
-  await preflightWorkspaceDocument(document);
+  if (metadata.pid == null || !processAlive(metadata.pid)) return null;
+  return metadata;
+}
+
+// Atomically replace the active Visual Document of a running session, enforcing the same
+// version-compatibility guards as Publish. Shared by publish and present's in-place reuse path.
+function writeDocumentIntoLiveSession(metadata, document) {
   const { withVisualStateLock } = require('./legacy-visual-import.cjs');
-  const output = withVisualStateLock(metadata.session_dir, () => {
+  return withVisualStateLock(metadata.session_dir, () => {
     const format = readVisualFormat(metadata);
     if (format?.active_version === 1 && document.version === 2) {
       fail('active v1 Visual Session requires migrate before publishing Visual Document v2');
@@ -461,7 +516,35 @@ async function publish(options) {
     atomicJson(destination, document);
     return destination;
   });
-  console.log(JSON.stringify({ type: 'screen.published', screen_file: output }));
+}
+
+async function publish(options) {
+  if (Boolean(options.document) === Boolean(options.draft)) {
+    fail('publish requires exactly one of --document FILE or --draft FILE');
+  }
+  const metadata = activeMetadata(options);
+  assertLive(metadata);
+  const source = path.resolve(options.draft || options.document);
+  // Publish REPLACES the active document, so a supplied revision must match the content it claims
+  // (normalizeDocument enforces that); a mismatched or malformed revision is rejected rather than
+  // silently recomputed. present, by contrast, authors a fresh document and derives the revision.
+  const document = options.draft
+    ? require('./architecture-draft.cjs').compileArchitectureDraft(
+      readRegularJson(source, 'Architecture Draft'),
+    )
+    : normalizeDocument(readRegularJson(source, 'Visual Document candidate'));
+  const roundTrip = normalizeDocument(document);
+  if (JSON.stringify(roundTrip) !== JSON.stringify(document)) {
+    fail('visual document normalization is not stable; screen was not replaced');
+  }
+  const { preflightWorkspaceDocument } = require('./workspace-render-preflight.cjs');
+  await preflightWorkspaceDocument(document);
+  const output = writeDocumentIntoLiveSession(metadata, document);
+  console.log(JSON.stringify({
+    type: 'screen.published',
+    screen_file: output,
+    connection_url: sessionConnectionUrl(metadata),
+  }));
 }
 
 async function present(options) {
@@ -480,6 +563,28 @@ async function present(options) {
   if (document.version !== 2) fail('present accepts only Visual Document v2 or an Architecture Draft');
   const { preflightWorkspaceDocument } = require('./workspace-render-preflight.cjs');
   const elkPreflight = await preflightWorkspaceDocument(document);
+
+  // Reuse a session that is already live for this project: replacing the document in place keeps
+  // the running server, port, token, and connection_url, so switching the workspace kind mid-review
+  // never orphans the open browser tab. Run `stop` first to force a brand-new session.
+  const live = liveSessionOrNull(options);
+  if (live) {
+    const output = writeDocumentIntoLiveSession(live, document);
+    console.log(JSON.stringify({
+      type: 'visual-session-represented',
+      workspace_file: output,
+      work_id: document.work_id,
+      workspace_kind: document.workspace_kind,
+      revision: document.revision,
+      url: live.url,
+      base_path: live.base_path,
+      session_dir: live.session_dir,
+      connection_url: sessionConnectionUrl(live),
+      elk_preflight: elkPreflight,
+      note: 'Reused the live session — the browser URL is unchanged. Re-paste connection_url to the user.',
+    }));
+    return;
+  }
   await start({ ...options, initialDocument: document, elkPreflight });
 }
 
@@ -598,19 +703,30 @@ async function wait(options) {
 }
 
 function reply(options) {
-  if (!options.replyTo || !options.messageFile) fail('reply requires --reply-to SEQ --message-file FILE');
+  if (options.message == null && !options.messageFile) {
+    fail('reply requires --message TEXT or --message-file FILE');
+  }
   const metadata = activeMetadata(options);
   assertLive(metadata);
-  const record = new SessionStore(metadata.state_dir).publishAgentReply({
-    replyTo: Number(options.replyTo),
-    message: fs.readFileSync(path.resolve(options.messageFile), 'utf8'),
-  });
-  console.log(JSON.stringify(record));
+  // --reply-to is optional: omitting it acknowledges the oldest unacknowledged batch (the one
+  // drain/wait just served), so the ack cursor advances without the caller recomputing the seq.
+  const replyTo = options.replyTo ? Number(options.replyTo) : null;
+  // --message is the inline form for short replies; --message-file avoids shell escaping for long
+  // or multi-line revision notes. messageFile wins if both are supplied.
+  const message = options.messageFile
+    ? fs.readFileSync(path.resolve(options.messageFile), 'utf8')
+    : options.message;
+  const record = new SessionStore(metadata.state_dir).publishAgentReply({ replyTo, message });
+  console.log(JSON.stringify({ ...record, connection_url: sessionConnectionUrl(metadata) }));
 }
 
 function status(options) {
   const metadata = activeMetadata(options);
-  console.log(JSON.stringify({ ...metadata, running: processAlive(metadata.pid) }));
+  console.log(JSON.stringify({
+    ...metadata,
+    running: processAlive(metadata.pid),
+    connection_url: sessionConnectionUrl(metadata),
+  }));
 }
 
 function sleepMs(milliseconds) {
@@ -632,19 +748,31 @@ function stop(options) {
     }
   }
   if (fs.existsSync(pidFile) && processAlive(metadata.pid)) fail(`visual session process ${metadata.pid} did not stop`);
-  // Capture the standalone visual before scratch cleanup deletes the session directory.
-  const exportFile = writeStandaloneExport(metadata, options.output);
+  // Capture the standalone visual and its agent-readable sidecars before scratch cleanup
+  // deletes the session directory.
+  const exported = writeStandaloneExport(metadata, options.output);
   removeActiveIfMatching(metadata);
   if (!metadata.persistent && metadata.session_dir.startsWith(`${scratchRoot()}${path.sep}`)) {
     fs.rmSync(metadata.session_dir, { recursive: true, force: true });
   }
-  console.log(JSON.stringify({ type: 'visual-session-stopped', session_dir: metadata.session_dir, export_file: exportFile }));
+  console.log(JSON.stringify({
+    type: 'visual-session-stopped',
+    session_dir: metadata.session_dir,
+    export_file: exported.html,
+    data_file: exported.data,
+    interview_file: exported.interview,
+  }));
 }
 
 function exportVisual(options) {
   const metadata = activeMetadata(options);
-  const output = writeStandaloneExport(metadata, options.output);
-  console.log(JSON.stringify({ type: 'visual.exported', export_file: output }));
+  const exported = writeStandaloneExport(metadata, options.output);
+  console.log(JSON.stringify({
+    type: 'visual.exported',
+    export_file: exported.html,
+    data_file: exported.data,
+    interview_file: exported.interview,
+  }));
 }
 
 async function main() {
@@ -660,7 +788,7 @@ async function main() {
       '       visual-session.cjs backout [--session-dir DIR]',
       '       visual-session.cjs drain [--session-dir DIR]',
       '       visual-session.cjs wait [--timeout-ms MS] [--session-dir DIR]',
-      '       visual-session.cjs reply --reply-to SEQ --message-file FILE [--session-dir DIR]',
+      '       visual-session.cjs reply (--message TEXT | --message-file FILE) [--reply-to SEQ] [--session-dir DIR]',
       '       visual-session.cjs status [--session-dir DIR]',
       '       visual-session.cjs export [--output FILE] [--session-dir DIR]',
       '       visual-session.cjs stop [--output FILE] [--session-dir DIR]',

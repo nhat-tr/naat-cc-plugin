@@ -1,5 +1,11 @@
 {
   "mcpServers": {
+    "visual-companion-feedback": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/skills/brainstorming/scripts/visual-mcp-server.mjs"
+      ]
+    },
     "visual-companion-channel": {
       "command": "node",
       "args": [

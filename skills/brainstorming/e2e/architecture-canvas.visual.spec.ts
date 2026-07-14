@@ -288,6 +288,51 @@ async function expectControlsReachable(page: Page, root: Locator): Promise<void>
   }
 }
 
+test("architecture canvas keeps wrapping point text within each card's reserved height", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1_440, height: 900 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+
+  // The shipped fixture carries no points, so inject realistic multi-line points like a
+  // real Architecture Canvas. This exercises the reserved-height estimate against the
+  // browser's actual text wrapping — the defect was point text spilling past the border.
+  const screen = architectureFixture();
+  const wrappingPoints = [
+    "Ordering table: paused -> nothing; streamed -> ui.completed then response.completed; else response.completed then ui.render",
+    "ListIdsAsync feeds ResponseTextSource text-scan so a follow-up render never has to re-call a tool",
+    "Threads paragon.turn/auth/scope through the pipeline with no more ambient AsyncLocal",
+    "Short note",
+  ];
+  const seeded: string[] = [];
+  for (const node of screen.content.nodes) {
+    if (!node.modes.includes(screen.content.initial_mode)) continue;
+    (node as { points?: string[] }).points = wrappingPoints;
+    seeded.push(node.id);
+    if (seeded.length >= 4) break;
+  }
+  expect(seeded.length, "fixture must expose nodes in the initial mode to seed with points").toBeGreaterThan(0);
+
+  await openArchitectureCanvas(page, testInfo, screen);
+  const viewport = page.locator("[data-architecture-viewport]");
+  await expect(page.locator("[data-architecture-canvas]")).toHaveAttribute("data-layout-status", "ready");
+  for (const id of seeded) {
+    await expect(viewport.locator(`[data-node-id="${id}"] .architecture-node-points li`).first()).toBeVisible();
+  }
+
+  const overflowing = await viewport.locator("[data-architecture-node][data-node-id]").evaluateAll(elements => (
+    elements
+      .filter((element): element is HTMLElement => element instanceof HTMLElement && element.getClientRects().length > 0)
+      .map(element => ({
+        id: element.getAttribute("data-node-id") ?? "",
+        overflow: element.scrollHeight - element.clientHeight,
+      }))
+      // A positive delta means the content is taller than the card's reserved box, so its
+      // point list spills past the border — the exact defect this test guards against.
+      .filter(value => value.overflow > 2)
+  ));
+
+  expect(overflowing, `nodes whose point text overflows the card: ${JSON.stringify(overflowing)}`).toEqual([]);
+});
+
 test("architecture canvas visual keeps compound ELK geometry and routed edges stable across exclusive modes", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1_440, height: 900 });
   await page.emulateMedia({ reducedMotion: "reduce" });

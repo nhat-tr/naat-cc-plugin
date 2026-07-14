@@ -175,6 +175,49 @@ test('SessionStore retries reply publication without duplicating the response', 
   assert.equal(store.snapshot().cursor, turn.seq);
 });
 
+test('SessionStore.publishAgentReply acknowledges the oldest unacknowledged turn without an explicit replyTo', t => {
+  const stateDir = createScratchDirectory(t, 'reply-oldest-default');
+  const store = new SessionStore(stateDir);
+  const first = store.appendBrowserTurn(browserTurn({ message: 'first', clientTurnId: 'batch-1' }));
+  store.appendBrowserTurn(browserTurn({ message: 'second', clientTurnId: 'batch-2' }));
+
+  // Reply without recomputing the sparse global seq — the trap that stranded the cursor at batch 1.
+  const reply = store.publishAgentReply({ message: 'Acknowledging the served batch.' });
+
+  assert.equal(reply.replyTo, first.seq);
+  assert.equal(store.snapshot().cursor, first.seq);
+  // The next served batch must be the SECOND one, not a re-serve of the first.
+  assert.equal(store.nextUnacknowledgedTurn().clientTurnId, 'batch-2');
+  assert.equal(store.snapshot().pendingTurns, 1);
+});
+
+test('SessionStore.publishAgentReply refuses an out-of-order reply that would skip an older batch', t => {
+  const stateDir = createScratchDirectory(t, 'reply-out-of-order');
+  const store = new SessionStore(stateDir);
+  store.appendBrowserTurn(browserTurn({ message: 'first', clientTurnId: 'batch-1' }));
+  const second = store.appendBrowserTurn(browserTurn({ message: 'second', clientTurnId: 'batch-2' }));
+
+  assert.throws(
+    () => store.publishAgentReply({ replyTo: second.seq, message: 'Skipping the older batch.' }),
+    /out of order|oldest/i,
+  );
+  // Cursor must not move; the older batch is still the oldest unacknowledged one.
+  assert.equal(store.snapshot().cursor, 0);
+  assert.equal(store.nextUnacknowledgedTurn().clientTurnId, 'batch-1');
+});
+
+test('SessionStore.publishAgentReply names the oldest unacknowledged turn when replyTo is unknown', t => {
+  const stateDir = createScratchDirectory(t, 'reply-unknown-seq');
+  const store = new SessionStore(stateDir);
+  const first = store.appendBrowserTurn(browserTurn({ message: 'first', clientTurnId: 'batch-1' }));
+
+  assert.throws(
+    () => store.publishAgentReply({ replyTo: first.seq + 999, message: 'Wrong seq.' }),
+    new RegExp(`oldest unacknowledged turn is ${first.seq}`),
+  );
+  assert.equal(store.snapshot().cursor, 0);
+});
+
 test('SessionStore rejects empty and oversized browser submissions at the trust boundary', t => {
   const store = new SessionStore(createScratchDirectory(t, 'invalid'));
 

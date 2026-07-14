@@ -592,6 +592,51 @@
   display: none;
 }
 
+/*
+ * A floating fullscreen toggle that lives on the viewport itself, so it stays reachable
+ * once the graph fills the screen (the surrounding toolbar is hidden in fullscreen).
+ */
+.architecture-viewport-fullscreen {
+  position: absolute;
+  top: var(--vc-space-2);
+  right: var(--vc-space-2);
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  width: var(--vc-control-height);
+  height: var(--vc-control-height);
+  border: 1px solid var(--vc-line-strong);
+  border-radius: var(--vc-radius-sm);
+  background: var(--vc-paper);
+  color: var(--vc-body);
+  cursor: pointer;
+  box-shadow: 0 2px 7px rgb(26 45 58 / 12%);
+}
+
+.architecture-viewport-fullscreen:hover {
+  background: var(--vc-surface-muted);
+  color: var(--vc-accent-strong);
+}
+
+.architecture-viewport-fullscreen:focus-visible {
+  outline: 2px solid var(--vc-focus);
+  outline-offset: 2px;
+}
+
+/*
+ * Fullscreen / maximize the graph only. Driven by the [data-fullscreen] attribute the
+ * viewport sets for both the native Fullscreen API and the CSS overlay fallback, so a
+ * single rule covers both. inset:0 with height:auto beats the inline viewport height.
+ */
+.architecture-viewport[data-fullscreen] {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  height: auto !important;
+  border: 0;
+  border-radius: 0;
+}
+
 @media (max-width: 760px) {
   .architecture-stage {
     grid-template-columns: minmax(0, 1fr);
