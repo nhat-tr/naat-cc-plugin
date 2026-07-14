@@ -113,7 +113,19 @@ export function ResearchEvidenceBoard({
     [parsed, selectedRelevance],
   );
   const presentedComponentIds = useMemo(
-    () => [...claims.map(claim => claim.component_id), ...unknowns.map(unknown => unknown.component_id)],
+    () => [
+      ...claims.flatMap(claim => [
+        claim.component_id,
+        ...[...(claim.source_refs ?? []), ...(claim.decision_relevance ?? [])]
+          .map((_point, index) => `${claim.component_id}-p${index + 1}`),
+      ]),
+      ...unknowns.flatMap(unknown => [
+        unknown.component_id,
+        ...[unknown.note, ...(unknown.decision_relevance ?? [])]
+          .filter((point): point is string => typeof point === "string")
+          .map((_point, index) => `${unknown.component_id}-p${index + 1}`),
+      ]),
+    ],
     [claims, unknowns],
   );
 
@@ -193,9 +205,11 @@ export function ResearchEvidenceBoard({
                       <div className="research-source-group">
                         <span className="research-source-label"><Link2 aria-hidden="true" size={13} />Source evidence</span>
                         <div className="research-source-list">
-                          {claim.source_refs.map(sourceId => (
+                          {claim.source_refs.map((sourceId, sourceIndex) => (
                             <span
                               className="research-source-chip"
+                              data-brainstorm-id={`${claim.component_id}-p${sourceIndex + 1}`}
+                              data-brainstorm-label={`${label} · point ${sourceIndex + 1}`}
                               data-primitive="chip"
                               data-source-ref={sourceId}
                               key={sourceId}
@@ -208,7 +222,10 @@ export function ResearchEvidenceBoard({
                       </div>
                       {(claim.decision_relevance ?? []).length > 0 ? (
                         <div className="research-relevance-list" aria-label="Decision relevance">
-                          {claim.decision_relevance?.map(item => <span key={item}>{item}</span>)}
+                          {claim.decision_relevance?.map((item, relevanceIndex) => {
+                            const pointIndex = claim.source_refs.length + relevanceIndex + 1;
+                            return <span data-brainstorm-id={`${claim.component_id}-p${pointIndex}`} data-brainstorm-label={`${label} · point ${pointIndex}`} key={item}>{item}</span>;
+                          })}
                         </div>
                       ) : null}
                     </article>
@@ -231,10 +248,13 @@ export function ResearchEvidenceBoard({
                         <span>Unknown</span>
                       </div>
                       <h4>{label}</h4>
-                      {unknown.note ? <p>{unknown.note}</p> : null}
+                      {unknown.note ? <p data-brainstorm-id={`${unknown.component_id}-p1`} data-brainstorm-label={`${label} · point 1`}>{unknown.note}</p> : null}
                       {(unknown.decision_relevance ?? []).length > 0 ? (
                         <div className="research-relevance-list" aria-label="Decision relevance">
-                          {unknown.decision_relevance?.map(item => <span key={item}>{item}</span>)}
+                          {unknown.decision_relevance?.map((item, relevanceIndex) => {
+                            const pointIndex = (unknown.note ? 1 : 0) + relevanceIndex + 1;
+                            return <span data-brainstorm-id={`${unknown.component_id}-p${pointIndex}`} data-brainstorm-label={`${label} · point ${pointIndex}`} key={item}>{item}</span>;
+                          })}
                         </div>
                       ) : null}
                     </article>

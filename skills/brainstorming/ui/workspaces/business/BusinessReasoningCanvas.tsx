@@ -84,7 +84,10 @@ export function BusinessReasoningCanvas({
 }: BusinessReasoningCanvasProps) {
   const parsed = businessContent(content);
   const presentedComponentIds = useMemo(
-    () => parsed?.stages.map(stage => stage.component_id) ?? [],
+    () => parsed?.stages.flatMap(stage => [
+      stage.component_id,
+      ...stage.items.map((_item, index) => `${stage.component_id}-p${index + 1}`),
+    ]) ?? [],
     [parsed],
   );
 
@@ -169,7 +172,12 @@ export function BusinessReasoningCanvas({
 
               <ul className="business-reasoning-list">
                 {stage.items.map((item, itemIndex) => (
-                  <li data-kind={item.kind} key={`${stage.component_id}-${item.kind}-${itemIndex}`}>
+                  <li
+                    data-brainstorm-id={`${stage.component_id}-p${itemIndex + 1}`}
+                    data-brainstorm-label={`${label} · point ${itemIndex + 1}`}
+                    data-kind={item.kind}
+                    key={`${stage.component_id}-${item.kind}-${itemIndex}`}
+                  >
                     <span className={`business-reasoning-icon reasoning-${item.kind}`}>
                       {reasoningIcon(item.kind)}
                     </span>

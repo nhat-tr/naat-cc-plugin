@@ -31,5 +31,22 @@
     "changed_files": 300,
     "architecture_nodes": 200,
     "architecture_edges": 320
+  },
+  "architecture_route_quality": {
+    "fixture_revision": "545345f7",
+    "scenario_path": {
+      "max_crossing_edge_pairs": 0,
+      "max_crossing_edge_pair_ratio": 0,
+      "max_unique_crossing_hotspots": 0,
+      "max_overlapping_edge_pairs": 0,
+      "max_pairwise_shared_collinear_factor": 0
+    },
+    "all_components": {
+      "max_crossing_edge_pairs": 6500,
+      "max_crossing_edge_pair_ratio": 0.131,
+      "max_unique_crossing_hotspots": 5550,
+      "max_overlapping_edge_pairs": 75,
+      "max_pairwise_shared_collinear_factor": 0.058
+    }
   }
 }

@@ -8,6 +8,7 @@ import {
 } from "@xyflow/react";
 import {
   ArrowRight,
+  Eye,
   Focus,
   Minus,
   Route,
@@ -38,6 +39,11 @@ import {
   type ArchitectureEdgeType,
   type ArchitectureWorkspaceContent,
 } from "./architecture-layout";
+import {
+  architecturePresentation,
+  defaultArchitecturePresentationScope,
+  type ArchitecturePresentationScope,
+} from "./architecture-presentation";
 
 interface ArchitectureCanvasProps {
   content: Record<string, unknown>;
@@ -162,6 +168,9 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
   const [mode, setMode] = useState<ArchitectureMode>(() => parsed?.initial_mode ?? "proposed");
   const [scenarioId, setScenarioId] = useState<string>(() => parsed?.scenarios[0]?.id ?? "");
   const [focusedId, setFocusedId] = useState<string | null>(() => parsed?.focus_targets[0] ?? null);
+  const [presentationScope, setPresentationScope] = useState<ArchitecturePresentationScope>(() => (
+    parsed ? defaultArchitecturePresentationScope(parsed) : "all"
+  ));
   const [flow, setFlow] = useState<ReactFlowInstance<ArchitectureCanvasNode, ArchitectureFlowEdge> | null>(null);
   const [layout, setLayout] = useState<LayoutState>({ status: "loading", result: null, error: null });
   const [viewportBounds, setViewportBounds] = useState(initialViewport.bounds);
@@ -188,10 +197,32 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
     setMode(parsed.initial_mode);
     setScenarioId(parsed.scenarios[0]?.id ?? "");
     setFocusedId(parsed.focus_targets[0] ?? null);
+    setPresentationScope(defaultArchitecturePresentationScope(parsed));
+  }, [parsed]);
+
+  const activeScenario = parsed?.scenarios.find(scenario => scenario.id === scenarioId) ?? null;
+  const scenarioPath = activeScenario?.paths[mode] ?? null;
+  const scenarioNodeIds = useMemo(() => new Set(scenarioPath?.node_ids ?? []), [scenarioPath]);
+  const scenarioEdgeIds = useMemo(() => new Set(scenarioPath?.edge_ids ?? []), [scenarioPath]);
+  const scenarioStartId = scenarioPath?.node_ids[0] ?? null;
+  const scenarioEndId = scenarioPath?.node_ids.at(-1) ?? null;
+  const scenarioPathIdentity = parsed?.annotation_targets.find(id => scenarioEdgeIds.has(id))
+    ?? scenarioPath?.edge_ids[0]
+    ?? null;
+  const presentationFocusedId = presentationScope === "selected" ? focusedId : null;
+  const presentation = useMemo(() => (
+    parsed
+      ? architecturePresentation(parsed, mode, presentationScope, activeScenario, presentationFocusedId)
+      : null
+  ), [activeScenario, mode, parsed, presentationFocusedId, presentationScope]);
+  const layoutContent = presentation?.content ?? null;
+
+  useEffect(() => {
+    if (!layoutContent) return;
     initialViewApplied.current = false;
     let active = true;
     setLayout({ status: "loading", result: null, error: null });
-    void layoutArchitecture(parsed).then(
+    void layoutArchitecture(layoutContent).then(
       result => {
         if (active) setLayout({ status: "ready", result, error: null });
       },
@@ -207,28 +238,29 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
     return () => {
       active = false;
     };
-  }, [parsed]);
-
-  const activeScenario = parsed?.scenarios.find(scenario => scenario.id === scenarioId) ?? null;
-  const scenarioPath = activeScenario?.paths[mode] ?? null;
-  const scenarioNodeIds = useMemo(() => new Set(scenarioPath?.node_ids ?? []), [scenarioPath]);
-  const scenarioEdgeIds = useMemo(() => new Set(scenarioPath?.edge_ids ?? []), [scenarioPath]);
-  const scenarioStartId = scenarioPath?.node_ids[0] ?? null;
-  const scenarioEndId = scenarioPath?.node_ids.at(-1) ?? null;
-  const scenarioPathIdentity = parsed?.annotation_targets.find(id => scenarioEdgeIds.has(id))
-    ?? scenarioPath?.edge_ids[0]
-    ?? null;
+  }, [layoutContent]);
 
   useEffect(() => {
-    const target = layout.result?.nodes.find(item => item.node.id === parsed?.focus_targets[0]);
+    const result = layout.result;
     if (
       !flow
       || layout.status !== "ready"
       || initialViewApplied.current
-      || !target
+      || !result
     ) return;
     initialViewApplied.current = true;
     const frame = requestAnimationFrame(() => {
+      if (presentationScope !== "all") {
+        void flow.fitView({
+          nodes: result.nodes.map(item => ({ id: item.node.id })),
+          padding: 0.35,
+          duration: 0,
+          maxZoom: 1.1,
+        });
+        return;
+      }
+      const target = result.nodes.find(item => item.node.id === parsed?.focus_targets[0]);
+      if (!target) return;
       void flow.setCenter(
         target.absolutePosition.x + target.width / 2,
         target.absolutePosition.y + target.height / 2,
@@ -236,7 +268,7 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
       );
     });
     return () => cancelAnimationFrame(frame);
-  }, [flow, layout.result, layout.status, parsed]);
+  }, [flow, layout.result, layout.status, parsed, presentationScope]);
 
   const visibleNodes = useMemo<ArchitectureCanvasNode[]>(() => {
     if (!layout.result) return [];
@@ -342,7 +374,10 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
         ...layout.result.boundaries.map(item => item.boundary.component_id),
         ...layout.result.nodes
           .filter(item => item.node.modes.includes(mode))
-          .map(item => item.node.component_id),
+          .flatMap(item => [
+            item.node.component_id,
+            ...(item.node.points ?? []).map((_point, index) => `${item.node.component_id}-p${index + 1}`),
+          ]),
         ...layout.result.edges
           .filter(item => item.edge.modes.includes(mode))
           .map(item => item.edge.component_id),
@@ -354,8 +389,9 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
   }, [activeScenario?.component_id, layout.result, layout.status, mode, parsed]);
 
   useEffect(() => {
+    if (layout.status !== "ready") return;
     onPresentedComponentIdsChange?.(presentedComponentIds);
-  }, [onPresentedComponentIdsChange, presentedComponentIds]);
+  }, [layout.status, onPresentedComponentIdsChange, presentedComponentIds]);
 
   if (!parsed) {
     return <p className="workspace-error" role="alert">Architecture Workspace content is invalid.</p>;
@@ -400,6 +436,10 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
   };
 
   const fitScenario = (): void => {
+    if (presentationScope !== "scenario") {
+      setPresentationScope("scenario");
+      return;
+    }
     if (!flow || scenarioNodeIds.size === 0) return;
     void flow.fitView({
       nodes: [...scenarioNodeIds].map(id => ({ id })),
@@ -432,6 +472,7 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
       data-layout-engine={parsed.layout.engine}
       data-layout-node-count={parsed.nodes.length}
       data-layout-status={layout.status}
+      data-presentation-scope={presentationScope}
     >
       <header className="architecture-canvas-header">
         <div>
@@ -465,10 +506,29 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
       </header>
 
       <div className="architecture-tools">
+        <label className="architecture-show">
+          <Eye aria-hidden="true" size={16} />
+          <span>Show</span>
+          <select
+            aria-label="Show"
+            onChange={event => setPresentationScope(event.target.value as ArchitecturePresentationScope)}
+            value={presentationScope}
+          >
+            <option value="all">All Components</option>
+            <option value="scenario">Scenario Path</option>
+            <option value="selected">Selected Component</option>
+          </select>
+        </label>
         <label className="architecture-scenario">
           <Route aria-hidden="true" size={16} />
           <span>Scenario</span>
-          <select onChange={event => setScenarioId(event.target.value)} value={scenarioId}>
+          <select
+            onChange={event => {
+              setScenarioId(event.target.value);
+              setPresentationScope("scenario");
+            }}
+            value={scenarioId}
+          >
             {parsed.scenarios.map(scenario => (
               <option key={scenario.id} value={scenario.id}>{scenario.label}</option>
             ))}

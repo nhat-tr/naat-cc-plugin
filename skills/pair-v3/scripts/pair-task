@@ -82,6 +82,40 @@ function readJson(file, fallback = null) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
 
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function beginActivePairLoop(root, plan) {
+  const markerFile = path.join(root, '.pair', 'active-loop.json');
+  const existing = readJson(markerFile);
+  if (existing?.pid && processAlive(existing.pid)) {
+    throw new Error(`Pair Loop is already active in process ${existing.pid}`);
+  }
+  fs.rmSync(markerFile, { force: true });
+  const marker = {
+    schema: 1,
+    run_id: crypto.randomUUID(),
+    pid: process.pid,
+    plan: path.relative(root, plan).split(path.sep).join('/'),
+    started_at: new Date().toISOString(),
+  };
+  fs.writeFileSync(markerFile, `${JSON.stringify(marker, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+  return marker;
+}
+
+function endActivePairLoop(root, marker) {
+  const markerFile = path.join(root, '.pair', 'active-loop.json');
+  const current = readJson(markerFile);
+  if (current?.run_id === marker?.run_id) fs.rmSync(markerFile, { force: true });
+}
+
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
@@ -546,15 +580,39 @@ function main() {
     ledger: path.join(dataDir, 'attempts.jsonl'),
     scratch,
   };
-  recoverActiveAttempt(paths);
-
-  while (true) {
-    const result = runOne(root, runtime, options, paths);
-    if (result.done || result.dryRun || options.once) break;
+  let activeLoop = null;
+  if (!options.dryRun) {
+    try {
+      activeLoop = beginActivePairLoop(root, plan);
+    } catch (error) {
+      fail(error.message);
+    }
   }
-  if (!nextOpenTask(fs.readFileSync(plan, 'utf8'))) console.log('pair-loop: all plan tasks complete');
+  const cleanupActiveLoop = () => endActivePairLoop(root, activeLoop);
+  if (activeLoop) process.once('exit', cleanupActiveLoop);
+  try {
+    recoverActiveAttempt(paths);
+    while (true) {
+      const result = runOne(root, runtime, options, paths);
+      if (result.done || result.dryRun || options.once) break;
+    }
+    if (!nextOpenTask(fs.readFileSync(plan, 'utf8'))) console.log('pair-loop: all plan tasks complete');
+  } finally {
+    if (activeLoop) {
+      process.removeListener('exit', cleanupActiveLoop);
+      cleanupActiveLoop();
+    }
+  }
 }
 
 if (require.main === module) main();
 
-module.exports = { addRecoveryContext, isExpectedFailingTestTask, readWorkLinkage, recoverActiveAttempt, verify };
+module.exports = {
+  addRecoveryContext,
+  beginActivePairLoop,
+  endActivePairLoop,
+  isExpectedFailingTestTask,
+  readWorkLinkage,
+  recoverActiveAttempt,
+  verify,
+};

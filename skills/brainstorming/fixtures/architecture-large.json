@@ -13,7 +13,7 @@
       "label": "Runtime delivery pilot evidence"
     }
   ],
-  "revision": "f73064af",
+  "revision": "545345f7",
   "frames": [
     {
       "id": "topology",
@@ -13168,7 +13168,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-135",
+          "node_id": "topology-node-136",
           "port_id": "in"
         },
         "modes": [
@@ -13185,7 +13185,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-148",
+          "node_id": "topology-node-149",
           "port_id": "in"
         },
         "modes": [
@@ -13202,7 +13202,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-161",
+          "node_id": "topology-node-162",
           "port_id": "in"
         },
         "modes": [
@@ -13219,7 +13219,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-174",
+          "node_id": "topology-node-175",
           "port_id": "in"
         },
         "modes": [
@@ -13236,7 +13236,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-187",
+          "node_id": "topology-node-188",
           "port_id": "in"
         },
         "modes": [
@@ -13253,7 +13253,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-200",
+          "node_id": "topology-node-011",
           "port_id": "in"
         },
         "modes": [
@@ -13270,7 +13270,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-013",
+          "node_id": "topology-node-014",
           "port_id": "in"
         },
         "modes": [
@@ -13287,7 +13287,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-026",
+          "node_id": "topology-node-027",
           "port_id": "in"
         },
         "modes": [
@@ -13304,7 +13304,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-039",
+          "node_id": "topology-node-040",
           "port_id": "in"
         },
         "modes": [
@@ -13321,7 +13321,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-052",
+          "node_id": "topology-node-053",
           "port_id": "in"
         },
         "modes": [
@@ -13338,7 +13338,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-065",
+          "node_id": "topology-node-066",
           "port_id": "in"
         },
         "modes": [
@@ -13355,7 +13355,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-078",
+          "node_id": "topology-node-079",
           "port_id": "in"
         },
         "modes": [
@@ -13372,7 +13372,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-091",
+          "node_id": "topology-node-092",
           "port_id": "in"
         },
         "modes": [
@@ -13389,7 +13389,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-104",
+          "node_id": "topology-node-105",
           "port_id": "in"
         },
         "modes": [
@@ -13406,7 +13406,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-117",
+          "node_id": "topology-node-118",
           "port_id": "in"
         },
         "modes": [
@@ -13423,7 +13423,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-130",
+          "node_id": "topology-node-131",
           "port_id": "in"
         },
         "modes": [
@@ -13440,7 +13440,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-143",
+          "node_id": "topology-node-144",
           "port_id": "in"
         },
         "modes": [
@@ -13457,7 +13457,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-156",
+          "node_id": "topology-node-157",
           "port_id": "in"
         },
         "modes": [
@@ -13474,7 +13474,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-169",
+          "node_id": "topology-node-170",
           "port_id": "in"
         },
         "modes": [
@@ -13491,7 +13491,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-182",
+          "node_id": "topology-node-183",
           "port_id": "in"
         },
         "modes": [
@@ -13508,7 +13508,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-195",
+          "node_id": "topology-node-196",
           "port_id": "in"
         },
         "modes": [
@@ -13525,7 +13525,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "evidence-store",
+          "node_id": "topology-node-051",
           "port_id": "in"
         },
         "modes": [
@@ -13542,7 +13542,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-021",
+          "node_id": "topology-node-022",
           "port_id": "in"
         },
         "modes": [
@@ -13559,7 +13559,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-034",
+          "node_id": "topology-node-035",
           "port_id": "in"
         },
         "modes": [
@@ -13576,7 +13576,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-047",
+          "node_id": "topology-node-048",
           "port_id": "in"
         },
         "modes": [
@@ -13593,7 +13593,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-060",
+          "node_id": "topology-node-061",
           "port_id": "in"
         },
         "modes": [
@@ -13610,7 +13610,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-073",
+          "node_id": "topology-node-074",
           "port_id": "in"
         },
         "modes": [
@@ -13627,7 +13627,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-086",
+          "node_id": "topology-node-087",
           "port_id": "in"
         },
         "modes": [
@@ -13644,7 +13644,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-099",
+          "node_id": "topology-node-100",
           "port_id": "in"
         },
         "modes": [
@@ -13661,7 +13661,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-112",
+          "node_id": "topology-node-113",
           "port_id": "in"
         },
         "modes": [
@@ -13678,7 +13678,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-125",
+          "node_id": "topology-node-126",
           "port_id": "in"
         },
         "modes": [
@@ -13695,7 +13695,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-138",
+          "node_id": "topology-node-139",
           "port_id": "in"
         },
         "modes": [
@@ -13712,7 +13712,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-151",
+          "node_id": "topology-node-152",
           "port_id": "in"
         },
         "modes": [
@@ -13729,7 +13729,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-164",
+          "node_id": "topology-node-165",
           "port_id": "in"
         },
         "modes": [
@@ -13746,7 +13746,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-177",
+          "node_id": "topology-node-178",
           "port_id": "in"
         },
         "modes": [
@@ -13763,7 +13763,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-190",
+          "node_id": "topology-node-191",
           "port_id": "in"
         },
         "modes": [
@@ -13780,7 +13780,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "session-store",
+          "node_id": "topology-node-066",
           "port_id": "in"
         },
         "modes": [
@@ -13797,7 +13797,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-016",
+          "node_id": "topology-node-017",
           "port_id": "in"
         },
         "modes": [
@@ -13814,7 +13814,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-029",
+          "node_id": "topology-node-030",
           "port_id": "in"
         },
         "modes": [
@@ -13831,7 +13831,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-042",
+          "node_id": "topology-node-043",
           "port_id": "in"
         },
         "modes": [
@@ -13848,7 +13848,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-055",
+          "node_id": "topology-node-056",
           "port_id": "in"
         },
         "modes": [
@@ -13865,7 +13865,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-068",
+          "node_id": "topology-node-069",
           "port_id": "in"
         },
         "modes": [
@@ -13882,7 +13882,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-081",
+          "node_id": "topology-node-082",
           "port_id": "in"
         },
         "modes": [
@@ -13899,7 +13899,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-094",
+          "node_id": "topology-node-095",
           "port_id": "in"
         },
         "modes": [
@@ -13916,7 +13916,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-107",
+          "node_id": "topology-node-108",
           "port_id": "in"
         },
         "modes": [
@@ -13933,7 +13933,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-120",
+          "node_id": "topology-node-121",
           "port_id": "in"
         },
         "modes": [
@@ -13950,7 +13950,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-133",
+          "node_id": "topology-node-134",
           "port_id": "in"
         },
         "modes": [
@@ -13967,7 +13967,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-146",
+          "node_id": "topology-node-147",
           "port_id": "in"
         },
         "modes": [
@@ -13984,7 +13984,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-159",
+          "node_id": "topology-node-160",
           "port_id": "in"
         },
         "modes": [
@@ -14001,7 +14001,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-172",
+          "node_id": "topology-node-173",
           "port_id": "in"
         },
         "modes": [
@@ -14018,7 +14018,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-185",
+          "node_id": "topology-node-186",
           "port_id": "in"
         },
         "modes": [
@@ -14035,7 +14035,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-198",
+          "node_id": "topology-node-199",
           "port_id": "in"
         },
         "modes": [
@@ -14052,7 +14052,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-011",
+          "node_id": "topology-node-012",
           "port_id": "in"
         },
         "modes": [
@@ -14069,7 +14069,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-024",
+          "node_id": "topology-node-025",
           "port_id": "in"
         },
         "modes": [
@@ -14086,7 +14086,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-037",
+          "node_id": "topology-node-038",
           "port_id": "in"
         },
         "modes": [
@@ -14103,7 +14103,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-050",
+          "node_id": "topology-node-051",
           "port_id": "in"
         },
         "modes": [
@@ -14120,7 +14120,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-063",
+          "node_id": "topology-node-064",
           "port_id": "in"
         },
         "modes": [
@@ -14137,7 +14137,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-076",
+          "node_id": "topology-node-077",
           "port_id": "in"
         },
         "modes": [
@@ -14154,7 +14154,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-089",
+          "node_id": "topology-node-090",
           "port_id": "in"
         },
         "modes": [
@@ -14171,7 +14171,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-102",
+          "node_id": "topology-node-103",
           "port_id": "in"
         },
         "modes": [
@@ -14188,7 +14188,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-115",
+          "node_id": "topology-node-116",
           "port_id": "in"
         },
         "modes": [
@@ -14205,7 +14205,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-128",
+          "node_id": "topology-node-129",
           "port_id": "in"
         },
         "modes": [
@@ -14222,7 +14222,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-141",
+          "node_id": "topology-node-142",
           "port_id": "in"
         },
         "modes": [
@@ -14239,7 +14239,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-154",
+          "node_id": "topology-node-155",
           "port_id": "in"
         },
         "modes": [
@@ -14256,7 +14256,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-167",
+          "node_id": "topology-node-168",
           "port_id": "in"
         },
         "modes": [
@@ -14273,7 +14273,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-180",
+          "node_id": "topology-node-181",
           "port_id": "in"
         },
         "modes": [
@@ -14290,7 +14290,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-193",
+          "node_id": "topology-node-194",
           "port_id": "in"
         },
         "modes": [
@@ -14307,7 +14307,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "claude-channel-adapter",
+          "node_id": "topology-node-097",
           "port_id": "in"
         },
         "modes": [
@@ -14324,7 +14324,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-019",
+          "node_id": "topology-node-020",
           "port_id": "in"
         },
         "modes": [
@@ -14341,7 +14341,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-032",
+          "node_id": "topology-node-033",
           "port_id": "in"
         },
         "modes": [
@@ -14358,7 +14358,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-045",
+          "node_id": "topology-node-046",
           "port_id": "in"
         },
         "modes": [
@@ -14375,7 +14375,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-058",
+          "node_id": "topology-node-059",
           "port_id": "in"
         },
         "modes": [
@@ -14392,7 +14392,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-071",
+          "node_id": "topology-node-072",
           "port_id": "in"
         },
         "modes": [
@@ -14409,7 +14409,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-084",
+          "node_id": "topology-node-085",
           "port_id": "in"
         },
         "modes": [
@@ -14426,7 +14426,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-097",
+          "node_id": "topology-node-098",
           "port_id": "in"
         },
         "modes": [
@@ -14443,7 +14443,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-110",
+          "node_id": "topology-node-111",
           "port_id": "in"
         },
         "modes": [
@@ -14460,7 +14460,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-123",
+          "node_id": "topology-node-124",
           "port_id": "in"
         },
         "modes": [
@@ -14477,7 +14477,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-136",
+          "node_id": "topology-node-137",
           "port_id": "in"
         },
         "modes": [
@@ -14494,7 +14494,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-149",
+          "node_id": "topology-node-150",
           "port_id": "in"
         },
         "modes": [
@@ -14510,7 +14510,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-162",
+          "node_id": "topology-node-163",
           "port_id": "in"
         },
         "modes": [
@@ -14527,7 +14527,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-175",
+          "node_id": "topology-node-176",
           "port_id": "in"
         },
         "modes": [
@@ -14544,7 +14544,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-188",
+          "node_id": "topology-node-189",
           "port_id": "in"
         },
         "modes": [
@@ -14561,7 +14561,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "visual-companion-ui",
+          "node_id": "topology-node-112",
           "port_id": "in"
         },
         "modes": [
@@ -14578,7 +14578,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-014",
+          "node_id": "topology-node-015",
           "port_id": "in"
         },
         "modes": [
@@ -14595,7 +14595,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-027",
+          "node_id": "topology-node-028",
           "port_id": "in"
         },
         "modes": [
@@ -14612,7 +14612,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-040",
+          "node_id": "topology-node-041",
           "port_id": "in"
         },
         "modes": [
@@ -14629,7 +14629,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-053",
+          "node_id": "topology-node-054",
           "port_id": "in"
         },
         "modes": [
@@ -14646,7 +14646,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-066",
+          "node_id": "topology-node-067",
           "port_id": "in"
         },
         "modes": [
@@ -14663,7 +14663,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-079",
+          "node_id": "topology-node-081",
           "port_id": "in"
         },
         "modes": [
@@ -14680,7 +14680,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-092",
+          "node_id": "topology-node-093",
           "port_id": "in"
         },
         "modes": [
@@ -14697,7 +14697,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-105",
+          "node_id": "topology-node-106",
           "port_id": "in"
         },
         "modes": [
@@ -14714,7 +14714,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-118",
+          "node_id": "topology-node-119",
           "port_id": "in"
         },
         "modes": [
@@ -14731,7 +14731,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-131",
+          "node_id": "topology-node-132",
           "port_id": "in"
         },
         "modes": [
@@ -14748,7 +14748,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-144",
+          "node_id": "topology-node-145",
           "port_id": "in"
         },
         "modes": [
@@ -14765,7 +14765,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-157",
+          "node_id": "topology-node-158",
           "port_id": "in"
         },
         "modes": [
@@ -14782,7 +14782,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-170",
+          "node_id": "topology-node-171",
           "port_id": "in"
         },
         "modes": [
@@ -14799,7 +14799,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-183",
+          "node_id": "topology-node-184",
           "port_id": "in"
         },
         "modes": [
@@ -14816,7 +14816,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-196",
+          "node_id": "topology-node-197",
           "port_id": "in"
         },
         "modes": [
@@ -14833,7 +14833,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "codex-idle-worker",
+          "node_id": "topology-node-128",
           "port_id": "in"
         },
         "modes": [
@@ -14849,7 +14849,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-022",
+          "node_id": "topology-node-023",
           "port_id": "in"
         },
         "modes": [
@@ -14866,7 +14866,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-035",
+          "node_id": "topology-node-036",
           "port_id": "in"
         },
         "modes": [
@@ -14883,7 +14883,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-048",
+          "node_id": "topology-node-049",
           "port_id": "in"
         },
         "modes": [
@@ -14900,7 +14900,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-061",
+          "node_id": "topology-node-062",
           "port_id": "in"
         },
         "modes": [
@@ -14917,7 +14917,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-074",
+          "node_id": "topology-node-075",
           "port_id": "in"
         },
         "modes": [
@@ -14934,7 +14934,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-087",
+          "node_id": "topology-node-088",
           "port_id": "in"
         },
         "modes": [
@@ -14951,7 +14951,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-100",
+          "node_id": "topology-node-101",
           "port_id": "in"
         },
         "modes": [
@@ -14968,7 +14968,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-113",
+          "node_id": "topology-node-114",
           "port_id": "in"
         },
         "modes": [
@@ -14985,7 +14985,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-126",
+          "node_id": "topology-node-127",
           "port_id": "in"
         },
         "modes": [
@@ -15002,7 +15002,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-139",
+          "node_id": "topology-node-140",
           "port_id": "in"
         },
         "modes": [
@@ -15019,7 +15019,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-152",
+          "node_id": "topology-node-153",
           "port_id": "in"
         },
         "modes": [
@@ -15036,7 +15036,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-165",
+          "node_id": "topology-node-166",
           "port_id": "in"
         },
         "modes": [
@@ -15053,7 +15053,7 @@
           "port_id": "out"
         },
         "target": {
-          "node_id": "topology-node-178",
+          "node_id": "topology-node-179",
           "port_id": "in"
         },
         "modes": [

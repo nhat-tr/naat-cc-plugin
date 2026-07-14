@@ -39,6 +39,14 @@ function ids(values) {
   return new Set(values.map(value => value.id));
 }
 
+function normalizeArchitectureDocument(document) {
+  const candidate = structuredClone(document);
+  delete candidate.revision;
+  return normalizeWorkspaceDocument(candidate, {
+    contentValidator: normalizeKnownWorkspaceContent,
+  });
+}
+
 test('large Architecture Canvas fixture is a canonical v2 architecture Visual Document', () => {
   const document = fixture();
   const normalized = normalizeWorkspaceDocument(document, {
@@ -209,6 +217,152 @@ test('runtime content rejects unresolved edge ports and endpoint mode drift befo
   assert.throws(
     () => normalizeKnownWorkspaceContent(scenarioModeDrift, { workspace_kind: 'architecture' }),
     /scenario.*current.*path/i,
+  );
+});
+
+test('runtime content rejects unresolved and cyclic ownership before layout', () => {
+  const unresolvedParent = structuredClone(fixture().content);
+  unresolvedParent.ownership_boundaries[1].parent_id = 'missing-boundary';
+
+  const cyclicParents = structuredClone(fixture().content);
+  cyclicParents.ownership_boundaries.find(boundary => boundary.id === 'boundary-runtime').parent_id = 'boundary-delivery';
+
+  const unresolvedOwner = structuredClone(fixture().content);
+  unresolvedOwner.nodes[0].owner_id = 'missing-boundary';
+
+  assert.throws(
+    () => normalizeKnownWorkspaceContent(unresolvedParent, { workspace_kind: 'architecture' }),
+    /ownership boundary.*parent.*missing-boundary.*resolve/i,
+  );
+  assert.throws(
+    () => normalizeKnownWorkspaceContent(cyclicParents, { workspace_kind: 'architecture' }),
+    /ownership boundar.*cycle/i,
+  );
+  assert.throws(
+    () => normalizeKnownWorkspaceContent(unresolvedOwner, { workspace_kind: 'architecture' }),
+    /node.*owner.*missing-boundary.*resolve/i,
+  );
+});
+
+test('Architecture topology identities are globally unique across layout collections', () => {
+  const collidingIdentity = structuredClone(fixture().content);
+  collidingIdentity.nodes[0].id = collidingIdentity.ownership_boundaries[0].id;
+
+  assert.throws(
+    () => normalizeKnownWorkspaceContent(collidingIdentity, { workspace_kind: 'architecture' }),
+    /topology id.*ownership boundary.*node.*duplicat|topology id.*duplicat.*collection/i,
+  );
+});
+
+test('Architecture envelope Components have exact parity with rendered content Components', () => {
+  const missingEnvelopeComponent = fixture();
+  const missingComponentId = missingEnvelopeComponent.content.nodes[0].component_id;
+  missingEnvelopeComponent.components = missingEnvelopeComponent.components
+    .filter(component => component.id !== missingComponentId);
+  missingEnvelopeComponent.frames[0].component_ids = missingEnvelopeComponent.frames[0].component_ids
+    .filter(componentId => componentId !== missingComponentId);
+
+  const duplicatedContentComponent = fixture();
+  duplicatedContentComponent.content.nodes[0].component_id = duplicatedContentComponent.content.nodes[1].component_id;
+
+  const danglingFrameComponent = fixture();
+  danglingFrameComponent.frames[0].component_ids[0] = 'missing-component';
+
+  assert.throws(
+    () => normalizeArchitectureDocument(missingEnvelopeComponent),
+    new RegExp(`architecture.*component.*${missingComponentId}.*envelope`, 'i'),
+  );
+  assert.throws(
+    () => normalizeArchitectureDocument(duplicatedContentComponent),
+    /architecture.*component.*duplicat/i,
+  );
+  assert.throws(
+    () => normalizeArchitectureDocument(danglingFrameComponent),
+    /unknown component missing-component.*frame/i,
+  );
+});
+
+test('Architecture envelope parity admits Decision Option Components but rejects unrelated Components', () => {
+  const withDecisionOptions = fixture();
+  const optionComponents = [
+    { id: 'foreground-wait', frame_id: 'topology', label: 'Foreground wait' },
+    { id: 'background-poll', frame_id: 'topology', label: 'Background poll' },
+  ];
+  withDecisionOptions.components.push(...optionComponents);
+  withDecisionOptions.frames[0].component_ids.push(...optionComponents.map(component => component.id));
+  withDecisionOptions.decisions.push({
+    id: 'feedback-receiver',
+    title: 'Choose the feedback receiver',
+    multiselect: false,
+    option_component_ids: optionComponents.map(component => component.id),
+  });
+  withDecisionOptions.content.annotation_targets.push('foreground-wait');
+
+  const normalized = normalizeArchitectureDocument(withDecisionOptions);
+  assert.deepEqual(normalized.decisions, withDecisionOptions.decisions);
+  assert.ok(normalized.content.annotation_targets.includes('foreground-wait'));
+
+  const withUnrelatedComponent = structuredClone(withDecisionOptions);
+  withUnrelatedComponent.components.push({
+    id: 'orphan-component',
+    frame_id: 'topology',
+    label: 'Orphan component',
+  });
+  withUnrelatedComponent.frames[0].component_ids.push('orphan-component');
+
+  assert.throws(
+    () => normalizeArchitectureDocument(withUnrelatedComponent),
+    /envelope.*component.*orphan-component.*architecture content or decision option/i,
+  );
+});
+
+test('Architecture focus targets topology identities and annotation targets Component identities', () => {
+  const unresolvedFocus = structuredClone(fixture().content);
+  unresolvedFocus.focus_targets[0] = 'edge-001';
+
+  const unresolvedAnnotation = structuredClone(fixture().content);
+  unresolvedAnnotation.annotation_targets[0] = 'feedback-delivery';
+
+  const scenarioComponentAnnotation = structuredClone(fixture().content);
+  scenarioComponentAnnotation.annotation_targets.push('scenario-feedback-delivery');
+
+  assert.throws(
+    () => normalizeKnownWorkspaceContent(unresolvedFocus, { workspace_kind: 'architecture' }),
+    /focus target edge-001.*node or ownership boundary/i,
+  );
+  assert.throws(
+    () => normalizeKnownWorkspaceContent(unresolvedAnnotation, { workspace_kind: 'architecture' }),
+    /annotation target feedback-delivery.*component/i,
+  );
+  assert.doesNotThrow(
+    () => normalizeKnownWorkspaceContent(scenarioComponentAnnotation, { workspace_kind: 'architecture' }),
+  );
+});
+
+test('runtime content rejects duplicate edge relationships only when their active modes overlap', () => {
+  const overlappingModes = structuredClone(fixture().content);
+  const duplicate = structuredClone(overlappingModes.edges.find(edge => edge.id === 'edge-009'));
+  duplicate.id = 'duplicate-edge-009';
+  duplicate.component_id = duplicate.id;
+  duplicate.modes = ['proposed'];
+  overlappingModes.edges.push(duplicate);
+
+  assert.throws(
+    () => normalizeKnownWorkspaceContent(overlappingModes, { workspace_kind: 'architecture' }),
+    /duplicate edge relationship.*edge-009.*duplicate-edge-009.*proposed/i,
+  );
+
+  const disjointModes = structuredClone(fixture().content);
+  const currentEdge = disjointModes.edges.find(edge => edge.id === 'edge-009');
+  currentEdge.modes = ['current'];
+  const proposedEdge = structuredClone(currentEdge);
+  proposedEdge.id = 'proposed-edge-009';
+  proposedEdge.component_id = proposedEdge.id;
+  proposedEdge.modes = ['proposed'];
+  disjointModes.edges.push(proposedEdge);
+
+  assert.doesNotThrow(
+    () => normalizeKnownWorkspaceContent(disjointModes, { workspace_kind: 'architecture' }),
   );
 });
 

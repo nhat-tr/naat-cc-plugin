@@ -686,6 +686,72 @@ test("v1 import keeps a timeline Point in the full content column without overla
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
 });
 
+test("clicking an Item paragraph and nested Point selects the deepest Annotation Component", async ({ page }, testInfo) => {
+  const imported = legacyTimelineState();
+  const editableDocument = (imported.document as {
+    content: { legacy_document: unknown };
+  }).content.legacy_document;
+  const app = createBrainstormServer({
+    sessionDir: testInfo.outputPath("component-annotation-session"),
+    host: "127.0.0.1",
+    port: 0,
+    token: "component-annotation-capability",
+    sessionId: `component-annotation-${testInfo.workerIndex}-${testInfo.repeatEachIndex}`,
+    idleTimeoutMs: 60_000,
+  });
+  fs.writeFileSync(
+    app.screenPath,
+    `${JSON.stringify(editableDocument)}\n`,
+    { mode: 0o600 },
+  );
+
+  try {
+    const address = await app.listen();
+    await page.goto(address.connection_url);
+    await expect(page.getByRole("heading", { name: "Imported delivery timeline" })).toBeVisible();
+
+    const componentSelect = page.getByLabel("Component", { exact: true });
+    const item = page.locator('[data-brainstorm-id="handoff-step"]');
+    const point = page.locator('[data-brainstorm-id="handoff-step-p1"]');
+    await item.locator(".timeline-content > p").click();
+    await expect(componentSelect).toHaveValue("handoff-step");
+    await expect(item).toHaveAttribute("data-annotation-selected", "true");
+
+    await point.locator(".point-text").click();
+    await expect(componentSelect).toHaveValue("handoff-step-p1");
+    await expect(point).toHaveAttribute("data-annotation-selected", "true");
+    await expect(item).not.toHaveAttribute("data-annotation-selected", "true");
+
+    const targetedNote = page.getByLabel("Targeted note");
+    await targetedNote.fill("Keep this Point explicit in the next Revision.");
+    await page.getByRole("button", { name: "Add targeted note" }).click();
+    await expect(page.getByLabel("Pending feedback")).toContainText("Feedback handoff · point 1");
+    await expect(point).toHaveAttribute("data-annotation-count", "1");
+    await expect(point.locator("[data-annotation-badge]"))
+      .toHaveText("1");
+    await expect(point).toHaveClass(/has-pending-annotations/u);
+    await expect(point).toHaveAttribute("title", /1 annotation:[\s\S]*Keep this Point explicit/u);
+
+    await targetedNote.fill("Keep this Point individually selectable.");
+    await page.getByRole("button", { name: "Add targeted note" }).click();
+    await expect(point).toHaveAttribute("data-annotation-count", "2");
+    await expect(point.locator("[data-annotation-badge]"))
+      .toHaveText("2");
+    await expect(point).toHaveAttribute("title", /2 annotations:[\s\S]*1\.[\s\S]*2\./u);
+
+    const feedbackResponse = page.waitForResponse(response => (
+      response.request().method() === "POST" && response.url().endsWith("/api/feedback")
+    ));
+    await page.getByRole("button", { name: "Save feedback batch" }).click();
+    expect((await feedbackResponse).status()).toBe(201);
+    await expect(point).toHaveClass(/has-committed-annotations/u);
+    await expect(point).not.toHaveClass(/has-pending-annotations/u);
+    await expect(point).toHaveAttribute("data-annotation-count", "2");
+  } finally {
+    await app.close("component annotation test complete");
+  }
+});
+
 test("provisional host and standalone export budgets are explicit and the measurable size/DOM caps hold", async ({ page }, testInfo) => {
   const budgets = JSON.parse(fs.readFileSync(
     "skills/brainstorming/fixtures/performance-budgets.json",

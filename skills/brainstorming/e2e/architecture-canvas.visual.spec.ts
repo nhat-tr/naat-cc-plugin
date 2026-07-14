@@ -38,8 +38,9 @@ interface ArchitectureDocument extends Record<string, unknown> {
   content: {
     edges: ArchitectureEdgeFixture[];
     initial_mode: "current" | "proposed";
-    nodes: ArchitectureNodeFixture[];
-    ownership_boundaries: OwnershipBoundaryFixture[];
+  nodes: ArchitectureNodeFixture[];
+  ownership_boundaries: OwnershipBoundaryFixture[];
+  scenarios: Array<{ label: string }>;
   };
   revision: string;
   title: string;
@@ -96,8 +97,11 @@ function sessionFixture(revision: string): Record<string, unknown> {
   };
 }
 
-async function openArchitectureCanvas(page: Page, testInfo: TestInfo): Promise<ArchitectureDocument> {
-  const screen = architectureFixture();
+async function openArchitectureCanvas(
+  page: Page,
+  testInfo: TestInfo,
+  screen = architectureFixture(),
+): Promise<ArchitectureDocument> {
   const html = buildStandaloneHtml(screen, sessionFixture(screen.revision));
   const file = testInfo.outputPath("architecture-visual.html");
   fs.writeFileSync(file, html);
@@ -302,7 +306,22 @@ test("architecture canvas visual keeps compound ELK geometry and routed edges st
   await expect(viewport).toHaveAttribute("data-mode", initialMode);
   await expect(canvas.locator("[data-camera-controls]")).toBeVisible();
   await expect(canvas.locator("[data-architecture-minimap]")).toBeVisible();
-  await expect(canvas.locator("[data-scenario-path]")).toBeVisible();
+  const scenarioPaths = canvas.locator("[data-scenario-path] .architecture-edge-path");
+  expect(await scenarioPaths.count()).toBeGreaterThan(0);
+  expect(await scenarioPaths.evaluateAll(paths => paths.every(path => (
+    path instanceof SVGGeometryElement
+    && path.getTotalLength() > 4
+    && getComputedStyle(path).stroke !== "none"
+  )))).toBe(true);
+  const scenarioLabel = canvas.locator(".architecture-scenario > span");
+  expect(await scenarioLabel.evaluate(element => {
+    const style = getComputedStyle(element);
+    return element.getBoundingClientRect().height <= Number.parseFloat(style.lineHeight) * 1.25;
+  })).toBe(true);
+  const show = page.getByRole("combobox", { name: "Show" });
+  await expect(show).toBeVisible();
+  await show.selectOption({ label: "All Components" });
+  await expect(canvas).toHaveAttribute("data-layout-status", "ready");
 
   const initialNodeCount = screen.content.nodes.filter(node => node.modes.includes(initialMode)).length;
   const initialEdgeCount = screen.content.edges.filter(edge => edge.modes.includes(initialMode)).length;
@@ -334,6 +353,19 @@ test("architecture canvas visual keeps compound ELK geometry and routed edges st
   await expectCanvasPixelEvidence(page, viewport, testInfo, "architecture-canvas-desktop.png");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   expect(pageErrors).toEqual([]);
+});
+
+test("architecture toolbar keeps labels readable beside long scenario names", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1_440, height: 900 });
+  const screen = architectureFixture();
+  screen.content.scenarios[0]!.label = "Response-driven UI (the gap -> target)";
+  await openArchitectureCanvas(page, testInfo, screen);
+
+  const scenarioLabel = page.locator(".architecture-scenario > span");
+  expect(await scenarioLabel.evaluate(element => {
+    const style = getComputedStyle(element);
+    return element.getBoundingClientRect().height <= Number.parseFloat(style.lineHeight) * 1.25;
+  })).toBe(true);
 });
 
 test("architecture canvas visual keeps the graph and external controls reachable at mobile width", async ({ page }, testInfo) => {

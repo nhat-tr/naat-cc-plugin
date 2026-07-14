@@ -142,6 +142,8 @@ test('content validation is injected, called exactly once, and owns only Workspa
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].content, workspaceFixture().content);
   assert.equal(calls[0].context.workspace_kind, 'product');
+  assert.deepEqual(calls[0].context.component_ids, ['concept-a']);
+  assert.deepEqual(calls[0].context.decision_option_component_ids, []);
   assert.equal(normalized.content.normalized_by, 'product-validator');
   assert.equal(normalized.revision, expectedDocumentRevision(normalized));
 
@@ -199,6 +201,22 @@ test('shared Decisions preserve Option Component identities while Choices stay i
       /decision|choice|option|duplicate|component/i,
     );
   }
+
+  assert.throws(
+    () => normalizeWorkspaceDocument(workspaceFixture({
+      ...document,
+      revision: undefined,
+      frames: [
+        { id: 'comparison-a', title: 'Concept A', component_ids: ['concept-a'] },
+        { id: 'comparison-b', title: 'Concept B', component_ids: ['concept-b'] },
+      ],
+      components: [
+        { id: 'concept-a', frame_id: 'comparison-a', label: 'Concept A' },
+        { id: 'concept-b', frame_id: 'comparison-b', label: 'Concept B' },
+      ],
+    }), { contentValidator: content => structuredClone(content) }),
+    /Decision.*Option Components.*one Frame/i,
+  );
 });
 
 test('the shared envelope rejects malformed Revision, dangling Component identities, and host-owned fields', () => {
@@ -258,6 +276,34 @@ test('documentRevision preserves the v1 FNV-1a contract while excluding its top-
   const changed = structuredClone(normalized);
   changed.title = 'Payment confirmation concepts, revised';
   assert.notEqual(documentRevision(changed), normalized.revision);
+});
+
+test('revisionless Product drafts materialize every preview item as a Point Component across Regions', () => {
+  const normalizeWorkspaceDocument = contractValue('normalizeWorkspaceDocument', 'function');
+  const items = Array.from({ length: 9 }, (_value, index) => `preview item ${index + 1}`);
+  const document = workspaceFixture({
+    revision: undefined,
+    content: {
+      concepts: [{
+        id: 'concept-a',
+        preview: {
+          regions: [
+            { items: items.slice(0, 4) },
+            { items: items.slice(4) },
+          ],
+        },
+      }],
+    },
+  });
+
+  const normalized = normalizeWorkspaceDocument(document, {
+    contentValidator: content => structuredClone(content),
+  });
+  const pointIds = items.map((_item, index) => `concept-a-p${index + 1}`);
+
+  assert.deepEqual(normalized.components.slice(1).map(component => component.id), pointIds);
+  assert.deepEqual(normalized.frames[0].component_ids.slice(1), pointIds);
+  assert.equal(normalized.revision, expectedDocumentRevision(normalized));
 });
 
 test('standalone state preserves Workspace Kind, evidence, Decision Choice, feedback history, and read-only Revision', () => {

@@ -268,7 +268,18 @@ export function ProductConceptStudio({
     if (!parsed) return [];
     return showFocus
       ? PRODUCT_FOCUS_COMPONENT_IDS
-      : [...parsed.concepts.map(concept => concept.id), ...(compact ? [] : ["difference-lens"])];
+      : [
+          ...parsed.concepts.flatMap(concept => [
+            concept.id,
+            ...concept.preview.regions.flatMap((_region, regionIndex) => {
+              const offset = concept.preview.regions
+                .slice(0, regionIndex)
+                .reduce((total, candidate) => total + candidate.items.length, 0);
+              return _region.items.map((_item, itemIndex) => `${concept.id}-p${offset + itemIndex + 1}`);
+            }),
+          ]),
+          ...(compact ? [] : ["difference-lens"]),
+        ];
   }, [compact, parsed, showFocus]);
 
   useEffect(() => {

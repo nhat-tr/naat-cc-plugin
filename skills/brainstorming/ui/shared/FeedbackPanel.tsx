@@ -1,8 +1,7 @@
-import { MessageSquarePlus, RotateCcw, Send, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { RotateCcw, Send, Trash2 } from "lucide-react";
+import { memo } from "react";
 
 import {
-  type Annotation,
   type Choice,
   type FeedbackDraft,
   type FeedbackThread,
@@ -10,6 +9,7 @@ import {
   type SessionEvent,
 } from "../app/feedback-store";
 import type { BrowserDeliveryState } from "../app/session-client";
+import { AnnotationComposer } from "./AnnotationComposer";
 import { DeliveryStatus } from "./DeliveryStatus";
 import { InlineText, MessageBlocks } from "./InlineText";
 
@@ -23,12 +23,14 @@ export interface PresentedFeedbackThread extends FeedbackThread {
 }
 
 interface FeedbackPanelProps {
+  annotationComponentId: string;
   components: FeedbackComponentOption[];
   draft: FeedbackDraft;
   deliveryState: BrowserDeliveryState;
   error: string | null;
   events: SessionEvent[];
   onClear: () => void;
+  onAnnotationComponentSelect: (componentId: string) => void;
   onDraftChange: (draft: FeedbackDraft) => void;
   onRefresh: () => void;
   onSubmit: () => void;
@@ -37,9 +39,9 @@ interface FeedbackPanelProps {
   threads: PresentedFeedbackThread[];
 }
 
-function MessageBody({ message }: { message: string }) {
+const MessageBody = memo(function MessageBody({ message }: { message: string }) {
   return <MessageBlocks value={message} />;
-}
+});
 
 function eventTitle(event: SessionEvent): string {
   return event.role === "agent" ? "Agent" : "You";
@@ -50,7 +52,7 @@ function historyMessage(event: SessionEvent): string {
   return event.role === "user" ? "Visual feedback saved." : "Response received.";
 }
 
-function ThreadItem({ thread }: { thread: PresentedFeedbackThread }) {
+const ThreadItem = memo(function ThreadItem({ thread }: { thread: PresentedFeedbackThread }) {
   return (
     <article className={`thread-item thread-${thread.presentedStatus}`}>
       <header>
@@ -72,14 +74,61 @@ function ThreadItem({ thread }: { thread: PresentedFeedbackThread }) {
       ))}
     </article>
   );
-}
+});
+
+const FeedbackThreads = memo(function FeedbackThreads({ threads }: { threads: PresentedFeedbackThread[] }) {
+  return (
+    <section className="feedback-thread-gutter" aria-labelledby="thread-heading">
+      <div className="feedback-section-heading">
+        <h3 id="thread-heading">Feedback Threads</h3>
+        <span>{threads.length}</span>
+      </div>
+      <div className="thread-list">
+        {threads.length > 0
+          ? threads.map(thread => <ThreadItem key={thread.id} thread={thread} />)
+          : <p className="history-empty">No threads on this Frame.</p>}
+      </div>
+    </section>
+  );
+});
+
+const SessionHistory = memo(function SessionHistory({ events }: { events: SessionEvent[] }) {
+  return (
+    <section className="history" aria-labelledby="history-heading">
+      <h3 id="history-heading">Session history</h3>
+      {events.length > 0 ? events.map((event, index) => (
+        <article className={`history-item ${event.role ?? "system"}`} key={event.id ?? `${event.seq ?? "event"}-${index}`}>
+          <header className="history-head">
+            <strong>{eventTitle(event)}</strong>
+            {event.timestamp
+              ? <time dateTime={new Date(event.timestamp).toISOString()}>{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
+              : null}
+          </header>
+          <MessageBody message={historyMessage(event)} />
+          {event.annotations?.map(annotation => (
+            <p className="history-detail history-note" key={annotation.id}>
+              <strong>{annotation.target.label}</strong> <InlineText value={annotation.comment} />
+            </p>
+          ))}
+          {event.choices?.map(choice => (
+            <p className="history-detail history-choice" key={`${choice.groupId ?? "choice"}-${choice.componentId}`}>
+              <strong>Chose</strong> {choice.label}
+            </p>
+          ))}
+        </article>
+      )) : <p className="history-empty">No feedback exchanged yet.</p>}
+    </section>
+  );
+});
 
 export function FeedbackPanel({
+  annotationComponentId,
   components,
   draft,
   deliveryState,
   error,
   events,
+  onAnnotationComponentSelect,
   onClear,
   onDraftChange,
   onRefresh,
@@ -88,35 +137,9 @@ export function FeedbackPanel({
   submitting,
   threads,
 }: FeedbackPanelProps) {
-  const [targetId, setTargetId] = useState(components[0]?.id ?? "");
-  const [annotationText, setAnnotationText] = useState("");
-  const annotationInput = useRef<HTMLTextAreaElement>(null);
-  const effectiveTargetId = components.some(component => component.id === targetId)
-    ? targetId
-    : components[0]?.id ?? "";
   const canSubmit = !readOnly && !submitting && Boolean(
     draft.message.trim() || draft.annotations.length || draft.choices.length,
   );
-
-  useEffect(() => {
-    if (!components.some(component => component.id === targetId)) {
-      setTargetId(components[0]?.id ?? "");
-    }
-  }, [components, targetId]);
-
-  const addAnnotation = (): void => {
-    const target = components.find(component => component.id === effectiveTargetId);
-    const comment = annotationText.trim();
-    if (!target || !comment || draft.annotations.length >= 50) return;
-    const annotation: Annotation = {
-      id: globalThis.crypto?.randomUUID?.() ?? `note-${Date.now()}`,
-      comment,
-      target: { componentId: target.id, label: target.label },
-    };
-    onDraftChange({ ...draft, annotations: [...draft.annotations, annotation] });
-    setAnnotationText("");
-    annotationInput.current?.focus();
-  };
 
   const removeAnnotation = (annotationId: string): void => {
     onDraftChange({ ...draft, annotations: draft.annotations.filter(item => item.id !== annotationId) });
@@ -136,17 +159,7 @@ export function FeedbackPanel({
         <DeliveryStatus readOnly={readOnly} state={deliveryState} />
       </header>
 
-      <section className="feedback-thread-gutter" aria-labelledby="thread-heading">
-        <div className="feedback-section-heading">
-          <h3 id="thread-heading">Feedback Threads</h3>
-          <span>{threads.length}</span>
-        </div>
-        <div className="thread-list">
-          {threads.length > 0
-            ? threads.map(thread => <ThreadItem key={thread.id} thread={thread} />)
-            : <p className="history-empty">No threads on this Frame.</p>}
-        </div>
-      </section>
+      <FeedbackThreads threads={threads} />
 
       <section className="feedback-compose" aria-labelledby="compose-heading">
         <div className="feedback-section-heading">
@@ -163,36 +176,14 @@ export function FeedbackPanel({
           </div>
         </div>
 
-        <div className="annotation-compose">
-          <label htmlFor="feedback-target">Component</label>
-          <select
-            disabled={readOnly || components.length === 0}
-            id="feedback-target"
-            onChange={event => setTargetId(event.target.value)}
-            value={effectiveTargetId}
-          >
-            {components.map(component => <option key={component.id} value={component.id}>{component.label}</option>)}
-          </select>
-          <label htmlFor="annotation-comment">Targeted note</label>
-          <textarea
-            disabled={readOnly}
-            id="annotation-comment"
-            maxLength={4_000}
-            onChange={event => setAnnotationText(event.target.value)}
-            placeholder="What should change or be clarified?"
-            ref={annotationInput}
-            value={annotationText}
-          />
-          <button
-            className="quiet-button"
-            disabled={readOnly || !annotationText.trim() || components.length === 0}
-            onClick={addAnnotation}
-            type="button"
-          >
-            <MessageSquarePlus aria-hidden="true" size={16} />
-            Add targeted note
-          </button>
-        </div>
+        <AnnotationComposer
+          annotationComponentId={annotationComponentId}
+          components={components}
+          draft={draft}
+          onAnnotationComponentSelect={onAnnotationComponentSelect}
+          onDraftChange={onDraftChange}
+          readOnly={readOnly}
+        />
 
         <div
           aria-label="Pending feedback"
@@ -250,30 +241,7 @@ export function FeedbackPanel({
         </button>
       </section>
 
-      <section className="history" aria-labelledby="history-heading">
-        <h3 id="history-heading">Session history</h3>
-        {events.length > 0 ? events.map((event, index) => (
-          <article className={`history-item ${event.role ?? "system"}`} key={event.id ?? `${event.seq ?? "event"}-${index}`}>
-            <header className="history-head">
-              <strong>{eventTitle(event)}</strong>
-              {event.timestamp
-                ? <time dateTime={new Date(event.timestamp).toISOString()}>{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
-                : null}
-            </header>
-            <MessageBody message={historyMessage(event)} />
-            {event.annotations?.map(annotation => (
-              <p className="history-detail history-note" key={annotation.id}>
-                <strong>{annotation.target.label}</strong> <InlineText value={annotation.comment} />
-              </p>
-            ))}
-            {event.choices?.map(choice => (
-              <p className="history-detail history-choice" key={`${choice.groupId ?? "choice"}-${choice.componentId}`}>
-                <strong>Chose</strong> {choice.label}
-              </p>
-            ))}
-          </article>
-        )) : <p className="history-empty">No feedback exchanged yet.</p>}
-      </section>
+      <SessionHistory events={events} />
     </aside>
   );
 }

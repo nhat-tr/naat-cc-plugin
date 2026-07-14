@@ -3,6 +3,14 @@ import ELK, {
   type ElkNode,
   type ElkPoint,
 } from "elkjs/lib/elk-api.js";
+import architectureElkGraph from "../../../scripts/architecture-elk-graph.cjs";
+
+const {
+  ARCHITECTURE_NODE_HEIGHT: NODE_HEIGHT,
+  ARCHITECTURE_NODE_WIDTH: NODE_WIDTH,
+  architectureNodeHeight,
+  buildArchitectureElkGraph,
+} = architectureElkGraph;
 
 export type ArchitectureMode = "current" | "proposed";
 export type ArchitectureNodeType =
@@ -29,6 +37,7 @@ export interface ArchitectureNode {
   component_id: string;
   type: ArchitectureNodeType;
   label: string;
+  points?: string[];
   owner_id: string;
   layout_hint: { layer: number; order: number };
   ports: ArchitecturePort[];
@@ -123,84 +132,8 @@ export interface ArchitectureLayoutResult {
   height: number;
 }
 
-const NODE_WIDTH = 156;
-const NODE_HEIGHT = 68;
-const PORT_SIZE = 8;
-
-function portId(nodeId: string, id: string): string {
-  return `${nodeId}:${id}`;
-}
-
 function finite(value: number | undefined, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-
-function buildElkGraph(content: ArchitectureWorkspaceContent): ElkNode {
-  const boundaryNodes = new Map<string, ElkNode>();
-  for (const boundary of content.ownership_boundaries) {
-    boundaryNodes.set(boundary.id, {
-      id: boundary.id,
-      children: [],
-      layoutOptions: {
-        "elk.algorithm": content.layout.algorithm,
-        "elk.direction": content.layout.direction,
-        "elk.edgeRouting": "ORTHOGONAL",
-        "elk.padding": "[top=54,left=24,bottom=24,right=24]",
-        "elk.spacing.nodeNode": "30",
-        "elk.layered.spacing.nodeNodeBetweenLayers": "52",
-      },
-    });
-  }
-
-  for (const boundary of content.ownership_boundaries) {
-    if (!boundary.parent_id) continue;
-    boundaryNodes.get(boundary.parent_id)?.children?.push(boundaryNodes.get(boundary.id)!);
-  }
-
-  const orderedNodes = [...content.nodes].sort((left, right) => (
-    left.layout_hint.layer - right.layout_hint.layer
-    || left.layout_hint.order - right.layout_hint.order
-    || left.id.localeCompare(right.id)
-  ));
-  for (const node of orderedNodes) {
-    boundaryNodes.get(node.owner_id)?.children?.push({
-      id: node.id,
-      width: NODE_WIDTH,
-      height: NODE_HEIGHT,
-      layoutOptions: {
-        "elk.portConstraints": "FIXED_SIDE",
-      },
-      ports: node.ports.map(port => ({
-        id: portId(node.id, port.id),
-        width: PORT_SIZE,
-        height: PORT_SIZE,
-        layoutOptions: {
-          "elk.port.side": port.direction === "input" ? "WEST" : "EAST",
-        },
-      })),
-    });
-  }
-
-  return {
-    id: "architecture-union",
-    children: content.ownership_boundaries
-      .filter(boundary => boundary.parent_id === null)
-      .map(boundary => boundaryNodes.get(boundary.id)!),
-    edges: content.edges.map(edge => ({
-      id: edge.id,
-      sources: [portId(edge.source.node_id, edge.source.port_id)],
-      targets: [portId(edge.target.node_id, edge.target.port_id)],
-    })),
-    layoutOptions: {
-      "elk.algorithm": content.layout.algorithm,
-      "elk.direction": content.layout.direction,
-      "elk.edgeRouting": "ORTHOGONAL",
-      "elk.hierarchyHandling": "INCLUDE_CHILDREN",
-      "elk.padding": "[top=12,left=12,bottom=12,right=12]",
-      "elk.spacing.nodeNode": "56",
-      "elk.layered.spacing.nodeNodeBetweenLayers": "96",
-    },
-  };
 }
 
 function routePath(points: ElkPoint[]): string {
@@ -242,7 +175,7 @@ function mapLayout(content: ArchitectureWorkspaceContent, graph: ElkNode): Archi
           position,
           absolutePosition,
           width: finite(child.width, NODE_WIDTH),
-          height: finite(child.height, NODE_HEIGHT),
+          height: finite(child.height, architectureNodeHeight(node)),
         });
       }
     }
@@ -301,7 +234,7 @@ export async function layoutArchitecture(
     : `${document.body.dataset.basePath || "/"}assets/elk-worker.min.js`;
   const elk = new ELK({ workerUrl });
   try {
-    const graph = await elk.layout(buildElkGraph(content));
+    const graph = await elk.layout(buildArchitectureElkGraph(content));
     return mapLayout(content, graph);
   } finally {
     elk.terminateWorker();

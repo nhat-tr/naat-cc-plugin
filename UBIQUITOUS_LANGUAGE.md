@@ -142,6 +142,10 @@ _Domain glossary for the brainstorming skill's Visual Companion (`skills/brainst
 - Aliases to avoid: "quality checklist", "NFR list".
 - Relations: belongs to one **Work ID**; activates from observed change facts; governs whole-feature review and may cite Decision Records.
 
+**Active Pair Loop marker** — the process-owned `.pair/active-loop.json` record proving that one live Pair Loop currently owns `.pair/plan.md`; its run identity scopes Stop-gate exhaustion state and its PID makes crashed markers inert.
+- Aliases to avoid: "active plan" — a stored plan is not evidence that a Pair Loop is running.
+- Relations: created and removed by the Pair Loop; activates the Stop gate for `.pair/plan.md`; distinct from an active implementation attempt.
+
 ## Session & Lifecycle
 
 **Visual Session** — the lifetime of one companion server instance: its session directory, capability token, Session Store, and CLI lifecycle (scaffold, start, publish, wait, drain, reply, status, export, stop).

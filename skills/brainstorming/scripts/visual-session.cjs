@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { createBrainstormServer } = require('./server.cjs');
-const { waitForFeedback } = require('./delivery-core.cjs');
+const { readDeliveryState, waitForFeedback } = require('./delivery-core.cjs');
 const { SessionStore } = require('./session-store.cjs');
 const { renderStandalone } = require('./standalone.cjs');
 const { createVisualScaffold, normalizeVisualDocument } = require('./visual-document.cjs');
@@ -15,7 +15,7 @@ const SHELL_DIR = path.resolve(__dirname, '../assets/visual-shell');
 const KNOWN_OPTIONS = new Set([
   'projectDir', 'host', 'urlHost', 'port', 'ownerPid', 'output', 'profile', 'audience',
   'title', 'summary', 'kinds', 'document', 'sessionDir', 'timeoutMs', 'replyTo', 'messageFile',
-  'workId', 'workspaceKind',
+  'workId', 'workspaceKind', 'draft',
 ]);
 
 function fail(message) {
@@ -99,6 +99,13 @@ function normalizeDocument(value) {
   return normalizeWorkspaceDocument(value, {
     contentValidator: normalizeKnownWorkspaceContent,
   });
+}
+
+function normalizeAuthoredDocument(value) {
+  if (value?.version !== 2) return normalizeDocument(value);
+  const candidate = structuredClone(value);
+  delete candidate.revision;
+  return normalizeDocument(candidate);
 }
 
 function atomicWrite(file, contents, mode = 0o600) {
@@ -319,6 +326,16 @@ async function start(options) {
     ? path.join(path.resolve(options.projectDir), '.brainstorm', sessionId)
     : path.join(path.dirname(activeFile), sessionId);
   atomicJsonExclusive(path.join(sessionDir, 'content', 'screen.json'), waitingDocument());
+  const initialDocument = options.initialDocument || null;
+  if (initialDocument) {
+    atomicJsonExclusive(path.join(sessionDir, 'content', 'workspace.json'), initialDocument);
+    atomicJsonExclusive(path.join(sessionDir, 'state', 'visual-format.json'), {
+      version: 1,
+      active_version: 2,
+      v1_document: 'content/screen.json',
+      v2_document: 'content/workspace.json',
+    });
+  }
   const token = crypto.randomBytes(24).toString('hex');
   const host = options.host || '127.0.0.1';
   // The owner is the foreground harness (this node process's parent). When it dies, the
@@ -364,11 +381,28 @@ async function start(options) {
     stateDir: info.state_dir,
     sessionId,
   });
+  const activeFilePath = initialDocument
+    ? path.join(info.screen_dir, 'workspace.json')
+    : path.join(info.screen_dir, 'screen.json');
+  const deliveryState = readDeliveryState(path.join(info.state_dir, 'delivery-state.json'));
   console.log(JSON.stringify({
     ...metadata,
-    type: 'visual-session-started',
+    type: initialDocument ? 'visual-session-presented' : 'visual-session-started',
     connection_url: info.connection_url,
-    screen_file: path.join(info.screen_dir, 'screen.json'),
+    screen_file: activeFilePath,
+    ...(initialDocument ? {
+      workspace_file: activeFilePath,
+      work_id: initialDocument.work_id,
+      workspace_kind: initialDocument.workspace_kind,
+      revision: initialDocument.revision,
+      elk_preflight: options.elkPreflight,
+      feedback_delivery: {
+        automatic: idleDelivery ? 'codex_idle_worker' : 'not_probed',
+        fallback: 'cli_foreground',
+        wait_receiver: deliveryState.listening ? 'listening' : 'not_listening',
+      },
+      next_action: 'Open connection_url, then keep one wait_for_feedback call or one foreground CLI wait active.',
+    } : {}),
   }));
 
   let stopping = false;
@@ -385,16 +419,24 @@ async function start(options) {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
-function publish(options) {
-  if (!options.document) fail('publish requires --document FILE');
+async function publish(options) {
+  if (Boolean(options.document) === Boolean(options.draft)) {
+    fail('publish requires exactly one of --document FILE or --draft FILE');
+  }
   const metadata = activeMetadata(options);
   assertLive(metadata);
-  const source = path.resolve(options.document);
-  const document = normalizeDocument(readRegularJson(source, 'Visual Document candidate'));
+  const source = path.resolve(options.draft || options.document);
+  const document = options.draft
+    ? require('./architecture-draft.cjs').compileArchitectureDraft(
+      readRegularJson(source, 'Architecture Draft'),
+    )
+    : normalizeAuthoredDocument(readRegularJson(source, 'Visual Document candidate'));
   const roundTrip = normalizeDocument(document);
   if (JSON.stringify(roundTrip) !== JSON.stringify(document)) {
     fail('visual document normalization is not stable; screen was not replaced');
   }
+  const { preflightWorkspaceDocument } = require('./workspace-render-preflight.cjs');
+  await preflightWorkspaceDocument(document);
   const { withVisualStateLock } = require('./legacy-visual-import.cjs');
   const output = withVisualStateLock(metadata.session_dir, () => {
     const format = readVisualFormat(metadata);
@@ -420,6 +462,25 @@ function publish(options) {
     return destination;
   });
   console.log(JSON.stringify({ type: 'screen.published', screen_file: output }));
+}
+
+async function present(options) {
+  if (Boolean(options.document) === Boolean(options.draft)) {
+    fail('present requires exactly one of --document FILE or --draft FILE');
+  }
+  let document;
+  if (options.draft) {
+    const { compileArchitectureDraft } = require('./architecture-draft.cjs');
+    document = compileArchitectureDraft(readRegularJson(path.resolve(options.draft), 'Architecture Draft'));
+  } else {
+    document = normalizeAuthoredDocument(
+      readRegularJson(path.resolve(options.document), 'Visual Document candidate'),
+    );
+  }
+  if (document.version !== 2) fail('present accepts only Visual Document v2 or an Architecture Draft');
+  const { preflightWorkspaceDocument } = require('./workspace-render-preflight.cjs');
+  const elkPreflight = await preflightWorkspaceDocument(document);
+  await start({ ...options, initialDocument: document, elkPreflight });
 }
 
 function migrate(options) {
@@ -591,9 +652,10 @@ async function main() {
   if (!command || ['help', '--help', '-h'].includes(command)) {
     console.log([
       'Usage: visual-session.cjs start [--project-dir DIR] [--host HOST] [--url-host HOST]',
+      '       visual-session.cjs present (--draft FILE | --document FILE) [--project-dir DIR] [--host HOST] [--url-host HOST]',
       '       visual-session.cjs scaffold --output FILE [--profile technical|product|business] [--kinds anchor,flow,decision]',
       '       visual-session.cjs scaffold --output FILE --work-id ID --workspace-kind product|architecture|research|business|review [--title TITLE]',
-      '       visual-session.cjs publish --document FILE [--session-dir DIR]',
+      '       visual-session.cjs publish (--draft FILE | --document FILE) [--session-dir DIR]',
       '       visual-session.cjs migrate --work-id ID --workspace-kind KIND [--session-dir DIR]',
       '       visual-session.cjs backout [--session-dir DIR]',
       '       visual-session.cjs drain [--session-dir DIR]',
@@ -607,8 +669,9 @@ async function main() {
   }
   const options = parseOptions(values);
   if (command === 'start') await start(options);
+  else if (command === 'present') await present(options);
   else if (command === 'scaffold') scaffold(options);
-  else if (command === 'publish') publish(options);
+  else if (command === 'publish') await publish(options);
   else if (command === 'migrate') migrate(options);
   else if (command === 'backout') backout(options);
   else if (command === 'drain') drain(options);

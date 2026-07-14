@@ -62,7 +62,7 @@ export function ConceptWall({
                 <p>{concept.strategy.summary}</p>
               </div>
             </header>
-            <PrototypeFrame concept={concept} />
+            <PrototypeFrame annotationOwnerId={concept.id} concept={concept} />
             <button
               aria-label={`Inspect ${concept.title}`}
               className="product-inspect-button"
@@ -110,7 +110,7 @@ export function ConceptWall({
         <h3>Choose a direction</h3>
         <div className="product-choice-options">
           {concepts.map(concept => {
-            const selected = isChoiceSelected(choices, concept.id);
+            const selected = isChoiceSelected(choices, concept.id, decisionId);
             return (
               <button
                 aria-label={`Select ${concept.title}`}

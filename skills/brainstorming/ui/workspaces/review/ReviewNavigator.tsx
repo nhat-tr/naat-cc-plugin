@@ -8,6 +8,7 @@ import type {
   ReviewSlice,
   ReviewSourceContext,
 } from "./FeatureReviewWorkbench";
+import { ReviewPoints } from "./ReviewPoints";
 
 interface ReviewNavigatorProps {
   acceptanceCriteria: ReviewAcceptanceCriterion[];
@@ -327,6 +328,7 @@ export function ReviewNavigator({
             role="tabpanel"
           >
             <strong className="review-criterion-title">{criterion.title}</strong>
+            <ReviewPoints label={criterion.title} owner={criterion} />
             {selectedCriterion ? (
               <div
                 aria-label={`${criterion.id} Review Slice source tree`}
@@ -362,6 +364,7 @@ export function ReviewNavigator({
                           {group.label}
                         </span>
                         <span className="review-tree-count">{group.files.length}</span>
+                        {group.slice ? <ReviewPoints label={group.slice.title} owner={group.slice} /> : null}
                       </div>
                       <div hidden={collapsed} role="group">
                         {group.files.map((file, fileIndex) => {

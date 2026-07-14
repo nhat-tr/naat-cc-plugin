@@ -105,7 +105,10 @@ export function reconcileChoices(
   next: Choice,
   options: { selected: boolean; multiselect: boolean },
 ): Choice[] {
-  const sameOption = (choice: Choice): boolean => choice.componentId === next.componentId;
+  const sameOption = (choice: Choice): boolean => (
+    choice.componentId === next.componentId
+    && choice.groupId === next.groupId
+  );
   if (!options.selected) return choices.filter(choice => !sameOption(choice));
   const updated = next.groupId && !options.multiselect
     ? choices.filter(choice => choice.groupId !== next.groupId)
@@ -116,8 +119,11 @@ export function reconcileChoices(
   return updated;
 }
 
-export function isChoiceSelected(choices: Choice[], componentId: string): boolean {
-  return choices.some(choice => choice.componentId === componentId);
+export function isChoiceSelected(choices: Choice[], componentId: string, groupId?: string): boolean {
+  return choices.some(choice => (
+    choice.componentId === componentId
+    && (groupId === undefined || choice.groupId === groupId)
+  ));
 }
 
 function choiceGroupKey(choice: Choice): string {

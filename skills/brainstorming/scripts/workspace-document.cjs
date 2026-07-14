@@ -1,3 +1,5 @@
+const { materializeWorkspacePointComponents } = require('./workspace-point-components.cjs');
+
 const MAX_WORKSPACE_DOCUMENT_BYTES = 512 * 1024;
 const WORKSPACE_KINDS = Object.freeze([
   'product',
@@ -232,6 +234,18 @@ function normalizeDecisions(value, componentIds) {
   });
 }
 
+function validateDecisionFrameMembership(decisions, components) {
+  const componentById = new Map(components.map(component => [component.id, component]));
+  for (const decision of decisions) {
+    const frameIds = new Set(decision.option_component_ids.map(componentId => (
+      componentById.get(componentId).frame_id
+    )));
+    if (frameIds.size !== 1) {
+      throw new TypeError(`Decision ${decision.id} Option Components must belong to one Frame`);
+    }
+  }
+}
+
 function normalizeRevision(value, label) {
   if (typeof value !== 'string' || !REVISION_PATTERN.test(value)) {
     throw new TypeError(`${label} must be exactly 8 lowercase hexadecimal characters`);
@@ -309,16 +323,32 @@ function normalizeWorkspaceDocument(value, options = {}) {
   const workspaceKind = text(value.workspace_kind, 40, 'workspace document.workspace_kind');
   if (!WORKSPACE_KIND_SET.has(workspaceKind)) throw new TypeError(`unsupported Workspace Kind ${workspaceKind}`);
   const evidenceRefs = normalizeEvidenceReferences(value.evidence_refs);
-  const frames = normalizeFrames(value.frames);
-  const components = normalizeComponents(value.components);
+  let frames = normalizeFrames(value.frames);
+  let components = normalizeComponents(value.components);
+  if (value.revision == null) {
+    const materialized = materializeWorkspacePointComponents(
+      workspaceKind,
+      frames,
+      components,
+      value.content,
+    );
+    frames = normalizeFrames(materialized.frames);
+    components = normalizeComponents(materialized.components);
+  }
   validateFrameMembership(frames, components);
   const componentIds = new Set(components.map(component => component.id));
   const decisions = normalizeDecisions(value.decisions, componentIds);
+  validateDecisionFrameMembership(decisions, components);
+  const decisionOptionComponentIds = new Set(
+    decisions.flatMap(decision => decision.option_component_ids),
+  );
   const feedbackThreads = normalizeFeedbackThreads(value.feedback_threads, componentIds);
   assertObject(value.content, 'workspace document.content');
   const content = options.contentValidator(structuredClone(value.content), {
     work_id: workId,
     workspace_kind: workspaceKind,
+    component_ids: [...componentIds],
+    decision_option_component_ids: [...decisionOptionComponentIds],
   });
   assertObject(content, 'normalized content from content validator');
   const normalized = {

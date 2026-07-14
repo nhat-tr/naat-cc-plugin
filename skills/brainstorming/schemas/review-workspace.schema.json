@@ -175,7 +175,8 @@
             "properties": {
               "id": { "$ref": "#/$defs/acceptanceCriterionId" },
               "component_id": { "$ref": "#/$defs/identifier" },
-              "title": { "$ref": "#/$defs/shortText" }
+              "title": { "$ref": "#/$defs/shortText" },
+              "points": { "$ref": "#/$defs/points" }
             }
           }
         }
@@ -201,6 +202,7 @@
         "task_id": { "$ref": "#/$defs/stableId" },
         "stream_id": { "$ref": "#/$defs/stableId" },
         "title": { "$ref": "#/$defs/shortText" },
+        "points": { "$ref": "#/$defs/points" },
         "acceptance_criteria": { "$ref": "#/$defs/acceptanceCriteria" },
         "expected_files": {
           "type": "array",
@@ -610,6 +612,7 @@
         "status": { "enum": ["open", "resolved", "outdated"] },
         "title": { "$ref": "#/$defs/shortText" },
         "detail": { "$ref": "#/$defs/nonEmptyText" },
+        "points": { "$ref": "#/$defs/points" },
         "acceptance_criteria": { "$ref": "#/$defs/acceptanceCriteria" },
         "review_slice_id": { "$ref": "#/$defs/stableId" },
         "path": { "$ref": "#/$defs/repositoryPath" },
@@ -659,6 +662,7 @@
           "pattern": "^EQC-[A-Z0-9]+(?:-[A-Z0-9]+)*$"
         },
         "component_id": { "$ref": "#/$defs/identifier" },
+        "points": { "$ref": "#/$defs/points" },
         "quality": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$"
@@ -746,7 +750,8 @@
         "title": { "$ref": "#/$defs/shortText" },
         "status": { "const": "accepted" },
         "acceptance_criteria": { "$ref": "#/$defs/acceptanceCriteria" },
-        "evidence_refs": { "$ref": "#/$defs/evidenceIds" }
+        "evidence_refs": { "$ref": "#/$defs/evidenceIds" },
+        "points": { "$ref": "#/$defs/points" }
       }
     },
     "outcome": {
@@ -776,12 +781,18 @@
         },
         "source": { "const": "manual_review" },
         "result": { "$ref": "#/$defs/nonEmptyText" },
+        "points": { "$ref": "#/$defs/points" },
         "evidence_refs": { "$ref": "#/$defs/evidenceIds" },
         "recorded_at": {
           "type": "string",
           "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
         }
       }
+    },
+    "points": {
+      "type": "array",
+      "maxItems": 6,
+      "items": { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "\\S" }
     },
     "legacyContent": {
       "type": "object",

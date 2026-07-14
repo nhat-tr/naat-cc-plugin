@@ -95,6 +95,19 @@ export function ArchitectureNodeView({ data }: NodeProps<ArchitectureFlowNode>) 
         <span>{node.type.replaceAll("_", " ")}</span>
         {node.change !== "unchanged" ? <span className="architecture-change">{node.change}</span> : null}
       </div>
+      {(node.points ?? []).length > 0 ? (
+        <ul className="architecture-node-points">
+          {(node.points ?? []).map((point, index) => (
+            <li
+              data-brainstorm-id={`${node.component_id}-p${index + 1}`}
+              data-brainstorm-label={`${node.label} · point ${index + 1}`}
+              key={`${node.component_id}-p${index + 1}`}
+            >
+              {point}
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </article>
   );
 }

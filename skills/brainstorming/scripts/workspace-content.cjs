@@ -23,12 +23,98 @@ function uniqueById(values, label) {
   return result;
 }
 
-function validateArchitectureSemantics(content) {
+function validateArchitectureSemantics(content, context) {
+  const boundaries = uniqueById(content.ownership_boundaries, 'ownership boundary');
   const nodes = uniqueById(content.nodes, 'node');
   const edges = uniqueById(content.edges, 'edge');
+  uniqueById(content.scenarios, 'scenario');
+  const activeEdgeRelationships = new Map();
+  const architectureComponents = new Map();
+  const topologyIdentities = new Map();
+  const decisionOptionComponents = new Set(context.decision_option_component_ids ?? []);
+
+  for (const [label, values] of [
+    ['ownership boundary', content.ownership_boundaries],
+    ['node', content.nodes],
+    ['edge', content.edges],
+    ['scenario', content.scenarios],
+  ]) {
+    for (const value of values) {
+      const existingIdentity = topologyIdentities.get(value.id);
+      if (existingIdentity) {
+        semanticError(
+          `topology id ${value.id} is duplicated across ${existingIdentity} and ${label} collections`,
+        );
+      }
+      topologyIdentities.set(value.id, label);
+      const existing = architectureComponents.get(value.component_id);
+      if (existing) {
+        semanticError(
+          `Architecture Component ${value.component_id} is duplicated by ${existing.label} ${existing.id} and ${label} ${value.id}`,
+        );
+      }
+      architectureComponents.set(value.component_id, { id: value.id, label });
+      if (label === 'node') {
+        for (let index = 0; index < (value.points ?? []).length; index += 1) {
+          const pointId = `${value.component_id}-p${index + 1}`;
+          if (architectureComponents.has(pointId)) {
+            semanticError(`Architecture Point Component ${pointId} is duplicated`);
+          }
+          architectureComponents.set(pointId, { id: pointId, label: 'point' });
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(context.component_ids)) {
+    const envelopeComponents = new Set(context.component_ids);
+    for (const componentId of architectureComponents.keys()) {
+      if (!envelopeComponents.has(componentId)) {
+        semanticError(`Architecture Component ${componentId} is missing from envelope Components`);
+      }
+    }
+    for (const componentId of envelopeComponents) {
+      if (!architectureComponents.has(componentId) && !decisionOptionComponents.has(componentId)) {
+        semanticError(
+          `envelope Component ${componentId} has no Architecture content or Decision Option Component`,
+        );
+      }
+    }
+  }
+
+  for (const boundary of content.ownership_boundaries) {
+    if (boundary.parent_id !== null && !boundaries.has(boundary.parent_id)) {
+      semanticError(`ownership boundary ${boundary.id} parent ${boundary.parent_id} does not resolve`);
+    }
+  }
+  for (const boundary of content.ownership_boundaries) {
+    const chain = new Set();
+    let current = boundary;
+    while (current) {
+      if (chain.has(current.id)) {
+        semanticError(`ownership boundary parent cycle includes ${current.id}`);
+      }
+      chain.add(current.id);
+      current = current.parent_id === null ? null : boundaries.get(current.parent_id);
+    }
+  }
 
   for (const node of content.nodes) {
+    if (!boundaries.has(node.owner_id)) {
+      semanticError(`node ${node.id} owner ${node.owner_id} does not resolve`);
+    }
     uniqueById(node.ports, `node ${node.id} port`);
+  }
+
+  for (const targetId of content.focus_targets) {
+    if (!nodes.has(targetId) && !boundaries.has(targetId)) {
+      semanticError(`focus target ${targetId} must resolve to a node or ownership boundary`);
+    }
+  }
+  for (const targetId of content.annotation_targets) {
+    if (!architectureComponents.has(targetId) && !decisionOptionComponents.has(targetId)) {
+      semanticError(`annotation target ${targetId} must resolve to an Architecture Component`);
+    }
   }
 
   for (const edge of content.edges) {
@@ -49,6 +135,25 @@ function validateArchitectureSemantics(content) {
         semanticError(`edge ${edge.id} mode ${mode} must be supported by both endpoint nodes`);
       }
     }
+
+    const relationshipKey = JSON.stringify([
+      edge.type,
+      edge.source.node_id,
+      edge.source.port_id,
+      edge.target.node_id,
+      edge.target.port_id,
+    ]);
+    const activeModes = activeEdgeRelationships.get(relationshipKey) ?? new Map();
+    for (const mode of edge.modes) {
+      const existingEdgeId = activeModes.get(mode);
+      if (existingEdgeId) {
+        semanticError(
+          `duplicate edge relationship ${existingEdgeId} and ${edge.id} overlap in active mode ${mode}`,
+        );
+      }
+      activeModes.set(mode, edge.id);
+    }
+    activeEdgeRelationships.set(relationshipKey, activeModes);
   }
 
   for (const scenario of content.scenarios) {
@@ -93,7 +198,7 @@ function normalizeKnownWorkspaceContent(content, context) {
   if (!entry.validate(normalized)) {
     throw new TypeError(`${context.workspace_kind} Workspace content is invalid: ${entry.ajv.errorsText(entry.validate.errors)}`);
   }
-  if (context.workspace_kind === 'architecture') validateArchitectureSemantics(normalized);
+  if (context.workspace_kind === 'architecture') validateArchitectureSemantics(normalized, context);
   return normalized;
 }
 

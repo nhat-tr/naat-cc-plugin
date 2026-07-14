@@ -205,6 +205,73 @@ ul {
   padding: var(--vc-section-space) clamp(var(--vc-space-3), 2.5vw, var(--vc-space-8));
 }
 
+.workspace-canvas [data-brainstorm-id][data-annotation-selected="true"] {
+  outline: 2px solid var(--vc-focus);
+  outline-offset: 2px;
+}
+
+.workspace-canvas [data-brainstorm-id].has-annotations:not(g) {
+  position: relative;
+}
+
+.workspace-canvas [data-brainstorm-id].has-pending-annotations {
+  box-shadow: 0 0 0 1.5px var(--vc-warning), 0 0 0 5px var(--vc-warning-soft);
+}
+
+.workspace-canvas [data-brainstorm-id].has-committed-annotations {
+  box-shadow: 0 0 0 1.5px var(--vc-accent), 0 0 0 5px var(--vc-accent-soft);
+}
+
+.annotation-badge {
+  position: absolute;
+  z-index: 5;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  place-items: center;
+  min-width: 21px;
+  height: 21px;
+  padding: 0 6px;
+  border: 2px solid var(--vc-paper);
+  border-radius: 999px;
+  background: var(--vc-warning);
+  color: var(--vc-paper);
+  font-family: var(--vc-font-mono);
+  font-size: var(--vc-font-size-xs);
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgb(21 37 33 / 18%);
+}
+
+.annotation-badge.committed {
+  background: var(--vc-accent);
+}
+
+.annotation-badge-svg {
+  color: var(--vc-paper);
+  font-family: var(--vc-font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.annotation-badge-svg circle {
+  fill: var(--vc-warning);
+  stroke: var(--vc-paper);
+  stroke-width: 2px;
+}
+
+.has-committed-annotations > .annotation-badge-svg circle {
+  fill: var(--vc-accent);
+}
+
+.annotation-badge-svg text {
+  fill: currentColor;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
 .workspace-pane-separator {
   position: sticky;
   top: 0;
@@ -598,6 +665,10 @@ ul {
   line-height: var(--vc-leading-body);
   letter-spacing: 0;
   text-align: left;
+}
+
+.point.has-annotations {
+  padding-right: 28px;
 }
 
 .point::before {

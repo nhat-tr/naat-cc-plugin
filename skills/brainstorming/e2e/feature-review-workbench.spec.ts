@@ -5,7 +5,7 @@ declare const require: { (id: string): unknown };
 
 interface FileSystem {
   readFileSync(file: string, encoding: "utf8"): string;
-  writeFileSync(file: string, contents: string): void;
+  writeFileSync(file: string, contents: string, options?: { mode?: number }): void;
 }
 
 interface PathModule {
@@ -31,6 +31,24 @@ interface WorkspaceDocumentContract {
   documentRevision(value: Record<string, unknown>): string;
 }
 
+interface ReviewServer {
+  close(reason?: string): Promise<void>;
+  contentDir: string;
+  listen(): Promise<{ connection_url: string }>;
+  stateDir: string;
+}
+
+interface ReviewServerFactory {
+  createBrainstormServer(options: {
+    sessionDir: string;
+    host: "127.0.0.1";
+    port: 0;
+    token: string;
+    sessionId: string;
+    idleTimeoutMs: number;
+  }): ReviewServer;
+}
+
 interface ReviewActualChangeFixture {
   acceptance_criteria: string[];
   claimed_by: string[];
@@ -48,7 +66,9 @@ interface ReviewFixture extends Record<string, unknown> {
   revision: string;
   title: string;
   content: {
-    canonical_spec: { acceptance_criteria: Array<{ id: string }> };
+    canonical_spec: {
+      acceptance_criteria: Array<{ component_id: string; id: string; points?: string[]; title: string }>;
+    };
     evidence_records: Array<{ id: string; result: Record<string, unknown> }>;
     patch_set_invalidations: Array<{
       affected_acceptance_criteria: string[];
@@ -58,9 +78,13 @@ interface ReviewFixture extends Record<string, unknown> {
     }>;
     patch_set_review: { file_reviews: Array<{ path: string; viewed: boolean }> };
     review_slices: Array<{
+      acceptance_criteria: string[];
       actual_changes: ReviewActualChangeFixture[];
+      component_id: string;
       expected_files: string[];
+      points?: string[];
       task_id: string;
+      title: string;
     }>;
     source_evidence: Array<Record<string, unknown>>;
     verification_evidence: Array<{ evidence_ref: string; status: string }>;
@@ -72,6 +96,7 @@ const path = require("node:path") as PathModule;
 const { pathToFileURL } = require("node:url") as UrlModule;
 const { renderStandalone } = require("../scripts/standalone.cjs") as StandaloneRenderer;
 const { documentRevision } = require("../scripts/workspace-document.cjs") as WorkspaceDocumentContract;
+const { createBrainstormServer } = require("../scripts/server.cjs") as ReviewServerFactory;
 const fixturePath = path.join(__dirname, "..", "fixtures", "feature-review-work.json");
 const shellDirectory = path.join(__dirname, "..", "assets", "visual-shell");
 
@@ -127,6 +152,42 @@ async function mountReview(
   await expect(page.getByRole("heading", { name: fixture.title, exact: true })).toBeVisible();
   await expect(page.locator('[data-workspace-kind="review"]')).toBeVisible();
   return pageErrors;
+}
+
+async function mountEditableReview(
+  page: Page,
+  testInfo: TestInfo,
+  fixture = reviewFixture(),
+): Promise<ReviewServer> {
+  const app = createBrainstormServer({
+    sessionDir: testInfo.outputPath("editable-review-session"),
+    host: "127.0.0.1",
+    port: 0,
+    token: "editable-review-test-capability",
+    sessionId: `editable-review-${testInfo.workerIndex}-${testInfo.repeatEachIndex}`,
+    idleTimeoutMs: 60_000,
+  });
+  fs.writeFileSync(
+    path.join(app.contentDir, "workspace.json"),
+    `${JSON.stringify(fixture)}\n`,
+    { mode: 0o600 },
+  );
+  fs.writeFileSync(
+    path.join(app.stateDir, "visual-format.json"),
+    `${JSON.stringify({
+      version: 1,
+      active_version: 2,
+      v1_document: "content/screen.json",
+      v2_document: "content/workspace.json",
+    })}\n`,
+    { mode: 0o600 },
+  );
+
+  const address = await app.listen();
+  await page.goto(address.connection_url);
+  await expect(page.getByRole("heading", { name: fixture.title, exact: true })).toBeVisible();
+  await expect(page.locator('[data-workspace-kind="review"]')).toBeVisible();
+  return app;
 }
 
 async function controlledPanel(tab: Locator, workbench: Locator): Promise<Locator> {
@@ -205,6 +266,71 @@ test("Acceptance Criteria tabs have reciprocal controls and expose exactly one a
   await expect(qualityPanel.locator('[data-review-slice="10.1"]')).toBeVisible();
   await expect(qualityPanel.locator('[data-review-slice="10.3"]')).toBeVisible();
   await expect(workbench.locator('[role="tabpanel"][data-acceptance-criterion-panel]:visible')).toHaveCount(1);
+});
+
+test("Review Component targeting clears when its Acceptance Criterion leaves the presented context", async ({ page }, testInfo) => {
+  const app = await mountEditableReview(page, testInfo);
+  try {
+    const workbench = page.locator("[data-review-workbench]");
+    const componentTarget = page.getByLabel("Component", { exact: true });
+    const firstCriterion = workbench.locator('[data-acceptance-criterion-panel="AC-1"]');
+
+    await firstCriterion.locator(".review-criterion-title").click();
+    await expect(componentTarget).toHaveValue("ac-1");
+    await expect(firstCriterion).toHaveAttribute("data-annotation-selected", "true");
+
+    await workbench.locator('[role="tab"][data-acceptance-criterion="AC-15"]').click();
+    await expect(componentTarget).toHaveValue("ac-15");
+    await expect(firstCriterion).not.toHaveAttribute("data-annotation-selected", "true");
+
+    await workbench.locator('[role="tab"][data-acceptance-criterion="AC-1"]').click();
+    await expect(componentTarget).toHaveValue("ac-1");
+    await expect(firstCriterion).not.toHaveAttribute("data-annotation-selected", "true");
+  } finally {
+    await app.close("Review Component targeting test complete");
+  }
+});
+
+test("Review Points are individually selectable Components with annotation badges", async ({ page }, testInfo) => {
+  const fixture = reviewFixture();
+  const frame = fixture.frames[0];
+  const criterion = fixture.content.canonical_spec.acceptance_criteria[0];
+  const slice = fixture.content.review_slices.find(item => item.acceptance_criteria?.includes?.("AC-1"));
+  expect(frame).toBeDefined();
+  expect(criterion).toBeDefined();
+  expect(slice).toBeDefined();
+  if (!frame || !criterion || !slice) return;
+
+  criterion.points = ["Preserve the approved behavior as a separately reviewable claim."];
+  slice.points = ["Verify this Review Slice against its mapped Acceptance Criterion."];
+  for (const [owner, label] of [[criterion, criterion.title], [slice, slice.title]] as const) {
+    const pointId = `${owner.component_id}-p1`;
+    fixture.components.push({ id: pointId, frame_id: frame.id, label: `${label} · point 1` });
+    frame.component_ids.push(pointId);
+  }
+  fixture.revision = documentRevision(fixture);
+
+  const app = await mountEditableReview(page, testInfo, fixture);
+  try {
+    const componentTarget = page.getByLabel("Component", { exact: true });
+    const criterionPoint = page.locator(`[data-brainstorm-id="${criterion.component_id}-p1"]`);
+    const slicePoint = page.locator(`[data-brainstorm-id="${slice.component_id}-p1"]`);
+
+    await expect(criterionPoint).toContainText("Preserve the approved behavior");
+    await criterionPoint.click();
+    await expect(componentTarget).toHaveValue(`${criterion.component_id}-p1`);
+
+    await expect(slicePoint).toContainText("Verify this Review Slice");
+    await slicePoint.click();
+    await expect(componentTarget).toHaveValue(`${slice.component_id}-p1`);
+
+    await page.getByLabel("Targeted note").fill("Keep this Review Slice Point explicit.");
+    await page.getByRole("button", { name: "Add targeted note" }).click();
+    await expect(slicePoint).toHaveAttribute("data-annotation-count", "1");
+    await expect(slicePoint.locator("[data-annotation-badge]")).toHaveText("1");
+  } finally {
+    await app.close("Review Point annotation test complete");
+  }
 });
 
 test("File Viewed progress, cumulative verdict, governance, and lineage remain separate", async ({ page }) => {
@@ -361,16 +487,40 @@ test("two hunks for the same full path remain separately navigable", async ({ pa
   });
   fixture.revision = documentRevision(fixture);
 
-  await mountReview(page, testInfo, fixture, "same-path-hunks.html");
-  await page.locator('[data-review-navigator] [data-acceptance-criterion="AC-6"]').click();
-  const hunkChoices = page.locator(
-    `[data-review-navigator] [data-source-path="${second.path}"][data-hunk-id]`,
-  );
-  await expect(hunkChoices).toHaveCount(2);
-  await expect(hunkChoices.nth(0)).not.toHaveAttribute("data-hunk-id", secondHunkId);
-  await expect(hunkChoices.nth(1)).toHaveAttribute("data-hunk-id", secondHunkId);
-  await hunkChoices.nth(1).click();
-  const source = page.locator("[data-review-source]");
-  await expect(source.locator(`[data-hunk-id="${secondHunkId}"]`)).toBeVisible();
-  await expect(source).toContainText("persistFeedbackBatch");
+  const app = await mountEditableReview(page, testInfo, fixture);
+  try {
+    await page.locator('[data-review-navigator] [data-acceptance-criterion="AC-6"]').click();
+    const componentTarget = page.getByLabel("Component", { exact: true });
+    const sliceChoice = page.locator('[data-review-navigator] [data-review-slice="10.3"]');
+    await expect(sliceChoice).toHaveAttribute("data-brainstorm-id", "slice-10-3");
+    await sliceChoice.click();
+    await expect(componentTarget).toHaveValue("slice-10-3");
+    await expect(sliceChoice).toHaveAttribute("data-annotation-selected", "true");
+
+    const hunkChoices = page.locator(
+      `[data-review-navigator] [data-source-path="${second.path}"][data-hunk-id]`,
+    );
+    await expect(hunkChoices).toHaveCount(2);
+    await expect(hunkChoices.nth(0)).not.toHaveAttribute("data-hunk-id", secondHunkId);
+    await expect(hunkChoices.nth(1)).toHaveAttribute("data-hunk-id", secondHunkId);
+    await expect(hunkChoices.nth(1)).not.toHaveAttribute("data-brainstorm-id", /.+/u);
+
+    const fileChoice = page.locator(
+      `[data-review-navigator] [role="treeitem"][data-source-path="${second.path}"]:not([data-hunk-id])`,
+    );
+    await expect(fileChoice).not.toHaveAttribute("data-brainstorm-id", /.+/u);
+    await fileChoice.click();
+    await expect(page.locator("[data-review-source]").locator(`[data-hunk-id="${first.hunk_id}"]`)).toBeVisible();
+    await expect(componentTarget).toHaveValue("slice-10-3");
+    await expect(sliceChoice).toHaveAttribute("data-annotation-selected", "true");
+
+    await hunkChoices.nth(1).click();
+    const source = page.locator("[data-review-source]");
+    await expect(source.locator(`[data-hunk-id="${secondHunkId}"]`)).toBeVisible();
+    await expect(source).toContainText("persistFeedbackBatch");
+    await expect(componentTarget).toHaveValue("slice-10-3");
+    await expect(sliceChoice).toHaveAttribute("data-annotation-selected", "true");
+  } finally {
+    await app.close("same-path hunk targeting test complete");
+  }
 });

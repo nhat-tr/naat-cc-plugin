@@ -7,6 +7,7 @@ const test = require('node:test');
 const { createBrainstormServer } = require('../scripts/server.cjs');
 const { normalizeKnownWorkspaceContent } = require('../scripts/workspace-content.cjs');
 const { normalizeWorkspaceDocument, WORKSPACE_KINDS } = require('../scripts/workspace-document.cjs');
+const { createWorkspaceScaffold } = require('../scripts/workspace-scaffold.cjs');
 const { createScratchDirectory } = require('./test-support');
 
 const sessionCli = path.resolve(__dirname, '../scripts/visual-session.cjs');
@@ -17,6 +18,73 @@ function runSession(...args) {
 
 function spawnSession(...args) {
   return childProcess.spawn(process.execPath, [sessionCli, ...args], { encoding: 'utf8' });
+}
+
+function architectureDraft(title) {
+  return {
+    work_id: 'work-20260713-architecture-draft-present',
+    title,
+    evidence: [{ id: 'EVD-001-architecture-trace', label: 'Observed architecture trace' }],
+    boundaries: [{ id: 'runtime', label: 'Runtime' }],
+    nodes: [
+      {
+        id: 'request-source',
+        label: 'Request source',
+        owner_id: 'runtime',
+        type: 'interface',
+        ports: [{
+          id: 'request-output',
+          label: 'Request',
+          direction: 'output',
+          kind: 'command',
+          protocol: 'HTTP',
+        }],
+      },
+      {
+        id: 'request-handler',
+        label: 'Request handler',
+        owner_id: 'runtime',
+        type: 'service',
+        ports: [{
+          id: 'request-input',
+          label: 'Request',
+          direction: 'input',
+          kind: 'command',
+          protocol: 'HTTP',
+        }],
+      },
+    ],
+    edges: [{
+      id: 'request-flow',
+      label: 'Request flow',
+      type: 'command',
+      source: { node_id: 'request-source', port_id: 'request-output' },
+      target: { node_id: 'request-handler', port_id: 'request-input' },
+    }],
+    scenarios: [{
+      id: 'handle-request',
+      label: 'Handle request',
+      description: 'Deliver one request to the handler.',
+      paths: {
+        current: {
+          node_ids: ['request-source', 'request-handler'],
+          edge_ids: ['request-flow'],
+        },
+        proposed: {
+          node_ids: ['request-source', 'request-handler'],
+          edge_ids: ['request-flow'],
+        },
+      },
+    }],
+    decisions: [{
+      id: 'request-transport',
+      title: 'Choose request transport',
+      options: [
+        { id: 'http-transport', label: 'HTTP' },
+        { id: 'queue-transport', label: 'Queue' },
+      ],
+    }],
+  };
 }
 
 function processOutput(child) {
@@ -291,6 +359,124 @@ test('workspace scaffold command emits a canonical v2 draft for every Workspace 
       revision: document.revision,
     });
   }
+});
+
+test('present starts directly on a canonical v2 document and derives a stale Revision', async t => {
+  const scratchRoot = createScratchDirectory(t, 'present-v2-session');
+  const projectDir = path.join(scratchRoot, 'project');
+  const candidateFile = path.join(scratchRoot, 'architecture-workspace.json');
+  const environment = { ...process.env, CLAUDE_SCRATCH_DIR: scratchRoot };
+  const candidate = createWorkspaceScaffold({
+    workId: 'work-20260713-architecture-present',
+    workspaceKind: 'architecture',
+    title: 'Architecture before edit',
+  });
+  candidate.title = 'Architecture after edit';
+  fs.writeFileSync(candidateFile, `${JSON.stringify(candidate)}\n`);
+
+  const presented = childProcess.spawn(
+    process.execPath,
+    [sessionCli, 'present', '--document', candidateFile, '--project-dir', projectDir],
+    { encoding: 'utf8', env: environment, stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let info;
+  t.after(() => {
+    if (info?.session_dir) {
+      childProcess.spawnSync(path.resolve(__dirname, '../scripts/stop-server.sh'), [info.session_dir], {
+        encoding: 'utf8',
+        env: environment,
+      });
+    }
+    if (presented.exitCode == null) presented.kill('SIGTERM');
+  });
+
+  info = JSON.parse(await firstOutputLine(presented.stdout));
+  assert.equal(info.type, 'visual-session-presented');
+  assert.equal(info.workspace_kind, 'architecture');
+  assert.equal(info.elk_preflight.status, 'ready');
+  assert.equal(Object.hasOwn(info, 'render_preflight'), false, 'ELK-only evidence must not claim Shell readiness');
+  assert.equal(info.work_id, 'work-20260713-architecture-present');
+  assert.match(info.revision, /^[a-f0-9]{8}$/);
+  assert.notEqual(info.revision, candidate.revision, 'Present must derive Revision after edits');
+  assert.ok(
+    ['codex_idle_worker', 'not_probed'].includes(info.feedback_delivery.automatic),
+    'Present must report only automatic delivery it actually started or mark it unprobed',
+  );
+  assert.equal(info.feedback_delivery.fallback, 'cli_foreground');
+  assert.equal(info.feedback_delivery.wait_receiver, 'not_listening');
+  assert.match(info.next_action, /foreground.*wait/i);
+
+  const format = JSON.parse(fs.readFileSync(path.join(info.state_dir, 'visual-format.json'), 'utf8'));
+  assert.equal(format.active_version, 2);
+  const workspace = JSON.parse(fs.readFileSync(info.workspace_file, 'utf8'));
+  assert.equal(workspace.title, 'Architecture after edit');
+  assert.equal(workspace.revision, info.revision);
+  assert.deepEqual(workspace, normalizeWorkspaceDocument(workspace, {
+    contentValidator: normalizeKnownWorkspaceContent,
+  }));
+
+  candidate.title = 'Architecture after Publish';
+  fs.writeFileSync(candidateFile, `${JSON.stringify(candidate)}\n`);
+  const published = childProcess.spawnSync(process.execPath, [
+    sessionCli,
+    'publish',
+    '--document', candidateFile,
+    '--session-dir', info.session_dir,
+  ], { encoding: 'utf8', env: environment });
+  assert.equal(published.status, 0, published.stderr);
+  const publishedWorkspace = JSON.parse(fs.readFileSync(info.workspace_file, 'utf8'));
+  assert.equal(publishedWorkspace.title, 'Architecture after Publish');
+  assert.notEqual(publishedWorkspace.revision, workspace.revision);
+
+  const root = await fetch(info.connection_url);
+  const cookie = root.headers.get('set-cookie').split(';')[0];
+  const active = await fetch(`${info.url}${info.base_path}api/screen`, { headers: { Cookie: cookie } });
+  assert.equal(active.status, 200);
+  assert.equal((await active.json()).workspace_kind, 'architecture');
+});
+
+test('present and Publish compile Architecture Drafts without migration or manual Revision work', async t => {
+  const scratchRoot = createScratchDirectory(t, 'present-architecture-draft');
+  const projectDir = path.join(scratchRoot, 'project');
+  const draftFile = path.join(scratchRoot, 'architecture-draft.json');
+  const environment = { ...process.env, CLAUDE_SCRATCH_DIR: scratchRoot };
+  fs.writeFileSync(draftFile, `${JSON.stringify(architectureDraft('Initial architecture'))}\n`);
+
+  const presented = childProcess.spawn(
+    process.execPath,
+    [sessionCli, 'present', '--draft', draftFile, '--project-dir', projectDir],
+    { encoding: 'utf8', env: environment, stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  let info;
+  t.after(() => {
+    if (info?.session_dir) {
+      childProcess.spawnSync(path.resolve(__dirname, '../scripts/stop-server.sh'), [info.session_dir], {
+        encoding: 'utf8',
+        env: environment,
+      });
+    }
+    if (presented.exitCode == null) presented.kill('SIGTERM');
+  });
+
+  info = JSON.parse(await firstOutputLine(presented.stdout));
+  assert.equal(info.type, 'visual-session-presented');
+  assert.equal(info.workspace_kind, 'architecture');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(info.state_dir, 'visual-format.json'), 'utf8')).active_version, 2);
+  const firstRevision = info.revision;
+
+  fs.writeFileSync(draftFile, `${JSON.stringify(architectureDraft('Revised architecture'))}\n`);
+  const published = childProcess.spawnSync(process.execPath, [
+    sessionCli,
+    'publish',
+    '--draft', draftFile,
+    '--session-dir', info.session_dir,
+  ], { encoding: 'utf8', env: environment });
+  assert.equal(published.status, 0, published.stderr);
+
+  const workspace = JSON.parse(fs.readFileSync(info.workspace_file, 'utf8'));
+  assert.equal(workspace.title, 'Revised architecture');
+  assert.notEqual(workspace.revision, firstRevision);
+  assert.deepEqual(workspace.decisions[0].option_component_ids, ['http-transport', 'queue-transport']);
 });
 
 test('fresh Visual Session supports the documented v1 to v2 migration, Publish, and backout lifecycle', async t => {

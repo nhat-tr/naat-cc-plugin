@@ -57,6 +57,7 @@ export interface ProductConcept {
 }
 
 interface PrototypeFrameProps {
+  annotationOwnerId?: string;
   concept: ProductConcept;
   device?: "desktop" | "mobile";
   stateLabel?: string;
@@ -75,7 +76,7 @@ function itemLabel(value: string): string {
     .join(" ");
 }
 
-export function PrototypeFrame({ concept, device = "desktop", stateLabel = "Default" }: PrototypeFrameProps) {
+export function PrototypeFrame({ annotationOwnerId, concept, device = "desktop", stateLabel = "Default" }: PrototypeFrameProps) {
   const StrategyIcon = strategyIcons[concept.strategy.id] ?? LayoutDashboard;
   const DeviceIcon = device === "mobile" ? Smartphone : Monitor;
 
@@ -98,7 +99,11 @@ export function PrototypeFrame({ concept, device = "desktop", stateLabel = "Defa
           <strong>{concept.strategy.id.split("-").map(itemLabel).join(" ")}</strong>
         </div>
         <div className="product-prototype-regions">
-          {concept.preview.regions.map(region => (
+          {concept.preview.regions.map((region, regionIndex) => {
+            const pointOffset = concept.preview.regions
+              .slice(0, regionIndex)
+              .reduce((total, candidate) => total + candidate.items.length, 0);
+            return (
             <section
               aria-label={region.label}
               className="product-prototype-region"
@@ -107,10 +112,22 @@ export function PrototypeFrame({ concept, device = "desktop", stateLabel = "Defa
             >
               <h4>{region.label}</h4>
               <ul>
-                {region.items.map(item => <li key={item}>{itemLabel(item)}</li>)}
+                {region.items.map((item, itemIndex) => {
+                  const pointIndex = pointOffset + itemIndex + 1;
+                  return (
+                    <li
+                      data-brainstorm-id={annotationOwnerId ? `${annotationOwnerId}-p${pointIndex}` : undefined}
+                      data-brainstorm-label={annotationOwnerId ? `${concept.title} · point ${pointIndex}` : undefined}
+                      key={item}
+                    >
+                      {itemLabel(item)}
+                    </li>
+                  );
+                })}
               </ul>
             </section>
-          ))}
+            );
+          })}
         </div>
         <div className="product-prototype-action">
           <span>{concept.preview.primary_action}</span>

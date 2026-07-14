@@ -174,6 +174,11 @@
           ]
         },
         "label": { "$ref": "#/$defs/nonEmptyText" },
+        "points": {
+          "type": "array",
+          "maxItems": 6,
+          "items": { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "\\S" }
+        },
         "owner_id": { "$ref": "#/$defs/identifier" },
         "layout_hint": { "$ref": "#/$defs/layoutHint" },
         "ports": {

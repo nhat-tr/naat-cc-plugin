@@ -26,6 +26,8 @@ interface ArchitectureNodeFixture {
 interface ArchitectureEdgeFixture {
   id: string;
   modes: ArchitectureMode[];
+  source: { node_id: string };
+  target: { node_id: string };
 }
 
 interface ArchitectureScenarioFixture {
@@ -37,12 +39,22 @@ interface ArchitectureScenarioFixture {
 }
 
 interface ArchitectureDocumentFixture extends Record<string, unknown> {
+  components: Array<{ frame_id: string; id: string; label: string }>;
   content: {
     nodes: ArchitectureNodeFixture[];
     edges: ArchitectureEdgeFixture[];
     ownership_boundaries: Array<{ id: string }>;
     scenarios: ArchitectureScenarioFixture[];
+    annotation_targets: string[];
   };
+  decisions: Array<{
+    id: string;
+    multiselect: boolean;
+    option_component_ids: string[];
+    title: string;
+  }>;
+  frames: Array<{ component_ids: string[]; id: string; title: string }>;
+  revision?: string;
 }
 
 interface ArchitectureServer {
@@ -50,6 +62,19 @@ interface ArchitectureServer {
   contentDir: string;
   listen(): Promise<{ connection_url: string }>;
   stateDir: string;
+  store: {
+    snapshot(): {
+      events: Array<{
+        type?: string;
+        choices?: Array<{
+          componentId?: string;
+          groupId?: string;
+          label?: string;
+          value?: string;
+        }>;
+      }>;
+    };
+  };
 }
 
 interface ArchitectureServerFactory {
@@ -70,9 +95,23 @@ interface Box {
   height: number;
 }
 
+interface GraphGeometry {
+  centers: Record<string, { x: number; y: number }>;
+  diagonal: number;
+}
+
 const fs = require("node:fs") as FileSystem;
 const path = require("node:path") as PathModule;
 const { createBrainstormServer } = require("../scripts/server.cjs") as ArchitectureServerFactory;
+const { normalizeKnownWorkspaceContent } = require("../scripts/workspace-content.cjs") as {
+  normalizeKnownWorkspaceContent(content: unknown, context: unknown): Record<string, unknown>;
+};
+const { normalizeWorkspaceDocument } = require("../scripts/workspace-document.cjs") as {
+  normalizeWorkspaceDocument(
+    value: unknown,
+    options: { contentValidator: typeof normalizeKnownWorkspaceContent },
+  ): ArchitectureDocumentFixture;
+};
 const fixtureFile = require.resolve("../fixtures/architecture-large.json");
 
 let app: ArchitectureServer | undefined;
@@ -127,6 +166,105 @@ function expectSamePosition(before: Box, after: Box): void {
   expect(Math.abs(after.y - before.y), "shared node y must remain stable across modes").toBeLessThanOrEqual(1);
 }
 
+async function graphIds(page: Page): Promise<{ edges: string[]; nodes: string[] }> {
+  const viewport = page.locator("[data-architecture-viewport]");
+  const [nodes, edges] = await Promise.all([
+    viewport.locator("[data-architecture-node][data-node-id]").evaluateAll(elements => (
+      elements.map(element => element.getAttribute("data-node-id") ?? "").filter(Boolean).sort()
+    )),
+    viewport.locator("[data-architecture-edge][data-edge-id]").evaluateAll(elements => (
+      elements.map(element => element.getAttribute("data-edge-id") ?? "").filter(Boolean).sort()
+    )),
+  ]);
+  return { edges, nodes };
+}
+
+async function graphGeometry(page: Page): Promise<GraphGeometry> {
+  return page.locator("[data-architecture-viewport]").evaluate(root => {
+    const flowRoot = root.querySelector<HTMLElement>(".react-flow");
+    const flowViewport = root.querySelector<HTMLElement>(".react-flow__viewport");
+    if (!flowRoot || !flowViewport) throw new Error("React Flow geometry is unavailable");
+
+    const flowBox = flowRoot.getBoundingClientRect();
+    const transform = getComputedStyle(flowViewport).transform;
+    const inverse = (transform === "none"
+      ? new DOMMatrixReadOnly()
+      : new DOMMatrixReadOnly(transform)).inverse();
+    const centers: Record<string, { x: number; y: number }> = {};
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (const node of root.querySelectorAll<HTMLElement>("[data-architecture-node][data-node-id]")) {
+      const id = node.dataset.nodeId;
+      if (!id) continue;
+      const box = node.getBoundingClientRect();
+      const topLeft = new DOMPoint(box.left - flowBox.left, box.top - flowBox.top).matrixTransform(inverse);
+      const bottomRight = new DOMPoint(box.right - flowBox.left, box.bottom - flowBox.top).matrixTransform(inverse);
+      centers[id] = {
+        x: (topLeft.x + bottomRight.x) / 2,
+        y: (topLeft.y + bottomRight.y) / 2,
+      };
+      minX = Math.min(minX, topLeft.x);
+      minY = Math.min(minY, topLeft.y);
+      maxX = Math.max(maxX, bottomRight.x);
+      maxY = Math.max(maxY, bottomRight.y);
+    }
+
+    if (!Object.keys(centers).length) throw new Error("Architecture graph contains no nodes");
+    return {
+      centers,
+      diagonal: Math.hypot(maxX - minX, maxY - minY),
+    };
+  });
+}
+
+async function feedbackOptionIds(page: Page): Promise<string[]> {
+  return page.locator("#feedback-target option").evaluateAll(options => (
+    options.map(option => (option as HTMLOptionElement).value).sort()
+  ));
+}
+
+async function presentedArchitectureComponentIds(
+  page: Page,
+  annotationTargets: string[],
+): Promise<string[]> {
+  return page.locator("[data-architecture-canvas] [data-brainstorm-id]").evaluateAll(
+    (elements, permittedIds) => {
+      const permitted = new Set(permittedIds);
+      const presented = new Set<string>();
+      for (const element of elements) {
+        const id = element.getAttribute("data-brainstorm-id");
+        if (!id || !permitted.has(id) || element.closest("[hidden]")) continue;
+        const style = getComputedStyle(element);
+        if (style.display !== "none" && style.visibility !== "hidden") presented.add(id);
+      }
+      return [...presented].sort();
+    },
+    annotationTargets,
+  );
+}
+
+async function expectFeedbackMatchesPresentedScope(
+  page: Page,
+  annotationTargets: string[],
+  state: string,
+): Promise<void> {
+  const expected = await presentedArchitectureComponentIds(page, annotationTargets);
+  await expect.poll(
+    () => feedbackOptionIds(page),
+    { message: `${state}: Feedback Components must equal presented filtered Components` },
+  ).toEqual(expected);
+}
+
+async function selectShowScope(page: Page, label: string): Promise<void> {
+  const show = page.getByRole("combobox", { name: "Show" });
+  await expect(show).toBeVisible();
+  await show.selectOption({ label });
+  await expect(page.locator("[data-architecture-canvas]")).toHaveAttribute("data-layout-status", "ready");
+}
+
 test.beforeEach(async ({ page }, testInfo) => {
   await openArchitectureCanvas(page, testInfo);
 });
@@ -145,6 +283,7 @@ test("architecture canvas renders typed large topology, ports, and nested owners
   await expect(page.locator('[data-workspace-kind="architecture"]')).toBeVisible();
   await expect(canvas).toHaveAttribute("data-layout-engine", "elk");
   await expect(canvas).toHaveAttribute("data-layout-status", "ready");
+  await selectShowScope(page, "All Components");
   await expect(viewport).toHaveCount(1);
   await expect(viewport.locator("[data-architecture-node]"))
     .toHaveCount(activeCount(fixture.content.nodes, "proposed"));
@@ -169,6 +308,109 @@ test("architecture canvas renders typed large topology, ports, and nested owners
   )).toBeVisible();
 });
 
+test("architecture canvas renders envelope Decision Options and reports them as visible Feedback Components", async ({ page }) => {
+  const candidate = architectureFixture();
+  const options = [
+    { id: "foreground-wait", frame_id: "topology", label: "Foreground Wait" },
+    { id: "channel-delivery", frame_id: "topology", label: "Channel delivery" },
+  ];
+  delete candidate.revision;
+  candidate.components.push(...options);
+  candidate.frames[0]!.component_ids.push(...options.map(option => option.id));
+  candidate.decisions.push({
+    id: "feedback-receiver",
+    title: "Choose the feedback receiver",
+    multiselect: false,
+    option_component_ids: options.map(option => option.id),
+  });
+  const document = normalizeWorkspaceDocument(candidate, {
+    contentValidator: normalizeKnownWorkspaceContent,
+  });
+  fs.writeFileSync(
+    path.join(app!.contentDir, "workspace.json"),
+    `${JSON.stringify(document)}\n`,
+    { mode: 0o600 },
+  );
+  await page.getByLabel("Document status")
+    .getByRole("button", { name: "Refresh Visual Session" })
+    .click();
+
+  await expect(page.getByRole("region", { name: "Decisions" })).toBeVisible();
+  const foreground = page.getByRole("button", { name: "Foreground Wait", exact: true });
+  const channel = page.getByRole("button", { name: "Channel delivery", exact: true });
+  await expect(foreground).toBeVisible();
+  await expect(channel).toBeVisible();
+  await expect.poll(async () => (
+    await presentedArchitectureComponentIds(page, candidate.content.annotation_targets)
+  ).length).toBeGreaterThan(0);
+  const presentedTopologyIds = await presentedArchitectureComponentIds(
+    page,
+    candidate.content.annotation_targets,
+  );
+  await expect.poll(() => feedbackOptionIds(page)).toEqual([
+    ...new Set([...presentedTopologyIds, ...options.map(option => option.id)]),
+  ].sort());
+
+  await channel.click();
+  await expect(channel).toHaveAttribute("aria-pressed", "true");
+  await expect(foreground).toHaveAttribute("aria-pressed", "false");
+});
+
+test("architecture canvas presents a Decision-only Frame without repeating the topology", async ({ page }) => {
+  const candidate = architectureFixture();
+  const options = [
+    { id: "tool-render", frame_id: "mechanism", label: "Tool-rendered component" },
+    { id: "structured-output", frame_id: "mechanism", label: "Structured turn output" },
+  ];
+  delete candidate.revision;
+  candidate.components.push(...options);
+  candidate.frames.push({
+    id: "mechanism",
+    title: "Choose the response mechanism",
+    component_ids: options.map(option => option.id),
+  });
+  candidate.decisions.push({
+    id: "response-mechanism",
+    title: "How should the response become a component?",
+    multiselect: false,
+    option_component_ids: options.map(option => option.id),
+  });
+  const document = normalizeWorkspaceDocument(candidate, {
+    contentValidator: normalizeKnownWorkspaceContent,
+  });
+  fs.writeFileSync(
+    path.join(app!.contentDir, "workspace.json"),
+    `${JSON.stringify(document)}\n`,
+    { mode: 0o600 },
+  );
+  await page.getByLabel("Document status")
+    .getByRole("button", { name: "Refresh Visual Session" })
+    .click();
+  await page.getByRole("tab", { name: "Choose the response mechanism" }).click();
+
+  await expect(page.getByRole("region", { name: "Decisions" })).toBeVisible();
+  await expect(page.locator("[data-architecture-canvas]")).toHaveCount(0);
+  await expect.poll(() => feedbackOptionIds(page)).toEqual(
+    options.map(option => option.id).sort(),
+  );
+
+  const structuredOutput = page.getByRole("button", { name: "Structured turn output", exact: true });
+  await structuredOutput.click();
+  await expect(structuredOutput).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("Component", { exact: true })).toHaveValue("structured-output");
+  await expect(structuredOutput).toHaveAttribute("data-annotation-selected", "true");
+  await page.getByRole("button", { name: "Save feedback batch" }).click();
+  await expect.poll(() => app?.store.snapshot().events.filter(event => event.type === "user.turn").length)
+    .toBe(1);
+  const feedback = app!.store.snapshot().events.find(event => event.type === "user.turn");
+  expect(feedback?.choices).toEqual([{
+    groupId: "response-mechanism",
+    componentId: "structured-output",
+    value: "structured-output",
+    label: "Structured turn output",
+  }]);
+});
+
 test("architecture canvas names its inspector complementary landmark", async ({ page }) => {
   await expect(page.getByRole("complementary", { name: "Architecture inspector" })).toBeVisible();
 });
@@ -179,6 +421,78 @@ test("architecture canvas exposes one named graph application inside a named reg
   await expect(page.getByRole("application")).toHaveCount(1);
 });
 
+test("architecture canvas defaults a large graph to a compact active Scenario Path scope", async ({ page }) => {
+  const fixture = architectureFixture();
+  const proposedPath = fixture.content.scenarios[0]!.paths.proposed;
+  const show = page.getByRole("combobox", { name: "Show" });
+
+  await expect(show).toBeVisible();
+  await expect(show.locator("option")).toHaveCount(3);
+  await expect(show.getByRole("option", { name: "All Components", exact: true })).toHaveCount(1);
+  await expect(show.getByRole("option", { name: "Scenario Path", exact: true })).toHaveCount(1);
+  await expect(show.getByRole("option", { name: "Selected Component", exact: true })).toHaveCount(1);
+  await expect(show.locator("option:checked")).toHaveText("Scenario Path");
+  await expect.poll(() => graphIds(page)).toEqual({
+    edges: [...proposedPath.edge_ids].sort(),
+    nodes: [...proposedPath.node_ids].sort(),
+  });
+  await expectFeedbackMatchesPresentedScope(page, fixture.content.annotation_targets, "Scenario Path scope");
+
+  const scenarioGeometry = await graphGeometry(page);
+  await selectShowScope(page, "All Components");
+  await expect.poll(() => graphIds(page)).toEqual({
+    edges: fixture.content.edges.filter(edge => edge.modes.includes("proposed")).map(edge => edge.id).sort(),
+    nodes: fixture.content.nodes.filter(node => node.modes.includes("proposed")).map(node => node.id).sort(),
+  });
+  await expectFeedbackMatchesPresentedScope(page, fixture.content.annotation_targets, "All Components scope");
+
+  const allGeometry = await graphGeometry(page);
+  expect(
+    scenarioGeometry.diagonal,
+    "Scenario Path layout must use less than half the full graph span",
+  ).toBeLessThan(allGeometry.diagonal * 0.5);
+
+  const allDeliveryPosition = allGeometry.centers["delivery-core"]!;
+  await selectShowScope(page, "Scenario Path");
+  await expect(page.locator("[data-architecture-node][data-node-id]")).toHaveCount(proposedPath.node_ids.length);
+  await selectShowScope(page, "All Components");
+  await expect(page.locator("[data-architecture-node][data-node-id]"))
+    .toHaveCount(activeCount(fixture.content.nodes, "proposed"));
+  const restoredDeliveryPosition = (await graphGeometry(page)).centers["delivery-core"]!;
+  expect(Math.abs(restoredDeliveryPosition.x - allDeliveryPosition.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(restoredDeliveryPosition.y - allDeliveryPosition.y)).toBeLessThanOrEqual(1);
+});
+
+test("Selected Component scope presents the selected node and its direct one-hop graph", async ({ page }) => {
+  const fixture = architectureFixture();
+  const selectedId = "delivery-core";
+  const incidentEdges = fixture.content.edges.filter(edge => (
+    edge.modes.includes("proposed")
+    && (edge.source.node_id === selectedId || edge.target.node_id === selectedId)
+  ));
+  const oneHopNodeIds = [...new Set([
+    selectedId,
+    ...incidentEdges.flatMap(edge => [edge.source.node_id, edge.target.node_id]),
+  ])].sort();
+
+  const selectedNode = page.locator(
+    `[data-architecture-node][data-node-id="${selectedId}"]`,
+  );
+  await selectedNode.click();
+  await expect(selectedNode).toHaveAttribute("data-focused", "true");
+  await selectShowScope(page, "Selected Component");
+
+  await expect.poll(() => graphIds(page)).toEqual({
+    edges: incidentEdges.map(edge => edge.id).sort(),
+    nodes: oneHopNodeIds,
+  });
+  await expectFeedbackMatchesPresentedScope(
+    page,
+    fixture.content.annotation_targets,
+    "Selected Component scope",
+  );
+});
+
 test("architecture canvas keeps one exclusive viewport and shared node positions stable across modes", async ({ page }) => {
   const fixture = architectureFixture();
   const stateTabs = page.getByRole("tablist", { name: "Architecture state" });
@@ -186,6 +500,7 @@ test("architecture canvas keeps one exclusive viewport and shared node positions
   const proposed = stateTabs.getByRole("tab", { name: "Proposed" });
   const deliveryCore = page.locator('[data-brainstorm-id="delivery-core"][data-architecture-node]');
 
+  await selectShowScope(page, "All Components");
   await expect(proposed).toHaveAttribute("aria-selected", "true");
   await expect(page.locator("[data-architecture-viewport]:visible")).toHaveCount(1);
   await expect(page.locator('[data-brainstorm-id="codex-idle-worker"][data-architecture-node]')).toBeVisible();
@@ -338,9 +653,13 @@ test("architecture canvas supports scenario, camera, focus, and annotation workf
 
   await scenario.selectOption("feedback-delivery");
   await expect(page.locator('[data-scenario-path][data-scenario-id="feedback-delivery"]')).not.toHaveCount(0);
-  await expect(page.locator(
+  const scenarioEdge = page.locator(
     '[data-brainstorm-id="edge-004"][data-architecture-edge][data-scenario-path]',
-  )).toBeVisible();
+  );
+  await expect(scenarioEdge).toHaveCount(1);
+  expect(await scenarioEdge.locator(".architecture-edge-path").evaluate(path => (
+    (path as SVGPathElement).getTotalLength()
+  ))).toBeGreaterThan(4);
 
   const controls = page.locator("[data-camera-controls]");
   const initialNode = await requiredBox(deliveryCore, "Delivery core before zoom");
@@ -365,7 +684,18 @@ test("architecture canvas supports scenario, camera, focus, and annotation workf
   await expect(deliveryCore).toHaveAttribute("data-focused", "true");
   await expect(page.locator("[data-architecture-inspector]")).toContainText("Delivery core");
 
-  await page.getByLabel("Component").selectOption("delivery-core");
+  const componentSelect = page.getByLabel("Component", { exact: true });
+  await deliveryCore.locator("strong").click();
+  await expect(componentSelect).toHaveValue("delivery-core");
+  await expect(deliveryCore).toHaveAttribute("data-annotation-selected", "true");
+  await expect(deliveryCore).toHaveAttribute("data-focused", "true");
+  const selectedNodeStyle = await deliveryCore.evaluate(element => {
+    const style = getComputedStyle(element);
+    return { outlineStyle: style.outlineStyle, outlineWidth: style.outlineWidth };
+  });
+  expect(selectedNodeStyle.outlineStyle).not.toBe("none");
+  expect(Number.parseFloat(selectedNodeStyle.outlineWidth)).toBeGreaterThan(0);
+
   const targetedNote = page.getByLabel("Targeted note");
   await targetedNote.fill("Keep retry ownership explicit at this boundary.");
   await page.getByRole("button", { name: "Add targeted note" }).click();
@@ -375,7 +705,10 @@ test("architecture canvas supports scenario, camera, focus, and annotation workf
   await expect(pendingFeedback).toContainText("Delivery core");
   await expect(targetedNote).toBeFocused();
 
-  await page.getByLabel("Component").selectOption("edge-004");
+  await scenarioEdge.locator(".architecture-edge-hit").click({ force: true });
+  await expect(componentSelect).toHaveValue("edge-004");
+  await expect(scenarioEdge).toHaveAttribute("data-annotation-selected", "true");
+  await expect(deliveryCore).not.toHaveAttribute("data-annotation-selected", "true");
   await targetedNote.fill("Show the App Server protocol on this edge.");
   await page.getByRole("button", { name: "Add targeted note" }).click();
   await expect(targetedNote).toBeFocused();
@@ -415,5 +748,5 @@ test("architecture canvas keeps mode, focus, annotation, and camera controls key
   const controls = await requiredBox(page.locator("[data-camera-controls]"), "mobile camera controls");
   expect(controls.x).toBeGreaterThanOrEqual(0);
   expect(controls.x + controls.width).toBeLessThanOrEqual(390);
-  await expect(page.getByLabel("Component")).toBeVisible();
+  await expect(page.getByLabel("Component", { exact: true })).toBeVisible();
 });

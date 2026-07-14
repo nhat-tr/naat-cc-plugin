@@ -87,6 +87,7 @@
   min-width: 0;
 }
 
+.architecture-show,
 .architecture-scenario {
   display: inline-flex;
   flex: 1 1 15rem;
@@ -98,11 +99,19 @@
   font-weight: 700;
 }
 
+.architecture-show svg,
 .architecture-scenario svg {
   flex: 0 0 auto;
   color: #396b91;
 }
 
+.architecture-show > span,
+.architecture-scenario > span {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.architecture-show select,
 .architecture-scenario select {
   flex: 1 1 auto;
   min-width: 7rem;
@@ -295,7 +304,7 @@
 .architecture-node {
   --node-accent: #486d88;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 0.25rem;
   width: 100%;
   height: 100%;
@@ -307,6 +316,22 @@
   color: #182a37;
   padding: 0.55rem 0.6rem 0.45rem;
   box-shadow: 0 2px 7px rgb(26 45 58 / 10%);
+}
+
+.architecture-node-points {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0 0 0 1rem;
+  color: #344b5b;
+  font-size: 0.625rem;
+  line-height: 1.3;
+}
+
+.architecture-node-points li {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .architecture-node-adapter { --node-accent: #7b5aa6; }
@@ -463,6 +488,15 @@
   opacity: 1;
 }
 
+.architecture-edge[data-annotation-selected="true"] {
+  opacity: 1;
+}
+
+.architecture-edge[data-annotation-selected="true"] .architecture-edge-path {
+  stroke: var(--vc-focus);
+  stroke-width: 4.5;
+}
+
 .architecture-inspector {
   display: flex;
   flex-direction: column;
@@ -601,12 +635,14 @@
     width: 100%;
   }
 
+  .architecture-show,
   .architecture-scenario {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     flex-basis: 100%;
   }
 
+  .architecture-show select,
   .architecture-scenario select {
     grid-column: 1 / -1;
     width: 100%;
@@ -642,12 +678,14 @@
     width: 100%;
   }
 
+  .architecture-show,
   .architecture-scenario {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
     flex-basis: 100%;
   }
 
+  .architecture-show select,
   .architecture-scenario select {
     grid-column: 1 / -1;
     width: 100%;

@@ -332,6 +332,7 @@ function reviewDraft(workId) {
           id: acceptanceCriterionId,
           component_id: 'ac-1',
           title: 'Replace with one approved Acceptance Criterion',
+          points: ['State the observable intent this criterion protects.'],
         }],
       },
       review_slices: [{
@@ -339,6 +340,7 @@ function reviewDraft(workId) {
         task_id: taskId,
         stream_id: '1',
         title: 'Replace with the approved plan task',
+        points: ['Review the bounded implementation evidence for this slice.'],
         acceptance_criteria: [acceptanceCriterionId],
         expected_files: [sourcePath],
         verification_command: 'replace-with-verification-command',

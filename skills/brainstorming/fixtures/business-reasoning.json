@@ -13,7 +13,7 @@
       "label": "Retention cohort analysis"
     }
   ],
-  "revision": "3676c060",
+  "revision": "1befeac1",
   "frames": [
     {
       "id": "journey",
@@ -21,7 +21,13 @@
       "component_ids": [
         "stage-discover",
         "stage-evaluate",
-        "stage-adopt"
+        "stage-adopt",
+        "stage-discover-p1",
+        "stage-discover-p2",
+        "stage-evaluate-p1",
+        "stage-evaluate-p2",
+        "stage-adopt-p1",
+        "stage-adopt-p2"
       ]
     }
   ],
@@ -40,6 +46,36 @@
       "id": "stage-adopt",
       "frame_id": "journey",
       "label": "Adopt"
+    },
+    {
+      "id": "stage-discover-p1",
+      "frame_id": "journey",
+      "label": "Discover · point 1: The problem is frequent enough to matter"
+    },
+    {
+      "id": "stage-discover-p2",
+      "frame_id": "journey",
+      "label": "Discover · point 2: The current workaround may already be sufficient"
+    },
+    {
+      "id": "stage-evaluate-p1",
+      "frame_id": "journey",
+      "label": "Evaluate · point 1: Value must exceed the switching cost"
+    },
+    {
+      "id": "stage-evaluate-p2",
+      "frame_id": "journey",
+      "label": "Evaluate · point 2: Concierge trial measures willingness to change"
+    },
+    {
+      "id": "stage-adopt-p1",
+      "frame_id": "journey",
+      "label": "Adopt · point 1: Time-to-value is observable"
+    },
+    {
+      "id": "stage-adopt-p2",
+      "frame_id": "journey",
+      "label": "Adopt · point 2: Retention tests whether the value repeats"
     }
   ],
   "decisions": [],

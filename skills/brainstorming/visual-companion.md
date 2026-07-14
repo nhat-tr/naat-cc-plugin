@@ -75,9 +75,13 @@ The first output record contains `connection_url`, `screen_file`, `state_dir`, a
 
 Sessions default to `$CLAUDE_SCRATCH_DIR/<repo>/brainstorm/<session-id>`. Use `--project-dir` only when the user explicitly asks to retain the visual session.
 
-## Scaffold and Publish a Visual Document
+## Architecture Normal Path
 
-For new work, scaffold the v2 Workspace Kind selected above. Replace the example Work ID with the Work ID for the current intent-to-outcome body of work:
+For a new Architecture Canvas, stop here and read `references/architecture-visual.md`. Author the compact Architecture Draft and run one foreground `visual-session.cjs present --draft ...`; its compiler derives the v2 envelope and Revision, runs ELK render preflight, and starts directly on v2 without `start` or `migrate`.
+
+## Other Workspace Kinds and Canonical Compatibility
+
+For Product, Research, Business, Review, or maintenance of a full canonical Architecture document, scaffold the v2 Workspace Kind selected above. Replace the example Work ID with the Work ID for the current intent-to-outcome body of work:
 
 ```bash
 node <skill-dir>/scripts/visual-session.cjs scaffold \
@@ -113,7 +117,7 @@ node <skill-dir>/scripts/visual-session.cjs scaffold \
 
 Each command emits a normalized v2 envelope and schema-valid content for exactly one Workspace Kind. Edit the draft's content and stable Component identities with the runtime file editor; do not hand-author a different kind's content shape. The v2 Visual Document hard limit is 512 KiB. Include only evidence and review detail that serves the current decision, and do not generate per-screen HTML, React, CSS, JavaScript, dependencies, or build output.
 
-A new Visual Session starts on the v1 compatibility document so backout remains available. Before the first v2 Publish, migrate the active session once with the same Work ID and Workspace Kind used by the scaffold:
+A Visual Session created with the compatibility `start` command begins on v1 so backout remains available. Before its first v2 Publish, migrate it once with the same Work ID and Workspace Kind used by the scaffold. The Architecture `present --draft` path does not use this compatibility lifecycle.
 
 ```bash
 node <skill-dir>/scripts/visual-session.cjs migrate \
@@ -174,7 +178,7 @@ The CLI Wait is recovery for environments where the Visual Companion MCP server 
 node <skill-dir>/scripts/visual-session.cjs wait --timeout-ms 900000
 ```
 
-Do not use `codex exec resume`, `claude --resume`, CLI `resume`, a background subagent, a second model process, or repeated drain/status calls as live delivery. They do not complete the original active tool call and waste tokens.
+Run CLI Wait as one blocking foreground command. Never launch it with a background flag. Do not use `codex exec resume`, `claude --resume`, CLI `resume`, a background subagent, a second model process, or repeated drain/status calls as live delivery. They do not complete the original active tool call and waste tokens.
 
 ### Runtime registration and idle delivery
 

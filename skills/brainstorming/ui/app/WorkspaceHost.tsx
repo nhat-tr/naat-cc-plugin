@@ -1,4 +1,10 @@
-import { type CSSProperties, type ReactNode } from "react";
+import {
+  type CSSProperties,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+} from "react";
 
 import { FrameNavigator, type WorkspaceFrame } from "../shared/FrameNavigator";
 import { InlineText } from "../shared/InlineText";
@@ -99,6 +105,74 @@ function ComponentChangeFlag({ changes, id }: { changes: ChangeFlags; id: string
   return state
     ? <span className={`component-flag flag-${state}`} data-primitive="flag">{state}</span>
     : null;
+}
+
+function WorkspaceDecisions({
+  activeComponentIds,
+  choices,
+  components,
+  decisions,
+  onChoice,
+  readOnly,
+}: {
+  activeComponentIds: Set<string>;
+  choices: Choice[];
+  components: WorkspaceComponent[];
+  decisions: WorkspaceDecision[];
+  onChoice: (choice: Choice, selected: boolean, multiselect: boolean) => void;
+  readOnly: boolean;
+}) {
+  const componentById = new Map(components.map(component => [component.id, component]));
+  const firstDecisionByOption = new Map<string, string>();
+  for (const decision of decisions) {
+    for (const componentId of decision.option_component_ids) {
+      if (!firstDecisionByOption.has(componentId)) firstDecisionByOption.set(componentId, decision.id);
+    }
+  }
+  const visibleDecisions = decisions.map(decision => ({
+    decision,
+    optionIds: decision.option_component_ids.filter(componentId => activeComponentIds.has(componentId)),
+  })).filter(entry => entry.optionIds.length > 0);
+  if (visibleDecisions.length === 0) return null;
+
+  return (
+    <section className="decisions" aria-label="Decisions">
+      {visibleDecisions.map(({ decision, optionIds }) => (
+        <div className="decision-group" key={decision.id}>
+          <h2>{decision.title}</h2>
+          <div className="decision-options">
+            {optionIds.map(componentId => {
+              const component = componentById.get(componentId);
+              if (!component) return null;
+              const ownsComponentIdentity = firstDecisionByOption.get(componentId) === decision.id;
+              const selected = isChoiceSelected(choices, component.id, decision.id);
+              const choose = (): void => onChoice({
+                groupId: decision.id,
+                componentId: component.id,
+                value: component.id,
+                label: component.label,
+              }, !selected, decision.multiselect);
+              return (
+                <button
+                  aria-pressed={selected}
+                  className={`decision-option${selected ? " selected" : ""}`}
+                  data-brainstorm-id={ownsComponentIdentity ? component.id : undefined}
+                  data-brainstorm-label={component.label}
+                  data-choice-component-id={!ownsComponentIdentity ? component.id : undefined}
+                  disabled={readOnly}
+                  key={component.id}
+                  onClick={choose}
+                  type="button"
+                >
+                  {component.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
 }
 
 function ToneLabel({ tone }: { tone: string }) {
@@ -291,7 +365,7 @@ function LegacySection({ changes, choices, index, onChoice, readOnly, section }:
             const id = text(option.id);
             const label = text(option.label, id);
             const tone = text(option.tone, "neutral");
-            const selected = isChoiceSelected(choices, id);
+            const selected = isChoiceSelected(choices, id, groupId);
             const choose = (): void => onChoice({ groupId, componentId: id, value: id, label }, !selected, multiselect);
             return (
               <button
@@ -405,6 +479,41 @@ export function WorkspaceHost({
   onPresentedComponentIdsChange,
   readOnly,
 }: WorkspaceHostProps) {
+  const presentedDecisionOptionIds = useMemo(() => {
+    if (documentValue.version === 1 || documentValue.workspace_kind === "product") return [];
+    const frame = documentValue.frames.find(candidate => candidate.id === activeFrameId)
+      ?? documentValue.frames[0];
+    if (!frame) return [];
+    const frameComponentIds = new Set(frame.component_ids);
+    return [...new Set(documentValue.decisions
+      .flatMap(decision => decision.option_component_ids)
+      .filter(componentId => frameComponentIds.has(componentId)))];
+  }, [activeFrameId, documentValue]);
+  const showPurposeComposition = useMemo(() => {
+    if (documentValue.version === 1 || documentValue.workspace_kind === "product") return true;
+    const frame = documentValue.frames.find(candidate => candidate.id === activeFrameId)
+      ?? documentValue.frames[0];
+    if (!frame) return false;
+    const decisionOptionIds = new Set(documentValue.decisions
+      .flatMap(decision => decision.option_component_ids));
+    return frame.component_ids.some(componentId => !decisionOptionIds.has(componentId));
+  }, [activeFrameId, documentValue]);
+  const reportPurposeComponentIds = useCallback((componentIds: string[]): void => {
+    onPresentedComponentIdsChange([
+      ...new Set([...componentIds, ...presentedDecisionOptionIds]),
+    ]);
+  }, [onPresentedComponentIdsChange, presentedDecisionOptionIds]);
+
+  useEffect(() => {
+    if (
+      documentValue.version === 2
+      && documentValue.workspace_kind !== "product"
+      && !showPurposeComposition
+    ) {
+      reportPurposeComponentIds([]);
+    }
+  }, [documentValue, reportPurposeComponentIds, showPurposeComposition]);
+
   const legacy = embeddedLegacyDocument(documentValue);
   if (documentValue.version === 1) {
     return <LegacyRenderer changes={changes} choices={choices} documentValue={documentValue} onChoice={onChoice} readOnly={readOnly} />;
@@ -413,12 +522,7 @@ export function WorkspaceHost({
   if (!activeFrame) return null;
   const componentById = new Map(documentValue.components.map(component => [component.id, component]));
   const decisionOptionIds = new Set(documentValue.decisions.flatMap(decision => decision.option_component_ids));
-  const firstDecisionByOption = new Map<string, string>();
-  for (const decision of documentValue.decisions) {
-    for (const componentId of decision.option_component_ids) {
-      if (!firstDecisionByOption.has(componentId)) firstDecisionByOption.set(componentId, decision.id);
-    }
-  }
+  const activeComponentIds = new Set(activeFrame.component_ids);
   const purposePanels = (content: ReactNode): ReactNode => (
     <>
       <section
@@ -450,13 +554,25 @@ export function WorkspaceHost({
       documentValue,
       onChoice,
       onFrameSelect,
-      onPresentedComponentIdsChange,
+      onPresentedComponentIdsChange: reportPurposeComponentIds,
       readOnly,
     });
     return (
       <div className="workspace-host" data-workspace-kind={documentValue.workspace_kind}>
         <FrameNavigator activeFrameId={activeFrame.id} frames={documentValue.frames} onSelect={onFrameSelect} />
-        {documentValue.workspace_kind === "product" ? composition : purposePanels(composition)}
+        {documentValue.workspace_kind === "product" ? composition : purposePanels(
+          <>
+            <WorkspaceDecisions
+              activeComponentIds={activeComponentIds}
+              choices={choices}
+              components={documentValue.components}
+              decisions={documentValue.decisions}
+              onChoice={onChoice}
+              readOnly={readOnly}
+            />
+            {showPurposeComposition ? composition : null}
+          </>,
+        )}
         {changes.removed.length > 0 ? (
           <p className="changes-strip" role="status">Removed in this Revision: {changes.removed.map(item => item.label).join(" · ")}</p>
         ) : null}
@@ -502,40 +618,6 @@ export function WorkspaceHost({
           </section>
         );
       })}
-
-      {!legacy && documentValue.decisions.length > 0 ? (
-        <section className="decisions" aria-label="Decisions">
-          {documentValue.decisions.map(decision => (
-            <div className="decision-group" key={decision.id}>
-              <h2>{decision.title}</h2>
-              <div className="decision-options">
-                {decision.option_component_ids.map(componentId => {
-                  const component = componentById.get(componentId);
-                  if (!component) return null;
-                  const ownsComponentIdentity = firstDecisionByOption.get(componentId) === decision.id;
-                  const selected = isChoiceSelected(choices, component.id);
-                  const choose = (): void => onChoice({ groupId: decision.id, componentId: component.id, value: component.id, label: component.label }, !selected, decision.multiselect);
-                  return (
-                    <button
-                      aria-pressed={selected}
-                      className={`decision-option${selected ? " selected" : ""}`}
-                      data-brainstorm-id={ownsComponentIdentity ? component.id : undefined}
-                      data-brainstorm-label={component.label}
-                      data-choice-component-id={!ownsComponentIdentity ? component.id : undefined}
-                      disabled={readOnly}
-                      key={component.id}
-                      onClick={choose}
-                      type="button"
-                    >
-                      {component.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </section>
-      ) : null}
 
       {changes.removed.length > 0 ? (
         <p className="changes-strip" role="status">Removed in this Revision: {changes.removed.map(item => item.label).join(" · ")}</p>

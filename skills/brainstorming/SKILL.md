@@ -10,9 +10,9 @@ Protect intent without turning ordinary developer work into a long approval cere
 <HARD-GATE>
 Do not write code, scaffold, install dependencies, or invoke implementation until the design is approved. Read-only repository and dependency reconnaissance is allowed and required when it can answer a design question.
 
-When the user explicitly requests a live visual interview, the reusable visual shell and disposable `screen.json` documents under `$CLAUDE_SCRATCH_DIR` are allowed before approval. They are discussion instruments, not implementation, and must not introduce project dependencies.
+When the user explicitly requests a live visual interview, the reusable Visual Shell and disposable Visual Documents under `$CLAUDE_SCRATCH_DIR` are allowed before approval. They are discussion instruments, not implementation, and must not introduce project dependencies.
 
-Every visual during brainstorming — including UI screen proposals — goes through `visual-companion.md` and its validated `screen.json` grammar (`mockup` sections with typed UI elements are the prototype channel). Never invoke artifact-design, frontend-design, or dataviz for a brainstorming visual, and never hand-build HTML/React for one.
+Every visual during brainstorming routes through this skill's Visual Companion. New work uses a purpose-specific v2 `workspace.json`; `screen.json` and its `mockup` grammar are v1 compatibility only. Never invoke artifact-design, frontend-design, or dataviz for a brainstorming visual, and never hand-build HTML/React for one.
 </HARD-GATE>
 
 ## Workflow
@@ -65,13 +65,17 @@ For discussions longer than roughly five Q&A turns, emit a short pulse: Purpose,
 ## Bound Repository Reconnaissance
 
 - Search symbols first, then read exact ranges. Do not inject whole source files, generated metadata, package XML, or broad multi-file dumps into the main conversation.
-- Before the Core Anchor, use at most one main-model reconnaissance batch and keep returned text near 12 KB or less. Defer evidence that matters only to an unchosen branch.
+- Before the Core Anchor, use at most one main-model reconnaissance batch. Each reconnaissance cell must request at most 2,000 output tokens, and combined reconnaissance output must stay at or below 12 KB. Narrow the query instead of raising either cap. Defer evidence that matters only to an unchosen branch.
 - Group independent read-only checks before reasoning so each small result does not wake the expensive coordinator separately.
 - Do not reread a skill reference or repository range already observed in the same logical turn.
+- For web research, batch up to three independent searches in one call with `response_length: "short"`, then open only exact load-bearing primary sources. Never request `response_length: "long"` in the coordinator context.
 - For small work, inspect directly; a model handoff costs more than it saves.
 - For unfamiliar frameworks, more than roughly six relevant files, or evidence likely to exceed the main-context budget, read `evidence-scout.md` and run one bounded scout. Do not perform the same broad reconnaissance before and after scouting.
+- Generic `Agent/Explore` delegation is forbidden for bounded reconnaissance. Use the configured lower-tier evidence scout so model, effort, input, and output budgets remain enforced.
 
 The scout extracts evidence only. The coordinator owns the Core Anchor, verifies every load-bearing citation, resolves framework capability, compares approaches, and writes the design. Never delegate architecture or treat a scout observation as verified merely because it is structured.
+
+Use either direct reconnaissance or one Evidence Scout, never both over the same scope. A scout packet replaces broad coordinator reads; verify only the exact load-bearing ranges it cites.
 
 ## Explore Approaches Without Inventing Architecture
 
@@ -161,8 +165,16 @@ Default to terminal dialogue. When the user explicitly requests a **live visual 
 
 Treat any of these as that explicit request: the word `visually` or `visual` in the brainstorming invocation (for example `/brainstorming visually <target>`), "show me a visual", or "I want to see it". Route directly to this companion — do not load artifact or design skills for it, and do not search the filesystem: `visual-companion.md` lives beside this SKILL.md in the same skill directory.
 
-Read `visual-companion.md` only when starting a visual interview. For new work, scaffold and edit the validated v2 `workspace.json`; the reusable Visual Shell owns HTML, layout, annotation, chat history, and stable Component rendering. Choose exactly one Workspace Kind from the user's decision: Product Concept Studio for comparable UI concepts, Architecture Canvas for topology and ownership, Research Evidence Board for sourced claims and unknowns, Business Reasoning Canvas for actors/outcomes/experiments, or Feature Review Workbench for approved intent against implementation evidence. Profiles and `screen.json` are v1 compatibility only. Visual polish must serve comparison and traceability, not compete with them.
+Choose exactly one Workspace Kind from the user's decision: Product Concept Studio for comparable UI concepts, Architecture Canvas for topology and ownership, Research Evidence Board for sourced claims and unknowns, Business Reasoning Canvas for actors/outcomes/experiments, or Feature Review Workbench for approved intent against implementation evidence. For Architecture Canvas, read only `references/architecture-visual.md` on the normal path; do not load `visual-companion.md`, schemas, or generated assets unless recovery is required. For other Workspace Kinds, read only the relevant range of `visual-companion.md`. The reusable Visual Shell owns HTML, layout, annotation, chat history, and stable Component rendering.
 
-Keep the server in the foreground. Browser feedback is one persisted batch; after sharing the visual URL, invoke one blocking `wait_for_feedback` MCP tool call with `{"timeoutMs":900000}` from this same conversation. It completes the active tool call with the oldest pending batch, and you respond in the same active agent turn. When that MCP tool is unavailable, use one `visual-session.cjs wait --timeout-ms 900000` as recovery. Use zero agent polling: never repeat drain/status on a timer, and never spawn or resume another agent and call it the same session.
+Run routine Visual Session commands inside the active sandbox. Do not set `require_escalated` proactively for scratch reads or writes, `scaffold`, `present`, `migrate`, `publish`, `wait`, `drain`, or `reply`; first invoke the command normally and let the configured writable roots and network policy apply. If a command is genuinely denied and interactive approvals are enabled, request one scoped approval for the `node <skill-dir>/scripts/visual-session.cjs` executable prefix. Never request approval separately for `scaffold`, `migrate`, `publish`, `wait`, `drain`, and `reply` in the same Visual Session.
+
+The normal visual path has at most five model-visible command boundaries: one reconnaissance batch, one `scaffold` or Architecture `present`, one `publish` when the scaffold path requires it, exactly one blocking feedback wait, and one `reply` or revision. Do not call `visual-session.cjs --help` on the normal path, do not reread a generated scaffold before editing known fields, and do not run status/drain probes between these steps. Do not poll the retained server execution handle; keep its session identifier and leave it running until shutdown.
+
+Publish only for a material Revision that changes the Visual Document. Never Publish an unchanged Revision, and do not use Publish as a validation probe; use the local normalizer or focused test instead.
+
+Keep the server in the foreground. Browser feedback is one persisted batch. If the Claude Channel delivers it, process it and call `ack_feedback` once. Otherwise use one blocking `wait_for_feedback` call with `{"timeoutMs":900000}` when that tool is callable; if it is unavailable, run one `visual-session.cjs wait --timeout-ms 900000` in the foreground. Never launch CLI Wait in the background. Use zero agent polling: never repeat drain/status on a timer, and never spawn or resume another agent and call it the same session.
+
+If foreground Wait yields a running orchestration cell, resume it once with the remaining review timeout, using at least 300000 ms. Do not create repeated 1-second or 10-second resumptions; a timeout result ends that wait boundary.
 
 Without an explicit visual request, offer the companion inline only when the first concrete visual decision appears. Do not spend a separate turn on speculative opt-in.

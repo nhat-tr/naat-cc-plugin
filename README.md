@@ -116,7 +116,9 @@ Notes:
 
 Visual interviews use one shared shell with five purpose-built Workspace Kinds.
 See the [Visual Companion operating guide](skills/brainstorming/visual-companion.md)
-for Workspace Kind selection and executable per-kind scaffold commands.
+for Workspace Kind selection. Architecture interviews use the bounded
+[Architecture visual runbook](skills/brainstorming/references/architecture-visual.md)
+and compile a minimal Draft directly into a render-preflighted v2 session.
 
 #### Pair workflows
 
@@ -203,11 +205,15 @@ scripts under `skills/pair-v2/scripts/`:
 ### Hooks
 
 `hooks/stop-gate.sh` is the Stop-hook completion gate installed by
-`install.sh` (via `hooks/hooks.json`). While `.pair/plan.md` or
-`.claude-loop.md` has unchecked `- [ ]` tasks — or `.pair/verify.sh` exists and
-fails — it blocks the agent from ending its turn as "done". Opt out per-run
-with `CLAUDE_STOP_GATE=off`; the no-progress iteration cap defaults to 5 and
-is tunable with `CLAUDE_STOP_GATE_MAX`.
+`install.sh` (via `hooks/hooks.json`). A `.pair/plan.md` gates only while a live
+Pair Loop owns `.pair/active-loop.json`; a dormant or crashed plan never blocks
+ordinary sessions. `.claude-loop.md` retains file-based activation. Unchecked
+`- [ ]` tasks, an active attempt, or a failing `.pair/verify.sh` can block the
+agent from ending its turn as "done". After the no-progress cap is exhausted,
+that Pair Loop run stays allowed to stop until task progress or a new run resets
+the gate. Opt out per-run with `PAIR_STOP_GATE=off` (legacy:
+`CLAUDE_STOP_GATE=off`); tune the default cap of 5 with
+`PAIR_STOP_GATE_MAX` (legacy: `CLAUDE_STOP_GATE_MAX`).
 
 ### Codex-Compatible Skills
 

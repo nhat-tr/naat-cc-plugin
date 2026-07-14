@@ -10,11 +10,13 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import { ReviewNavigator } from "./ReviewNavigator";
+import { ReviewPoints, reviewPointComponentIds } from "./ReviewPoints";
 import { SourceEvidencePanel } from "./SourceEvidencePanel";
 
 export interface ReviewAcceptanceCriterion {
   component_id: string;
   id: string;
+  points?: string[];
   title: string;
 }
 
@@ -39,6 +41,7 @@ export interface ReviewSlice {
   component_id: string;
   expected_files: string[];
   finding_ids: string[];
+  points?: string[];
   stream_id: string;
   task_id: string;
   title: string;
@@ -272,6 +275,7 @@ function LineageGroup({ items, kind }: { items: Array<Record<string, unknown>>; 
             <strong>{id}</strong>
             <span>{text(item.title, text(item.result, statusText(item.status)))}</span>
             <span className="review-status-label">{titleCase(statusText(item.status ?? item.result))}</span>
+            <ReviewPoints label={label} owner={item} />
           </article>
         );
       })}
@@ -369,6 +373,7 @@ function ReviewEvidencePanel({ content, selectedCriterionId, selectedSource }: {
                   {reviewer ? <small>{reviewer}</small> : null}
                 </span>
                 <span className={`review-status-label status-${status}`}>{titleCase(status)}</span>
+                <ReviewPoints label={titleCase(text(obligation.quality))} owner={obligation} />
               </article>
             );
           })}
@@ -390,6 +395,7 @@ function ReviewEvidencePanel({ content, selectedCriterionId, selectedSource }: {
               <span className={`review-status-label severity-${text(finding.severity, "medium")}`}>
                 {titleCase(text(finding.severity, "medium"))} · {titleCase(text(finding.status))}
               </span>
+              <ReviewPoints label={text(finding.title, text(finding.id))} owner={finding} />
             </article>
           ))}
         </div>
@@ -483,9 +489,12 @@ export function FeatureReviewWorkbench({
     ];
     return unique([
       activeCriterion?.component_id ?? "",
+      ...reviewPointComponentIds(activeCriterion),
       ...relevantSlices.map(slice => slice.component_id),
+      ...relevantSlices.flatMap(slice => reviewPointComponentIds(slice)),
       selectedSource?.componentId ?? "",
       ...governanceRecords.map(record => text(record.component_id)),
+      ...governanceRecords.flatMap(record => reviewPointComponentIds(record)),
     ].filter(id => id.length > 0));
   }, [acceptanceCriteria, activeCriterionId, parsed, selectedSource]);
 

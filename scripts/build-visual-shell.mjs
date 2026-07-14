@@ -8,13 +8,20 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const sourceRoot = path.join(repositoryRoot, "skills", "brainstorming", "ui");
 const outputRoot = path.join(repositoryRoot, "skills", "brainstorming", "assets", "visual-shell");
 const elkWorker = path.join(repositoryRoot, "node_modules", "elkjs", "lib", "elk-worker.min.js");
+const architectureGraph = path.join(
+  repositoryRoot,
+  "skills",
+  "brainstorming",
+  "scripts",
+  "architecture-elk-graph.cjs",
+);
 const entryPoints = {
   app: path.join(sourceRoot, "main.tsx"),
   styles: path.join(sourceRoot, "styles", "shell.css"),
 };
 
 const missingInputs = [];
-for (const input of [...Object.values(entryPoints), elkWorker]) {
+for (const input of [...Object.values(entryPoints), architectureGraph, elkWorker]) {
   try {
     const stat = await fs.stat(input);
     if (!stat.isFile()) missingInputs.push(input);

@@ -5,7 +5,14 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { isExpectedFailingTestTask, readWorkLinkage, recoverActiveAttempt, verify } = require('../scripts/pair-task');
+const {
+  beginActivePairLoop,
+  endActivePairLoop,
+  isExpectedFailingTestTask,
+  readWorkLinkage,
+  recoverActiveAttempt,
+  verify,
+} = require('../scripts/pair-task');
 const { planContractDigest } = require('../scripts/lib/pair-core');
 const {
   createWorkRoot,
@@ -76,6 +83,28 @@ test('recoverActiveAttempt classifies an interrupted attempt before retry', t =>
   assert.equal(record.disposition, 'regenerated');
   assert.equal(record.action, 'retry-infrastructure');
   assert.equal(record.valid, false);
+});
+
+test('pair-loop owns one live Active Pair Loop marker for its process lifetime', t => {
+  const root = testRepo(t);
+  const pairDir = path.join(root, '.pair');
+  const plan = path.join(pairDir, 'plan.md');
+  fs.mkdirSync(pairDir, { recursive: true });
+  fs.writeFileSync(plan, '- [ ] Task 1\n');
+
+  const active = beginActivePairLoop(root, plan);
+  const markerFile = path.join(pairDir, 'active-loop.json');
+  const marker = JSON.parse(fs.readFileSync(markerFile, 'utf8'));
+  assert.equal(marker.schema, 1);
+  assert.equal(marker.run_id, active.run_id);
+  assert.equal(marker.pid, process.pid);
+  assert.equal(marker.plan, '.pair/plan.md');
+
+  assert.throws(() => beginActivePairLoop(root, plan), /already active/i);
+  endActivePairLoop(root, { run_id: 'different-owner' });
+  assert.equal(fs.existsSync(markerFile), true, 'a different owner cannot remove the marker');
+  endActivePairLoop(root, active);
+  assert.equal(fs.existsSync(markerFile), false);
 });
 
 test('readWorkLinkage resolves the canonical Work envelope and rejects mirror tampering', t => {

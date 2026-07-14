@@ -53,6 +53,7 @@ export default defineConfig({
     {
       name: "performance",
       testMatch: "**/*.performance.spec.ts",
+      workers: 1,
     },
   ],
 });

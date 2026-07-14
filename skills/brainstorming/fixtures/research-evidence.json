@@ -33,7 +33,7 @@
       "label": "Claude preview latency probe"
     }
   ],
-  "revision": "df45873a",
+  "revision": "ba513699",
   "frames": [
     {
       "id": "board",
@@ -45,7 +45,25 @@
         "claim-parallel-delivery",
         "claim-preview-latency",
         "unknown-claude-preview",
-        "unknown-300-file"
+        "unknown-300-file",
+        "claim-durable-wait-p1",
+        "claim-durable-wait-p2",
+        "claim-durable-wait-p3",
+        "claim-durable-wait-p4",
+        "claim-mcp-active-turn-p1",
+        "claim-mcp-active-turn-p2",
+        "claim-mcp-active-turn-p3",
+        "claim-idle-ordering-p1",
+        "claim-idle-ordering-p2",
+        "claim-idle-ordering-p3",
+        "claim-parallel-delivery-p1",
+        "claim-parallel-delivery-p2",
+        "claim-preview-latency-p1",
+        "claim-preview-latency-p2",
+        "unknown-claude-preview-p1",
+        "unknown-claude-preview-p2",
+        "unknown-300-file-p1",
+        "unknown-300-file-p2"
       ]
     }
   ],
@@ -84,6 +102,96 @@
       "id": "unknown-300-file",
       "frame_id": "board",
       "label": "300-file review interaction performance"
+    },
+    {
+      "id": "claim-durable-wait-p1",
+      "frame_id": "board",
+      "label": "Durable Wait persists across a server restart · point 1: EVD-wait-durability"
+    },
+    {
+      "id": "claim-durable-wait-p2",
+      "frame_id": "board",
+      "label": "Durable Wait persists across a server restart · point 2: EVD-restart-recovery"
+    },
+    {
+      "id": "claim-durable-wait-p3",
+      "frame_id": "board",
+      "label": "Durable Wait persists across a server restart · point 3: EVD-mcp-protocol"
+    },
+    {
+      "id": "claim-durable-wait-p4",
+      "frame_id": "board",
+      "label": "Durable Wait persists across a server restart · point 4: Delivery reliability"
+    },
+    {
+      "id": "claim-mcp-active-turn-p1",
+      "frame_id": "board",
+      "label": "MCP returns the oldest batch to the active turn · point 1: EVD-mcp-protocol"
+    },
+    {
+      "id": "claim-mcp-active-turn-p2",
+      "frame_id": "board",
+      "label": "MCP returns the oldest batch to the active turn · point 2: EVD-active-turn"
+    },
+    {
+      "id": "claim-mcp-active-turn-p3",
+      "frame_id": "board",
+      "label": "MCP returns the oldest batch to the active turn · point 3: Delivery reliability"
+    },
+    {
+      "id": "claim-idle-ordering-p1",
+      "frame_id": "board",
+      "label": "Idle adapter preserves batch ordering · point 1: EVD-adapter-order"
+    },
+    {
+      "id": "claim-idle-ordering-p2",
+      "frame_id": "board",
+      "label": "Idle adapter preserves batch ordering · point 2: Delivery reliability"
+    },
+    {
+      "id": "claim-idle-ordering-p3",
+      "frame_id": "board",
+      "label": "Idle adapter preserves batch ordering · point 3: Runtime support"
+    },
+    {
+      "id": "claim-parallel-delivery-p1",
+      "frame_id": "board",
+      "label": "Parallel delivery reorders batches under load · point 1: EVD-queue-fallback"
+    },
+    {
+      "id": "claim-parallel-delivery-p2",
+      "frame_id": "board",
+      "label": "Parallel delivery reorders batches under load · point 2: Delivery reliability"
+    },
+    {
+      "id": "claim-preview-latency-p1",
+      "frame_id": "board",
+      "label": "Preview latency stays within the budget · point 1: EVD-preview-probe"
+    },
+    {
+      "id": "claim-preview-latency-p2",
+      "frame_id": "board",
+      "label": "Preview latency stays within the budget · point 2: Performance budget"
+    },
+    {
+      "id": "unknown-claude-preview-p1",
+      "frame_id": "board",
+      "label": "Whether Claude preview builds accept channels · point 1: No installed preview build available to test"
+    },
+    {
+      "id": "unknown-claude-preview-p2",
+      "frame_id": "board",
+      "label": "Whether Claude preview builds accept channels · point 2: Runtime support"
+    },
+    {
+      "id": "unknown-300-file-p1",
+      "frame_id": "board",
+      "label": "300-file review interaction performance · point 1: Not yet measured at target scale"
+    },
+    {
+      "id": "unknown-300-file-p2",
+      "frame_id": "board",
+      "label": "300-file review interaction performance · point 2: Performance budget"
     }
   ],
   "decisions": [],

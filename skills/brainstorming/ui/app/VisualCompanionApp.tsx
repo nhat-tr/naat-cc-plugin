@@ -7,21 +7,25 @@ import {
   useState,
   useSyncExternalStore,
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
 
 import { FeedbackPanel, type FeedbackComponentOption, type PresentedFeedbackThread } from "../shared/FeedbackPanel";
 import { PaneSeparator } from "../shared/PaneSeparator";
 import {
+  type Annotation,
   type FeedbackDraft,
   type FeedbackThread,
   type FeedbackThreadStatus,
   type SessionEvent,
   type SessionSnapshot,
+  annotationSummary,
   computeComponentChanges,
   createClientTurnId,
   deriveCommittedChoices,
   deriveFeedbackThreadState,
   emptySessionSnapshot,
+  groupAnnotationsByComponent,
   mergeChoiceState,
   normalizeFeedbackDraft,
   readResponseError,
@@ -43,6 +47,22 @@ import {
 
 type VisualDocument = WorkspaceEnvelope | LegacyVisualDocument;
 type Density = "comfortable" | "compact";
+
+const INTERACTIVE_DESCENDANT_SELECTOR = [
+  "button",
+  "a[href]",
+  "input",
+  "select",
+  "textarea",
+  "summary",
+  '[contenteditable="true"]',
+  '[role="button"]',
+  '[role="link"]',
+  '[role="menuitem"]',
+  '[role="option"]',
+  '[role="tab"]',
+  '[role="treeitem"]',
+].join(", ");
 
 interface EmbeddedVisualState {
   screen: unknown;
@@ -292,8 +312,10 @@ export function VisualCompanionApp() {
     identity: "",
     ids: [],
   });
+  const [annotationComponentId, setAnnotationComponentId] = useState("");
   const [workspaceCanvasWidth, setWorkspaceCanvasWidth] = useState(canvasBounds.defaultValue);
   const previousDocument = useRef<VisualDocument | null>(null);
+  const workspaceCanvas = useRef<HTMLElement>(null);
 
   const identity = documentValue?.version === 2
     ? `${documentValue.work_id}:${location.origin}${basePath}`
@@ -309,6 +331,21 @@ export function VisualCompanionApp() {
   const presentationIdentity = documentValue?.version === 2
     ? `${documentValue.revision}:${effectiveFrameId}`
     : "";
+  const allOptions = documentValue ? componentOptions(documentValue) : [];
+  const activeComponentIds = documentValue?.version === 2
+    ? new Set(documentValue.frames.find(frame => frame.id === effectiveFrameId)?.component_ids ?? [])
+    : null;
+  const reportedComponentIds = documentValue && embeddedLegacyDocument(documentValue)
+    ? activeComponentIds ?? new Set<string>()
+    : presentedComponents.identity === presentationIdentity
+      ? new Set(presentedComponents.ids)
+      : new Set<string>();
+  const options = activeComponentIds
+    ? allOptions.filter(component => activeComponentIds.has(component.id) && reportedComponentIds.has(component.id))
+    : allOptions;
+  const presentedAnnotationComponentId = options.some(component => component.id === annotationComponentId)
+    ? annotationComponentId
+    : "";
   const reportPresentedComponentIds = useCallback((componentIds: string[]): void => {
     const ids = [...new Set(componentIds)];
     setPresentedComponents(current => (
@@ -319,6 +356,112 @@ export function VisualCompanionApp() {
         : { identity: presentationIdentity, ids }
     ));
   }, [presentationIdentity]);
+
+  useEffect(() => {
+    setAnnotationComponentId("");
+  }, [presentationIdentity]);
+
+  useEffect(() => {
+    if (annotationComponentId && !presentedAnnotationComponentId) {
+      setAnnotationComponentId("");
+    }
+  }, [annotationComponentId, presentedAnnotationComponentId]);
+
+  useEffect(() => {
+    const root = workspaceCanvas.current;
+    if (!root) return;
+    const applySelection = (): void => {
+      root.querySelectorAll<HTMLElement>("[data-annotation-selected]")
+        .forEach(element => element.removeAttribute("data-annotation-selected"));
+      if (!presentedAnnotationComponentId) return;
+      const selected = [...root.querySelectorAll<HTMLElement>("[data-brainstorm-id]")]
+        .find(element => (
+          element.dataset.brainstormId === presentedAnnotationComponentId
+          && !element.closest("[hidden]")
+        ));
+      selected?.setAttribute("data-annotation-selected", "true");
+    };
+    applySelection();
+    if (!presentedAnnotationComponentId) return;
+    // React Flow replaces SVG edge children after click selection; reapply the shared marker.
+    const observer = new MutationObserver(applySelection);
+    observer.observe(root, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      root.querySelectorAll<HTMLElement>("[data-annotation-selected]")
+        .forEach(element => element.removeAttribute("data-annotation-selected"));
+    };
+  }, [documentValue, effectiveFrameId, presentedAnnotationComponentId, presentedComponents]);
+
+  useEffect(() => {
+    const root = workspaceCanvas.current;
+    if (!root) return;
+
+    const clearMarkers = (): void => {
+      root.querySelectorAll("[data-annotation-badge]").forEach(element => element.remove());
+      root.querySelectorAll<HTMLElement | SVGElement>(".has-annotations").forEach(element => {
+        element.classList.remove(
+          "has-annotations",
+          "has-pending-annotations",
+          "has-committed-annotations",
+        );
+        element.removeAttribute("data-annotation-count");
+        const originalTitle = element.getAttribute("data-annotation-original-title");
+        if (originalTitle === null) element.removeAttribute("title");
+        else element.setAttribute("title", originalTitle);
+        element.removeAttribute("data-annotation-original-title");
+      });
+    };
+
+    clearMarkers();
+    const submitted = session.events.flatMap((event): Annotation[] => (
+      event.role === "user" && Array.isArray(event.annotations) ? event.annotations : []
+    ));
+    const pendingByComponent = groupAnnotationsByComponent(draft.annotations);
+    const submittedByComponent = groupAnnotationsByComponent(submitted);
+    const componentIds = new Set([...submittedByComponent.keys(), ...pendingByComponent.keys()]);
+
+    for (const componentId of componentIds) {
+      const target = [...root.querySelectorAll<HTMLElement | SVGGraphicsElement>("[data-brainstorm-id]")]
+        .find(element => element.dataset.brainstormId === componentId && !element.closest("[hidden]"));
+      if (!target) continue;
+      const pending = pendingByComponent.get(componentId) ?? [];
+      const combined = [...(submittedByComponent.get(componentId) ?? []), ...pending];
+      const summary = annotationSummary(combined);
+      const originalTitle = target.getAttribute("title");
+      if (originalTitle !== null) target.setAttribute("data-annotation-original-title", originalTitle);
+      target.classList.add(
+        "has-annotations",
+        pending.length > 0 ? "has-pending-annotations" : "has-committed-annotations",
+      );
+      target.setAttribute("data-annotation-count", String(combined.length));
+      target.setAttribute("title", summary);
+
+      if (target instanceof SVGGraphicsElement) {
+        const bounds = target.getBBox();
+        const marker = document.createElementNS("http://www.w3.org/2000/svg", "g");
+        marker.classList.add("annotation-badge-svg");
+        marker.setAttribute("data-annotation-badge", "true");
+        marker.setAttribute("aria-label", summary);
+        marker.setAttribute("transform", `translate(${bounds.x + bounds.width}, ${bounds.y})`);
+        const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        circle.setAttribute("r", "10");
+        const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        label.textContent = String(combined.length);
+        marker.append(circle, label);
+        target.append(marker);
+      } else {
+        const marker = document.createElement("span");
+        marker.className = `annotation-badge${pending.length > 0 ? "" : " committed"}`;
+        marker.dataset.annotationBadge = "true";
+        marker.setAttribute("aria-label", summary);
+        marker.textContent = String(combined.length);
+        target.append(marker);
+      }
+    }
+
+    return clearMarkers;
+  }, [documentValue, draft.annotations, effectiveFrameId, presentedComponents, session.events]);
 
   const applyDocument = useCallback((next: VisualDocument): void => {
     setChanges(computeComponentChanges(previousDocument.current, next));
@@ -512,18 +655,26 @@ export function VisualCompanionApp() {
     : titleCase(documentValue.profile);
   const summary = documentValue.version === 1 ? documentValue.summary : legacy?.summary;
   const evidence = documentValue.version === 2 ? documentValue.evidence_refs : [];
-  const allOptions = componentOptions(documentValue);
-  const activeComponentIds = documentValue.version === 2
-    ? new Set(documentValue.frames.find(frame => frame.id === effectiveFrameId)?.component_ids ?? [])
-    : null;
-  const reportedComponentIds = embeddedLegacyDocument(documentValue)
-    ? activeComponentIds ?? new Set<string>()
-    : presentedComponents.identity === presentationIdentity
-      ? new Set(presentedComponents.ids)
-      : new Set<string>();
-  const options = activeComponentIds
-    ? allOptions.filter(component => activeComponentIds.has(component.id) && reportedComponentIds.has(component.id))
-    : allOptions;
+  const selectAnnotationComponent = (componentId: string): void => {
+    if (readOnly) return;
+    if (!componentId) {
+      setAnnotationComponentId("");
+      return;
+    }
+    if (!options.some(component => component.id === componentId)) return;
+    setAnnotationComponentId(componentId);
+  };
+  const selectClickedComponent = (event: ReactMouseEvent<HTMLElement>): void => {
+    if (readOnly || !(event.target instanceof Element)) return;
+    const component = event.target.closest("[data-brainstorm-id]");
+    const interactiveDescendant = event.target.closest(INTERACTIVE_DESCENDANT_SELECTOR);
+    const componentId = component?.getAttribute("data-brainstorm-id");
+    if (!component || !event.currentTarget.contains(component) || !componentId) return;
+    if (interactiveDescendant
+      && interactiveDescendant !== component
+      && component.contains(interactiveDescendant)) return;
+    selectAnnotationComponent(componentId);
+  };
   const latestFeedbackSeq = session.events.reduce<number | null>((latest, event) => (
     event.type === "user.turn" && Number.isInteger(event.seq)
       ? Math.max(latest ?? 0, event.seq as number)
@@ -578,7 +729,13 @@ export function VisualCompanionApp() {
       </header>
 
       <div className="workspace" data-density={density} style={workspaceStyle}>
-        <main aria-live="polite" className="workspace-canvas" id="workspace-canvas">
+        <main
+          aria-live="polite"
+          className="workspace-canvas"
+          id="workspace-canvas"
+          onClickCapture={selectClickedComponent}
+          ref={workspaceCanvas}
+        >
           <WorkspaceHost
             activeFrameId={effectiveFrameId}
             changes={changes}
@@ -606,11 +763,13 @@ export function VisualCompanionApp() {
           />
         ) : null}
         <FeedbackPanel
+          annotationComponentId={presentedAnnotationComponentId}
           components={options}
           deliveryState={deriveBrowserDeliveryState(presentedDeliveryEvidence)}
           draft={draft}
           error={error}
           events={session.events}
+          onAnnotationComponentSelect={selectAnnotationComponent}
           onClear={clearDraft}
           onDraftChange={setDraft}
           onRefresh={refresh}

@@ -9,7 +9,7 @@
       "label": "Approved device-aware triptych"
     }
   ],
-  "revision": "07320ec4",
+  "revision": "2d08c4c3",
   "frames": [
     {
       "id": "compare",
@@ -18,7 +18,32 @@
         "concept-a",
         "concept-b",
         "concept-c",
-        "difference-lens"
+        "difference-lens",
+        "concept-a-p1",
+        "concept-a-p2",
+        "concept-a-p3",
+        "concept-a-p4",
+        "concept-a-p5",
+        "concept-a-p6",
+        "concept-a-p7",
+        "concept-a-p8",
+        "concept-b-p1",
+        "concept-b-p2",
+        "concept-b-p3",
+        "concept-b-p4",
+        "concept-b-p5",
+        "concept-b-p6",
+        "concept-b-p7",
+        "concept-b-p8",
+        "concept-c-p1",
+        "concept-c-p2",
+        "concept-c-p3",
+        "concept-c-p4",
+        "concept-c-p5",
+        "concept-c-p6",
+        "concept-c-p7",
+        "concept-c-p8",
+        "concept-c-p9"
       ]
     },
     {
@@ -72,6 +97,131 @@
       "id": "focus-handoff",
       "frame_id": "focus",
       "label": "Implementation handoff"
+    },
+    {
+      "id": "concept-a-p1",
+      "frame_id": "compare",
+      "label": "Concept A · Command center · point 1: feedback-41"
+    },
+    {
+      "id": "concept-a-p2",
+      "frame_id": "compare",
+      "label": "Concept A · Command center · point 2: feedback-42"
+    },
+    {
+      "id": "concept-a-p3",
+      "frame_id": "compare",
+      "label": "Concept A · Command center · point 3: feedback-43"
+    },
+    {
+      "id": "concept-a-p4",
+      "frame_id": "compare",
+      "label": "Concept A · Command center · point 4: summary"
+    },
+    {
+      "id": "concept-a-p5",
+      "frame_id": "compare",
+      "label": "Concept A · Command center · point 5: annotations"
+    },
+    {
+      "id": "concept-a-p6",
+      "frame_id": "compare",
+      "label": "Concept A · Command center · point 6: choice"
+    },
+    {
+      "id": "concept-a-p7",
+      "frame_id": "compare",
+      "label": "Concept A · Command center · point 7: delivery-state"
+    },
+    {
+      "id": "concept-a-p8",
+      "frame_id": "compare",
+      "label": "Concept A · Command center · point 8: reply"
+    },
+    {
+      "id": "concept-b-p1",
+      "frame_id": "compare",
+      "label": "Concept B · Guided review · point 1: Evidence"
+    },
+    {
+      "id": "concept-b-p2",
+      "frame_id": "compare",
+      "label": "Concept B · Guided review · point 2: Choice"
+    },
+    {
+      "id": "concept-b-p3",
+      "frame_id": "compare",
+      "label": "Concept B · Guided review · point 3: Acknowledge"
+    },
+    {
+      "id": "concept-b-p4",
+      "frame_id": "compare",
+      "label": "Concept B · Guided review · point 4: feedback-41"
+    },
+    {
+      "id": "concept-b-p5",
+      "frame_id": "compare",
+      "label": "Concept B · Guided review · point 5: summary"
+    },
+    {
+      "id": "concept-b-p6",
+      "frame_id": "compare",
+      "label": "Concept B · Guided review · point 6: annotations"
+    },
+    {
+      "id": "concept-b-p7",
+      "frame_id": "compare",
+      "label": "Concept B · Guided review · point 7: revision"
+    },
+    {
+      "id": "concept-b-p8",
+      "frame_id": "compare",
+      "label": "Concept B · Guided review · point 8: delivery-state"
+    },
+    {
+      "id": "concept-c-p1",
+      "frame_id": "compare",
+      "label": "Concept C · Direct manipulation · point 1: concept-wall"
+    },
+    {
+      "id": "concept-c-p2",
+      "frame_id": "compare",
+      "label": "Concept C · Direct manipulation · point 2: annotation-targets"
+    },
+    {
+      "id": "concept-c-p3",
+      "frame_id": "compare",
+      "label": "Concept C · Direct manipulation · point 3: feedback-41"
+    },
+    {
+      "id": "concept-c-p4",
+      "frame_id": "compare",
+      "label": "Concept C · Direct manipulation · point 4: open"
+    },
+    {
+      "id": "concept-c-p5",
+      "frame_id": "compare",
+      "label": "Concept C · Direct manipulation · point 5: resolved"
+    },
+    {
+      "id": "concept-c-p6",
+      "frame_id": "compare",
+      "label": "Concept C · Direct manipulation · point 6: outdated"
+    },
+    {
+      "id": "concept-c-p7",
+      "frame_id": "compare",
+      "label": "Concept C · Direct manipulation · point 7: summary"
+    },
+    {
+      "id": "concept-c-p8",
+      "frame_id": "compare",
+      "label": "Concept C · Direct manipulation · point 8: choice"
+    },
+    {
+      "id": "concept-c-p9",
+      "frame_id": "compare",
+      "label": "Concept C · Direct manipulation · point 9: acknowledge"
     }
   ],
   "decisions": [
@@ -150,44 +300,101 @@
               "id": "a-queue",
               "label": "Feedback queue",
               "role": "navigation",
-              "items": ["feedback-41", "feedback-42", "feedback-43"]
+              "items": [
+                "feedback-41",
+                "feedback-42",
+                "feedback-43"
+              ]
             },
             {
               "id": "a-detail",
               "label": "Selected Feedback Batch",
               "role": "main",
-              "items": ["summary", "annotations", "choice"]
+              "items": [
+                "summary",
+                "annotations",
+                "choice"
+              ]
             },
             {
               "id": "a-handoff",
               "label": "Acknowledgement rail",
               "role": "complementary",
-              "items": ["delivery-state", "reply"]
+              "items": [
+                "delivery-state",
+                "reply"
+              ]
             }
           ]
         },
         "focus": {
           "states": [
-            { "id": "default", "label": "Default", "detail": "Queue and selected Feedback Batch are available." },
-            { "id": "loading", "label": "Loading", "detail": "Keep the queue stable while detail evidence loads." },
-            { "id": "empty", "label": "Empty", "detail": "Explain that no Feedback Batch is pending." },
-            { "id": "error", "label": "Error", "detail": "Keep the Feedback Batch selected and offer retry." }
+            {
+              "id": "default",
+              "label": "Default",
+              "detail": "Queue and selected Feedback Batch are available."
+            },
+            {
+              "id": "loading",
+              "label": "Loading",
+              "detail": "Keep the queue stable while detail evidence loads."
+            },
+            {
+              "id": "empty",
+              "label": "Empty",
+              "detail": "Explain that no Feedback Batch is pending."
+            },
+            {
+              "id": "error",
+              "label": "Error",
+              "detail": "Keep the Feedback Batch selected and offer retry."
+            }
           ],
           "responsive": [
-            { "viewport": "mobile", "behavior": "Queue becomes a compact selector above the detail surface." },
-            { "viewport": "desktop", "behavior": "Queue, detail, and acknowledgement rail remain visible together." }
+            {
+              "viewport": "mobile",
+              "behavior": "Queue becomes a compact selector above the detail surface."
+            },
+            {
+              "viewport": "desktop",
+              "behavior": "Queue, detail, and acknowledgement rail remain visible together."
+            }
           ],
           "accessibility": {
-            "landmarks": ["Feedback queue", "Selected Feedback Batch", "Acknowledgement rail"],
-            "keyboard_order": ["Feedback queue", "Selected Feedback Batch", "Acknowledge"],
-            "announcements": ["Feedback Batch selection", "Delivery state"],
+            "landmarks": [
+              "Feedback queue",
+              "Selected Feedback Batch",
+              "Acknowledgement rail"
+            ],
+            "keyboard_order": [
+              "Feedback queue",
+              "Selected Feedback Batch",
+              "Acknowledge"
+            ],
+            "announcements": [
+              "Feedback Batch selection",
+              "Delivery state"
+            ],
             "reduced_motion": "State changes use no spatial transition."
           },
           "handoff": {
-            "component_boundaries": ["FeedbackQueue", "FeedbackDetail", "AcknowledgementRail"],
-            "data_contracts": ["FeedbackBatch", "Choice", "Reply"],
-            "events": ["feedback-selected", "feedback-acknowledged"],
-            "implementation_notes": ["Preserve queue selection while detail evidence refreshes."]
+            "component_boundaries": [
+              "FeedbackQueue",
+              "FeedbackDetail",
+              "AcknowledgementRail"
+            ],
+            "data_contracts": [
+              "FeedbackBatch",
+              "Choice",
+              "Reply"
+            ],
+            "events": [
+              "feedback-selected",
+              "feedback-acknowledged"
+            ],
+            "implementation_notes": [
+              "Preserve queue selection while detail evidence refreshes."
+            ]
           }
         }
       },
@@ -207,44 +414,102 @@
               "id": "b-progress",
               "label": "Review progress",
               "role": "navigation",
-              "items": ["Evidence", "Choice", "Acknowledge"]
+              "items": [
+                "Evidence",
+                "Choice",
+                "Acknowledge"
+              ]
             },
             {
               "id": "b-step",
               "label": "Current review step",
               "role": "main",
-              "items": ["feedback-41", "summary", "annotations"]
+              "items": [
+                "feedback-41",
+                "summary",
+                "annotations"
+              ]
             },
             {
               "id": "b-context",
               "label": "Persistent context",
               "role": "complementary",
-              "items": ["revision", "delivery-state"]
+              "items": [
+                "revision",
+                "delivery-state"
+              ]
             }
           ]
         },
         "focus": {
           "states": [
-            { "id": "default", "label": "Default", "detail": "Evidence step is ready for review." },
-            { "id": "loading", "label": "Loading", "detail": "Keep progress and context visible while the current step loads." },
-            { "id": "empty", "label": "Empty", "detail": "End the flow when no Feedback Batch remains." },
-            { "id": "error", "label": "Error", "detail": "Retry the current step without losing completed progress." }
+            {
+              "id": "default",
+              "label": "Default",
+              "detail": "Evidence step is ready for review."
+            },
+            {
+              "id": "loading",
+              "label": "Loading",
+              "detail": "Keep progress and context visible while the current step loads."
+            },
+            {
+              "id": "empty",
+              "label": "Empty",
+              "detail": "End the flow when no Feedback Batch remains."
+            },
+            {
+              "id": "error",
+              "label": "Error",
+              "detail": "Retry the current step without losing completed progress."
+            }
           ],
           "responsive": [
-            { "viewport": "mobile", "behavior": "Progress condenses to labeled steps above one full-width task." },
-            { "viewport": "desktop", "behavior": "Current task stays centered with persistent context beside it." }
+            {
+              "viewport": "mobile",
+              "behavior": "Progress condenses to labeled steps above one full-width task."
+            },
+            {
+              "viewport": "desktop",
+              "behavior": "Current task stays centered with persistent context beside it."
+            }
           ],
           "accessibility": {
-            "landmarks": ["Review progress", "Current review step", "Persistent context"],
-            "keyboard_order": ["Review progress", "Current review step", "Continue"],
-            "announcements": ["Review step", "Completed step", "Delivery state"],
+            "landmarks": [
+              "Review progress",
+              "Current review step",
+              "Persistent context"
+            ],
+            "keyboard_order": [
+              "Review progress",
+              "Current review step",
+              "Continue"
+            ],
+            "announcements": [
+              "Review step",
+              "Completed step",
+              "Delivery state"
+            ],
             "reduced_motion": "Step changes replace content without animated travel."
           },
           "handoff": {
-            "component_boundaries": ["ReviewProgress", "ReviewStep", "ReviewContext"],
-            "data_contracts": ["FeedbackBatch", "Choice", "Reply"],
-            "events": ["review-step-completed", "feedback-acknowledged"],
-            "implementation_notes": ["Persist completed steps when the current step is retried."]
+            "component_boundaries": [
+              "ReviewProgress",
+              "ReviewStep",
+              "ReviewContext"
+            ],
+            "data_contracts": [
+              "FeedbackBatch",
+              "Choice",
+              "Reply"
+            ],
+            "events": [
+              "review-step-completed",
+              "feedback-acknowledged"
+            ],
+            "implementation_notes": [
+              "Persist completed steps when the current step is retried."
+            ]
           }
         }
       },
@@ -264,44 +529,104 @@
               "id": "c-canvas",
               "label": "Visual Document canvas",
               "role": "main",
-              "items": ["concept-wall", "annotation-targets", "feedback-41"]
+              "items": [
+                "concept-wall",
+                "annotation-targets",
+                "feedback-41"
+              ]
             },
             {
               "id": "c-targets",
               "label": "Target markers",
               "role": "navigation",
-              "items": ["open", "resolved", "outdated"]
+              "items": [
+                "open",
+                "resolved",
+                "outdated"
+              ]
             },
             {
               "id": "c-popover",
               "label": "Target action surface",
               "role": "complementary",
-              "items": ["summary", "choice", "acknowledge"]
+              "items": [
+                "summary",
+                "choice",
+                "acknowledge"
+              ]
             }
           ]
         },
         "focus": {
           "states": [
-            { "id": "default", "label": "Default", "detail": "Feedback target markers are available on the canvas." },
-            { "id": "loading", "label": "Loading", "detail": "Keep target geometry stable while feedback details load." },
-            { "id": "empty", "label": "Empty", "detail": "Show the reviewed canvas without target markers." },
-            { "id": "error", "label": "Error", "detail": "Keep the target selected and retry its action surface." }
+            {
+              "id": "default",
+              "label": "Default",
+              "detail": "Feedback target markers are available on the canvas."
+            },
+            {
+              "id": "loading",
+              "label": "Loading",
+              "detail": "Keep target geometry stable while feedback details load."
+            },
+            {
+              "id": "empty",
+              "label": "Empty",
+              "detail": "Show the reviewed canvas without target markers."
+            },
+            {
+              "id": "error",
+              "label": "Error",
+              "detail": "Keep the target selected and retry its action surface."
+            }
           ],
           "responsive": [
-            { "viewport": "mobile", "behavior": "Selected target details open as a bottom sheet over the canvas." },
-            { "viewport": "desktop", "behavior": "Selected target details stay anchored beside the target." }
+            {
+              "viewport": "mobile",
+              "behavior": "Selected target details open as a bottom sheet over the canvas."
+            },
+            {
+              "viewport": "desktop",
+              "behavior": "Selected target details stay anchored beside the target."
+            }
           ],
           "accessibility": {
-            "landmarks": ["Visual Document canvas", "Target markers", "Target action surface"],
-            "keyboard_order": ["Target markers", "Selected target", "Acknowledge"],
-            "announcements": ["Selected target", "Thread state", "Delivery state"],
+            "landmarks": [
+              "Visual Document canvas",
+              "Target markers",
+              "Target action surface"
+            ],
+            "keyboard_order": [
+              "Target markers",
+              "Selected target",
+              "Acknowledge"
+            ],
+            "announcements": [
+              "Selected target",
+              "Thread state",
+              "Delivery state"
+            ],
             "reduced_motion": "Target selection uses an immediate outline and no zoom animation."
           },
           "handoff": {
-            "component_boundaries": ["VisualCanvas", "TargetMarkerList", "TargetActionSurface"],
-            "data_contracts": ["FeedbackBatch", "Annotation", "Choice", "Reply"],
-            "events": ["feedback-target-selected", "feedback-acknowledged"],
-            "implementation_notes": ["Mirror canvas target order in a keyboard-accessible marker list."]
+            "component_boundaries": [
+              "VisualCanvas",
+              "TargetMarkerList",
+              "TargetActionSurface"
+            ],
+            "data_contracts": [
+              "FeedbackBatch",
+              "Annotation",
+              "Choice",
+              "Reply"
+            ],
+            "events": [
+              "feedback-target-selected",
+              "feedback-acknowledged"
+            ],
+            "implementation_notes": [
+              "Mirror canvas target order in a keyboard-accessible marker list."
+            ]
           }
         }
       }

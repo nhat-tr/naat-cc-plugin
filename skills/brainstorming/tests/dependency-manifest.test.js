@@ -148,6 +148,7 @@ test('Playwright configuration isolates browser, visual, accessibility, and perf
           name: project.name,
           testMatch: project.testMatch ?? null,
           testIgnore: project.testIgnore ?? null,
+          workers: project.workers ?? null,
         })),
       })))
       .catch(error => { console.error(error); process.exitCode = 1; });
@@ -185,6 +186,7 @@ test('Playwright configuration isolates browser, visual, accessibility, and perf
   assert.equal(projects.get('visual').testMatch, '**/*.visual.spec.ts');
   assert.equal(projects.get('a11y').testMatch, '**/accessibility-compatibility.spec.ts');
   assert.equal(projects.get('performance').testMatch, '**/*.performance.spec.ts');
+  assert.equal(projects.get('performance').workers, 1, 'performance budgets must run without cross-workload contention');
 });
 
 test('fixed Visual Shell build guards its inputs before changing tracked runtime assets', () => {

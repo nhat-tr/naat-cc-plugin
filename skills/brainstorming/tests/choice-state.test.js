@@ -36,6 +36,22 @@ test('multiselect groups retain independent selected values', () => {
   assert.deepEqual(choices, [email, chat]);
 });
 
+test('a shared Option Component keeps Choice state scoped to its Decision group', () => {
+  const sharedA = { groupId: 'decision-a', componentId: 'shared-option', value: 'shared-option', label: 'Shared' };
+  const sharedB = { groupId: 'decision-b', componentId: 'shared-option', value: 'shared-option', label: 'Shared' };
+
+  let choices = reconcileChoices([], sharedA, { selected: true, multiselect: false });
+  choices = reconcileChoices(choices, sharedB, { selected: true, multiselect: false });
+
+  assert.deepEqual(choices, [sharedA, sharedB]);
+  assert.equal(isChoiceSelected(choices, 'shared-option', 'decision-a'), true);
+  assert.equal(isChoiceSelected(choices, 'shared-option', 'decision-b'), true);
+  assert.equal(isChoiceSelected(choices, 'shared-option', 'decision-c'), false);
+
+  choices = reconcileChoices(choices, sharedB, { selected: false, multiselect: false });
+  assert.deepEqual(choices, [sharedA]);
+});
+
 test('Session Store Choices stay committed while Draft Choices override only their own group', () => {
   const events = [{
     type: 'user.turn',
