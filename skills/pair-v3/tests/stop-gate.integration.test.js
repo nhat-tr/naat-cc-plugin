@@ -31,6 +31,10 @@ function activate(pairDir, runId = 'run-one', pid = process.pid) {
   })}\n`);
 }
 
+function writeActiveAttempt(pairDir, taskId = '1.1') {
+  fs.writeFileSync(path.join(pairDir, 'active-attempt.json'), `${JSON.stringify({ attemptId: `${taskId}-x`, taskId })}\n`);
+}
+
 function stopGate(root, scratch, max = 2) {
   return childProcess.spawnSync('bash', [hook], {
     cwd: root,
@@ -81,6 +85,28 @@ test('an exhausted run stays allowed until progress or a new Pair Loop run', t =
 test('a stale Active Pair Loop marker cannot activate the Stop gate', t => {
   const { pairDir, root, scratch } = fixture(t);
   activate(pairDir, 'stale-run', 2147483647);
+  assert.equal(decision(stopGate(root, scratch)), null);
+});
+
+test('an active attempt owned by a live pair-loop blocks stopping', t => {
+  const { pairDir, root, scratch } = fixture(t);
+  activate(pairDir);
+  writeActiveAttempt(pairDir, '2.3');
+  assert.match(decision(stopGate(root, scratch)).reason, /attempt for task 2\.3 is still active/u);
+});
+
+test('an orphaned active attempt (dead owner) never traps the session', t => {
+  const { pairDir, root, scratch } = fixture(t);
+  activate(pairDir, 'dead-run', 2147483647);
+  writeActiveAttempt(pairDir, '2.3');
+  // The dead owner must not produce an "attempt is still active" block; the stale
+  // active-loop marker is cleared and the stop is allowed.
+  assert.equal(decision(stopGate(root, scratch)), null);
+});
+
+test('an active attempt with no loop marker at all does not trap the session', t => {
+  const { pairDir, root, scratch } = fixture(t);
+  writeActiveAttempt(pairDir, '2.3');
   assert.equal(decision(stopGate(root, scratch)), null);
 });
 

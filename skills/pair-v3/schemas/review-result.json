@@ -1,5 +1,4 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
     "verdict": { "enum": ["approve", "fix-needed"] },
@@ -10,14 +9,15 @@
       "items": {
         "type": "object",
         "properties": {
-          "severity": { "enum": ["BLOCKER", "MAJOR", "MINOR"] },
+          "severity": { "enum": ["BLOCKER", "MAJOR"] },
           "file": { "type": "string" },
           "line": { "type": "integer", "minimum": 1 },
           "title": { "type": "string" },
           "detail": { "type": "string" },
+          "failure_scenario": { "type": "string" },
           "suggestion": { "type": "string" }
         },
-        "required": ["severity", "file", "line", "title", "detail", "suggestion"],
+        "required": ["severity", "file", "line", "title", "detail", "failure_scenario", "suggestion"],
         "additionalProperties": false
       }
     }

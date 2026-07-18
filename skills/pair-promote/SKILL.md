@@ -49,9 +49,11 @@ Create streams around observable acceptance behavior, not layers such as abstrac
 
 Topologically order streams because pair-v3 executes the first open task. Declare only dependencies on earlier streams.
 
-Apply TDD:
+Apply behavior-gated TDD — every scheduled test must earn its attempt cost:
 
-- Begin every stream with `[type:test] [phase:red]`.
+- Write failing tests only for observable behavior. Each test task's text must name the behavior it pins and the defect it would catch; a test that cannot state its defect class is not scheduled.
+- Never schedule structure-mirroring tests: DTO/record shape, mapping plumbing, configuration wiring, or framework-guaranteed behavior. They pin structure rather than behavior, fail on refactors instead of defects, and burn a full worker+review attempt each. Cover that work through the consuming behavior's failing integration test and tag each such implementation task `[tdd:covered-by <red-test-task-id>]`.
+- Begin every behavior stream with `[type:test] [phase:red]`. A purely structural stream may omit its own red test only when every task in it carries `[tdd:covered-by ...]` referencing a red test that exists in the plan.
 - Schedule all failing tests that define a behavior before its implementation.
 - Include at least one failing integration test that exercises the acceptance criteria through the real boundary; do not mock the boundary under test.
 - Give every task a stable ID, AC mapping, exact files, exact verification command, complexity, and validated profile.

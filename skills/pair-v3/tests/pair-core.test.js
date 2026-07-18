@@ -3,13 +3,16 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 
 const {
+  attemptCapStatus,
   buildRuntimeCommand,
   classifyOutcome,
   createAttempt,
+  normalizeReview,
   planContractDigest,
   parsePlan,
   parseRuntimeUsage,
   nextOpenTask,
+  reviewIsWellFormed,
   selectRoute,
   validatePlan,
 } = require('../scripts/lib/pair-core');
@@ -270,21 +273,54 @@ test('nextOpenTask does not run named acceptance criteria before plan tasks', ()
   assert.equal(nextOpenTask(plan).id, '1.1');
 });
 
-test('selectRoute uses the cheapest qualified route for low-risk work', () => {
+test('validatePlan allows a structural stream whose tasks are covered by a red test elsewhere', () => {
+  const plan = validPairPlan().replace(
+    '\n## Acceptance Criteria',
+    [
+      '',
+      '### Stream 2: Greeting wiring - complexity: S',
+      '**Depends on:** 1',
+      '- [ ] Task 2.1 - wire greeting DTO into the command registry [type:feature] [risk:low] [scope:local] [uncertainty:low] [ac:AC-1] [tdd:covered-by 1.2] - files: `src/wiring.js` - verify: `node --test tests/greeting.integration.test.js` - **S**',
+      '',
+      '## Acceptance Criteria',
+    ].join('\n'),
+  );
+
+  const result = validatePlan(plan);
+  assert.deepEqual(result.errors, [], 'a fully covered structural stream needs no stream-local red test');
+
+  const unknownReference = validatePlan(plan.replace('[tdd:covered-by 1.2]', '[tdd:covered-by 9.9]'));
+  assert.ok(unknownReference.errors.some(error => /unknown task 9\.9/.test(error)));
+
+  const nonRedReference = validatePlan(plan.replace('[tdd:covered-by 1.2]', '[tdd:covered-by 1.3]'));
+  assert.ok(nonRedReference.errors.some(error => /must reference a \[type:test\] \[phase:red\] task/.test(error)));
+
+  const malformed = validatePlan(plan.replace('[tdd:covered-by 1.2]', '[tdd:whenever]'));
+  assert.ok(malformed.errors.some(error => /malformed tdd tag/.test(error)));
+  assert.ok(malformed.errors.some(error => /Stream 2 must start with/.test(error)), 'without coverage the stream needs its own red test');
+});
+
+test('selectRoute routes docs-type low-risk work to the cheapest tier', () => {
   const profile = { type: 'docs', complexity: 'S', risk: 'low', scope: 'local' };
   const routes = [
     { id: 'cheap', expectedCost: 0.1 },
     { id: 'strong', expectedCost: 1.0 },
   ];
-  const history = Array.from({ length: 20 }, () => ({
-    routeId: 'cheap',
-    profile,
-    valid: true,
-    success: true,
-    totalCost: 0.1,
-  }));
 
-  assert.equal(selectRoute(profile, routes, history).id, 'cheap');
+  assert.equal(selectRoute(profile, routes).id, 'cheap');
+});
+
+test('selectRoute floors code-writing work at the second tier', () => {
+  // Ledger evidence: the cheapest tier cannot reliably emit structured worker
+  // results, so only docs tasks may route to it.
+  const profile = { type: 'feature', complexity: 'S', risk: 'low', scope: 'local', uncertainty: 'low' };
+  const routes = [
+    { id: 'cheap', strength: 1 },
+    { id: 'mid', strength: 2 },
+    { id: 'strong', strength: 4 },
+  ];
+
+  assert.equal(selectRoute(profile, routes).id, 'mid');
 });
 
 test('selectRoute never explores on critical work', () => {
@@ -373,6 +409,157 @@ test('classifyOutcome retries a transient worker runtime failure', () => {
   }), {
     disposition: 'regenerated',
     action: 'retry-infrastructure',
+    cause: 'environment-failure',
+  });
+});
+
+test('attemptCapStatus counts substantive attempts and ignores interruptions for the cap', () => {
+  const history = [
+    { status: 'interrupted', valid: false },
+    { status: 'completed', valid: true },
+    { status: 'interrupted', valid: false },
+    { status: 'completed', valid: true },
+  ];
+  const status = attemptCapStatus(history, 3);
+  assert.equal(status.substantive, 2, 'only the two completed attempts count toward the cap');
+  assert.equal(status.overCap, false, '2 substantive attempts is under a cap of 3');
+  assert.equal(status.trailingInterrupts, 0, 'the most recent record is not an interruption');
+});
+
+test('attemptCapStatus flags an unstable environment when interruptions run consecutively', () => {
+  const history = [
+    { status: 'completed', valid: true },
+    { status: 'interrupted', valid: false },
+    { status: 'interrupted', valid: false },
+    { status: 'interrupted', valid: false },
+  ];
+  const status = attemptCapStatus(history, 3);
+  assert.equal(status.substantive, 1);
+  assert.equal(status.overCap, false, 'a lone real attempt must not be blocked by later interrupts');
+  assert.equal(status.trailingInterrupts, 3);
+  assert.equal(status.unstable, true, 'three trailing interrupts signals an unstable runtime');
+});
+
+test('reviewIsWellFormed requires a schema verdict and a findings array', () => {
+  assert.equal(reviewIsWellFormed({ verdict: 'approve', findings: [] }), true);
+  assert.equal(reviewIsWellFormed({ verdict: 'fix-needed', findings: [{ severity: 'MAJOR' }] }), true);
+  assert.equal(reviewIsWellFormed({ verdict: 'approve' }), false, 'missing findings array');
+  assert.equal(reviewIsWellFormed({ findings: [] }), false, 'missing verdict');
+  assert.equal(reviewIsWellFormed(null), false);
+});
+
+test('normalizeReview yields a crash-safe schema shape from a truncated review', () => {
+  // A reviewer that hit a session limit emits a partial object with no findings key.
+  const truncated = normalizeReview({ verdict: 'approve', summary: 'looks fine' });
+  assert.deepEqual(truncated.findings, [], 'findings must always be an array');
+  assert.equal(truncated.verdict, 'approve');
+  assert.equal(truncated.recommended_action, 'approve', 'an approve verdict must not become a rewrite');
+
+  const empty = normalizeReview(undefined);
+  assert.equal(empty.verdict, 'fix-needed');
+  assert.equal(empty.recommended_action, 'rewrite');
+  assert.ok(Array.isArray(empty.findings));
+
+  const dirty = normalizeReview({ verdict: 'fix-needed', findings: [{ severity: 'MAJOR' }, null, 'nope'] });
+  assert.equal(dirty.findings.length, 1, 'non-object findings are dropped');
+});
+
+test('normalizeReview drops non-material findings so noise never reaches the loop', () => {
+  const review = normalizeReview({
+    verdict: 'fix-needed',
+    findings: [
+      { severity: 'BLOCKER', title: 'real' },
+      { severity: 'MINOR', title: 'style nit' },
+      { severity: 'INFO', title: 'observation' },
+      { title: 'no severity at all' },
+    ],
+  });
+  assert.equal(review.findings.length, 1, 'only the BLOCKER survives');
+  assert.equal(review.findings[0].title, 'real');
+});
+
+test('classifyOutcome ignores a rewrite recommendation backed by no material findings', () => {
+  // "Sensible-sounding" reviews with no itemized reachable failure must not burn a cycle.
+  assert.deepEqual(classifyOutcome({
+    workerStatus: 'completed',
+    verification: 'pass',
+    findings: [],
+    recommendedAction: 'rewrite',
+  }), {
+    disposition: 'accepted',
+    action: 'complete-task',
+    cause: null,
+  });
+});
+
+test('classifyOutcome ignores a local-fix recommendation with no findings', () => {
+  assert.deepEqual(classifyOutcome({
+    workerStatus: 'completed',
+    verification: 'pass',
+    findings: [],
+    recommendedAction: 'local-fix',
+  }), {
+    disposition: 'accepted',
+    action: 'complete-task',
+    cause: null,
+  });
+});
+
+test('classifyOutcome ignores a redesign recommendation with no material findings', () => {
+  assert.deepEqual(classifyOutcome({
+    workerStatus: 'completed',
+    verification: 'pass',
+    findings: [],
+    recommendedAction: 'redesign',
+  }), {
+    disposition: 'accepted',
+    action: 'complete-task',
+    cause: null,
+  });
+});
+
+test('classifyOutcome retries unparseable worker output on a stronger route, not the same one', () => {
+  // A clean exit whose output cannot be parsed is usually a model too weak to emit the
+  // schema (e.g. the cheapest tier), so the recovery must escalate rather than retry in place.
+  assert.deepEqual(classifyOutcome({
+    workerStatus: 'blocked',
+    workerBlocker: 'unstructured result',
+    verification: 'fail',
+    runtimeStatus: 0,
+    workerParseError: true,
+    priorAttempts: 0,
+  }), {
+    disposition: 'regenerated',
+    action: 'retry-stronger',
+    cause: 'environment-failure',
+  });
+});
+
+test('classifyOutcome keeps a genuine spawn failure on the same route (retry-infrastructure)', () => {
+  assert.deepEqual(classifyOutcome({
+    workerStatus: 'blocked',
+    verification: 'fail',
+    runtimeStatus: 1,
+    workerParseError: true,
+    priorAttempts: 0,
+  }), {
+    disposition: 'regenerated',
+    action: 'retry-infrastructure',
+    cause: 'environment-failure',
+  });
+});
+
+test('classifyOutcome escalates a repeated unparseable worker result to a human', () => {
+  assert.deepEqual(classifyOutcome({
+    workerStatus: 'blocked',
+    workerBlocker: 'missing structured output',
+    verification: 'fail',
+    runtimeStatus: 0,
+    workerParseError: true,
+    priorAttempts: 1,
+  }), {
+    disposition: 'human-takeover',
+    action: 'stop',
     cause: 'environment-failure',
   });
 });

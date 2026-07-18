@@ -1,12 +1,5 @@
 const crypto = require('node:crypto');
 
-const QUALITY_FLOORS = {
-  low: 0.85,
-  medium: 0.92,
-  high: 0.97,
-  critical: 1,
-};
-
 const PROFILE_VALUES = {
   type: ['bugfix', 'feature', 'refactor', 'test', 'docs', 'migration'],
   risk: ['low', 'medium', 'high', 'critical'],
@@ -71,14 +64,14 @@ function taskFromParts(id, rawText, lineNumber, prefix = '') {
   const verify = rawText.match(/\s*[-:–—]\s*verify:\s*`([^`]+)`/i)?.[1]?.trim() || '';
   const complexityMatch = rawText.match(/\*\*([SML])\*\*\s*$/i);
   const complexity = complexityMatch?.[1]?.toUpperCase() || 'M';
-  const tags = Object.fromEntries([...rawText.matchAll(/\[(type|risk|scope|uncertainty|phase|ac):([^\]]+)\]/gi)]
+  const tags = Object.fromEntries([...rawText.matchAll(/\[(type|risk|scope|uncertainty|phase|ac|tdd):([^\]]+)\]/gi)]
     .map(item => [item[1].toLowerCase(), item[2].trim()]));
   const acceptanceCriteria = (tags.ac || '')
     .split(',')
     .map(value => value.trim())
     .filter(Boolean);
   const text = rawText
-    .replace(/\s*\[(?:type|risk|scope|uncertainty|phase|ac):[^\]]+\]/gi, '')
+    .replace(/\s*\[(?:type|risk|scope|uncertainty|phase|ac|tdd):[^\]]+\]/gi, '')
     .replace(/\s*[-:–—]\s*files?:\s*(?:`[^`]+`(?:\s*,\s*)?)+/i, '')
     .replace(/\s*[-:–—]\s*verify:\s*`[^`]+`/i, '')
     .replace(/\s*[-:–—]\s*\*\*[SML]\*\*\s*$/i, '')
@@ -96,6 +89,9 @@ function taskFromParts(id, rawText, lineNumber, prefix = '') {
     uncertainty: tags.uncertainty?.toLowerCase()
       || (/\b(investigat|unknown|explor|spike)\b/i.test(text) ? 'high' : 'medium'),
     phase: tags.phase?.toLowerCase() || null,
+    // [tdd:covered-by <task-id>] marks structural work whose behavior is pinned by a
+    // red test elsewhere in the plan instead of a stream-local (often useless) test.
+    tddCoveredBy: tags.tdd?.match(/^covered-by\s+([A-Za-z0-9._-]+)$/i)?.[1] || null,
     acceptanceCriteria,
     files,
     verify,
@@ -330,6 +326,19 @@ function validatePlan(plan) {
     if (task.phase && task.phase !== 'red') errors.push(`Task ${task.id} has unsupported phase "${task.phase}"`);
     if (task.phase === 'red' && task.type !== 'test') errors.push(`Task ${task.id} uses phase:red but is not a test task`);
     if (task.type === 'test' && task.phase !== 'red') errors.push(`Task ${task.id} is a test task and must use [phase:red]`);
+    if (task.explicitTags.has('tdd') && !task.tddCoveredBy) {
+      errors.push(`Task ${task.id} has a malformed tdd tag; use [tdd:covered-by <red-test-task-id>]`);
+    }
+  }
+
+  const tasksById = new Map(parsed.tasks.map(task => [task.id, task]));
+  for (const task of parsed.tasks) {
+    if (!task.tddCoveredBy) continue;
+    const covering = tasksById.get(task.tddCoveredBy);
+    if (!covering) errors.push(`Task ${task.id} declares tdd:covered-by unknown task ${task.tddCoveredBy}`);
+    else if (covering.type !== 'test' || covering.phase !== 'red') {
+      errors.push(`Task ${task.id} tdd:covered-by must reference a [type:test] [phase:red] task`);
+    }
   }
 
   for (const criterion of parsed.acceptanceCriteria) {
@@ -349,8 +358,14 @@ function validatePlan(plan) {
       else if (streamIndex.get(dependency) >= index) errors.push(`Stream ${stream.id} depends on Stream ${dependency}, which appears later; topologically order streams`);
     }
     const first = stream.tasks[0];
-    if (!first || first.type !== 'test' || first.phase !== 'red') {
-      errors.push(`Stream ${stream.id} must start with an explicit [type:test] [phase:red] task`);
+    // A purely structural stream (DTOs, wiring, plumbing) may skip its own red test
+    // when every implementation task in it is pinned by a red test elsewhere via
+    // [tdd:covered-by ...] — a stream-local test there would mirror structure, not
+    // behavior, and mirror tests fail on refactors instead of defects.
+    const redExempt = stream.tasks.length > 0
+      && stream.tasks.every(task => task.type === 'test' || task.tddCoveredBy);
+    if (!first || ((first.type !== 'test' || first.phase !== 'red') && !redExempt)) {
+      errors.push(`Stream ${stream.id} must start with an explicit [type:test] [phase:red] task, or every implementation task in it must declare [tdd:covered-by <red-test-task-id>]`);
     }
     const firstImplementation = stream.tasks.findIndex(task => task.type !== 'test');
     if (firstImplementation >= 0) {
@@ -434,31 +449,6 @@ function nextOpenTask(plan) {
   return null;
 }
 
-function sameProfile(left, right) {
-  return ['type', 'complexity', 'risk', 'scope', 'uncertainty']
-    .every(key => !left[key] || !right[key] || left[key] === right[key]);
-}
-
-function wilsonLowerBound(successes, total, z = 1.645) {
-  if (total === 0) return 0;
-  const rate = successes / total;
-  const denominator = 1 + (z * z) / total;
-  const centre = rate + (z * z) / (2 * total);
-  const margin = z * Math.sqrt((rate * (1 - rate) + (z * z) / (4 * total)) / total);
-  return (centre - margin) / denominator;
-}
-
-function routeStats(route, profile, history) {
-  const records = history.filter(record => record.valid && record.routeId === route.id && sameProfile(record.profile || {}, profile));
-  const successes = records.filter(record => record.success).length;
-  const costs = records.map(record => record.totalCost).filter(Number.isFinite);
-  return {
-    samples: records.length,
-    lowerQuality: wilsonLowerBound(successes, records.length),
-    expectedCost: costs.length > 0 ? costs.reduce((sum, cost) => sum + cost, 0) / costs.length : route.expectedCost ?? Infinity,
-  };
-}
-
 function staticStrength(profile) {
   if (profile.risk === 'critical' || profile.uncertainty === 'high') return 4;
   if (profile.risk === 'high' || profile.complexity === 'L' || profile.scope === 'architecture') return 3;
@@ -466,30 +456,43 @@ function staticStrength(profile) {
   return 1;
 }
 
-function selectRoute(profile, routes, history = []) {
+// Static routing policy. Learned per-profile routing needs fleet-scale evidence
+// (>=5 valid same-profile samples per route) that a single developer never
+// accumulates, so the exploration ladder only ever added failed cheap attempts on
+// the way to the strong model (attempts ledger 2026-07: cheapest tier 0% accepted;
+// feature/high accepted only on the opus tiers). Strength is decided by the task
+// profile alone, floored at the second tier for code-writing work — the cheapest
+// tier is reserved for docs-type tasks because it cannot reliably emit structured
+// worker results.
+function selectRoute(profile, routes) {
   if (!Array.isArray(routes) || routes.length === 0) throw new Error('No model routes are configured');
   const ranked = routes.map((route, index) => ({ ...route, strength: route.strength ?? index + 1 }));
   const strongest = ranked.reduce((best, route) => route.strength > best.strength ? route : best, ranked[0]);
   const invalidProfile = Object.entries(PROFILE_VALUES)
     .some(([key, allowed]) => profile[key] && !allowed.includes(profile[key]));
   if (invalidProfile || profile.risk === 'critical' || profile.uncertainty === 'high') return strongest;
-
-  const floor = QUALITY_FLOORS[profile.risk] ?? QUALITY_FLOORS.medium;
-  const qualified = ranked
-    .map(route => ({ route, stats: routeStats(route, profile, history) }))
-    .filter(item => item.stats.samples >= 5 && item.stats.lowerQuality >= floor)
-    .sort((left, right) => left.stats.expectedCost - right.stats.expectedCost);
-  if (qualified.length > 0) return qualified[0].route;
-
-  const needed = staticStrength(profile);
+  const needed = profile.type === 'docs'
+    ? staticStrength(profile)
+    : Math.max(2, staticStrength(profile));
   return ranked.find(route => route.strength >= needed) || strongest;
 }
 
-function classifyOutcome({ workerStatus, workerBlocker = '', verification, findings = [], priorAttempts = 0, priorModelAttempts = priorAttempts, runtimeStatus = 0, reviewStatus = 0, recommendedAction = 'approve' }) {
+function classifyOutcome({ workerStatus, workerBlocker = '', verification, findings = [], priorAttempts = 0, priorModelAttempts = priorAttempts, runtimeStatus = 0, reviewStatus = 0, recommendedAction = 'approve', workerParseError = false }) {
+  // A runtime that exits non-zero failed to run (spawn error, timeout, shim collision):
+  // a stronger model cannot fix that, so retry the SAME route once. Never train routing on
+  // it; a blocker the worker actually authored is handled by the task-ambiguity branch below.
   if (runtimeStatus !== 0) {
     return priorAttempts > 0
       ? { disposition: 'human-takeover', action: 'stop', cause: 'environment-failure' }
       : { disposition: 'regenerated', action: 'retry-infrastructure', cause: 'environment-failure' };
+  }
+  // The runtime exited clean but produced output we cannot parse into the worker schema.
+  // This is usually a model too weak to emit structured output (e.g. the cheapest tier), so
+  // retry on a STRONGER route rather than burning another attempt on the same one.
+  if (workerParseError) {
+    return priorAttempts > 0
+      ? { disposition: 'human-takeover', action: 'stop', cause: 'environment-failure' }
+      : { disposition: 'regenerated', action: 'retry-stronger', cause: 'environment-failure' };
   }
   if (workerStatus === 'blocked' && /\bincorrect-plan\b/i.test(workerBlocker)) {
     return priorAttempts > 0
@@ -506,12 +509,19 @@ function classifyOutcome({ workerStatus, workerBlocker = '', verification, findi
       ? { disposition: 'human-takeover', action: 'stop', cause: 'reviewer-error' }
       : { disposition: 'regenerated', action: 'retry-infrastructure', cause: 'reviewer-error' };
   }
-  if (recommendedAction === 'redesign') {
+  // Materiality gate: a recommendation is only actionable when backed by at least one
+  // BLOCKER/MAJOR finding with a concrete failure scenario. A reviewer that says
+  // fix/rewrite/redesign while itemizing nothing material is noise, and acting on it
+  // burns a full attempt cycle — so it is ignored and the verified work is accepted.
+  const blockers = findings.filter(finding => finding.severity === 'BLOCKER').length;
+  const majors = findings.filter(finding => finding.severity === 'MAJOR').length;
+  const material = blockers + majors;
+  if (recommendedAction === 'redesign' && material > 0) {
     return priorAttempts > 0
       ? { disposition: 'human-takeover', action: 'stop', cause: 'incorrect-plan' }
       : { disposition: 'redesign', action: 'redesign', cause: 'incorrect-plan' };
   }
-  if (recommendedAction === 'rewrite') {
+  if (recommendedAction === 'rewrite' && material > 0) {
     return { disposition: 'substantial-rewrite', action: 'escalate', cause: 'model-capability' };
   }
   if (verification === 'fail') {
@@ -520,13 +530,66 @@ function classifyOutcome({ workerStatus, workerBlocker = '', verification, findi
       : { disposition: 'local-fix', action: 'local-fix', cause: 'model-capability' };
   }
 
-  const blockers = findings.filter(finding => finding.severity === 'BLOCKER').length;
-  const majors = findings.filter(finding => finding.severity === 'MAJOR').length;
   if (blockers > 0 || (majors > 0 && priorModelAttempts > 0)) {
     return { disposition: 'substantial-rewrite', action: 'escalate', cause: 'model-capability' };
   }
-  if (majors > 0 || recommendedAction === 'local-fix') return { disposition: 'local-fix', action: 'local-fix', cause: 'model-capability' };
+  if (majors > 0) return { disposition: 'local-fix', action: 'local-fix', cause: 'model-capability' };
   return { disposition: 'accepted', action: 'complete-task', cause: null };
+}
+
+// A review is only trustworthy if it carries a schema verdict and a findings array.
+// A truncated reviewer result (e.g. the review model hitting an account session limit)
+// parses into a partial object that is missing findings; treating it as a real verdict
+// once produced bogus "redesign" dispositions and crashed writeReviewFiles.
+function reviewIsWellFormed(review) {
+  return Boolean(review)
+    && (review.verdict === 'approve' || review.verdict === 'fix-needed')
+    && Array.isArray(review.findings);
+}
+
+// Coerce any parsed review into the review schema shape so downstream classification
+// and file writing never touch an undefined field. Fills gaps only; never invents a
+// verdict beyond a safe fix-needed default when one is missing.
+// Only material findings (BLOCKER/MAJOR) survive: anything else is workflow noise that
+// must never reach the worker, the plan, or the disposition — dropped here so every
+// consumer sees the same filtered view regardless of which runtime produced the review.
+function normalizeReview(review) {
+  const source = review && typeof review === 'object' ? review : {};
+  const findings = Array.isArray(source.findings)
+    ? source.findings.filter(finding => finding && typeof finding === 'object'
+      && (finding.severity === 'BLOCKER' || finding.severity === 'MAJOR'))
+    : [];
+  const verdict = source.verdict === 'approve' ? 'approve' : 'fix-needed';
+  const recommendedAction = ['approve', 'local-fix', 'rewrite', 'redesign'].includes(source.recommended_action)
+    ? source.recommended_action
+    : (verdict === 'approve' ? 'approve' : 'rewrite');
+  const summary = typeof source.summary === 'string' && source.summary.trim()
+    ? source.summary
+    : 'review returned no parseable summary';
+  return { verdict, recommended_action: recommendedAction, summary, findings };
+}
+
+// The safety cap and escalation must count real attempts at the task, not toolchain
+// interruptions. An interrupted attempt (hard kill/crash/manual .pair reset, recorded
+// status:'interrupted') did not exercise the model, so it must not consume the retry
+// budget nor push classifyOutcome toward human-takeover. A run of trailing interrupts,
+// however, means the environment itself is unstable and the task cannot make progress.
+function attemptCapStatus(history, maxAttempts) {
+  const records = Array.isArray(history) ? history : [];
+  const substantive = records.filter(record => record.status !== 'interrupted').length;
+  let trailingInterrupts = 0;
+  for (let index = records.length - 1; index >= 0 && records[index]?.status === 'interrupted'; index--) {
+    trailingInterrupts++;
+  }
+  // "Unstable" means the runtime keeps dying before completing. Require at least two
+  // back-to-back interruptions so a single crash under a tight --max-attempts (e.g. 1)
+  // never hard-fails a task that has not actually been attempted.
+  return {
+    substantive,
+    trailingInterrupts,
+    overCap: substantive >= maxAttempts,
+    unstable: trailingInterrupts >= Math.max(2, maxAttempts),
+  };
 }
 
 function buildRuntimeCommand({ runtime, root, prompt, model, effort, schemaPath, outputPath, schema }) {
@@ -622,15 +685,16 @@ function createAttempt({
 }
 
 module.exports = {
-  QUALITY_FLOORS,
+  attemptCapStatus,
   buildRuntimeCommand,
   classifyOutcome,
   createAttempt,
   nextOpenTask,
+  normalizeReview,
   planContractDigest,
   parsePlan,
   parseRuntimeUsage,
+  reviewIsWellFormed,
   selectRoute,
   validatePlan,
-  wilsonLowerBound,
 };

@@ -7,12 +7,16 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
+  attemptCapStatus,
   buildRuntimeCommand,
   classifyOutcome,
   createAttempt,
   nextOpenTask,
+  normalizeReview,
   planContractDigest,
+  parsePlan,
   parseRuntimeUsage,
+  reviewIsWellFormed,
   selectRoute,
 } = require('./lib/pair-core');
 const { validateWorkDirectory } = require('../../brainstorming/scripts/work-lineage.cjs');
@@ -22,6 +26,7 @@ const SCRIPT_DIR = __dirname;
 const SKILL_DIR = path.resolve(SCRIPT_DIR, '..');
 const WORKER_SCHEMA_PATH = path.join(SKILL_DIR, 'schemas', 'worker-result.json');
 const REVIEW_SCHEMA_PATH = path.join(SKILL_DIR, 'schemas', 'review-result.json');
+const TEST_PROPOSAL_SCHEMA_PATH = path.join(SKILL_DIR, 'schemas', 'test-proposal.json');
 
 function fail(message) {
   console.error(`pair-task: ${message}`);
@@ -33,6 +38,7 @@ function parseArgs(argv) {
     runtime: process.env.PAIR_RUNTIME || 'auto',
     once: false,
     dryRun: false,
+    hitl: process.env.PAIR_HITL === '1',
     maxAttempts: Number(process.env.PAIR_MAX_TASK_ATTEMPTS || 3),
   };
   for (let index = 0; index < argv.length; index++) {
@@ -42,7 +48,13 @@ function parseArgs(argv) {
     else if (arg === '--effort') options.effort = argv[++index];
     else if (arg === '--once') options.once = true;
     else if (arg === '--dry-run') options.dryRun = true;
-    else if (arg === '--max-attempts') options.maxAttempts = Number(argv[++index]);
+    else if (arg === '--inline') options.inline = true;
+    else if (arg === '--complete') options.complete = true;
+    else if (arg === '--doctor') options.doctor = true;
+    else if (arg === '--hitl') options.hitl = true;
+    else if (arg === '--approve-tests') {
+      options.approveTests = argv[index + 1] && !argv[index + 1].startsWith('-') ? argv[++index] : 'all';
+    } else if (arg === '--max-attempts') options.maxAttempts = Number(argv[++index]);
     else if (arg === '--help') options.help = true;
     else fail(`unknown option ${arg}`);
   }
@@ -194,6 +206,42 @@ function appendJsonLine(file, value) {
   fs.appendFileSync(file, `${JSON.stringify(value)}\n`, { mode: 0o600 });
 }
 
+// The set of task IDs already checked off in the plan. Used to tell a genuinely
+// interrupted attempt (retry it) from one whose task was completed out of band —
+// e.g. the coordinator did the work via a delegated subagent and checked the box —
+// which must be recorded as accepted, not retried. Empty on any parse failure.
+function checkedTaskIds(planPath) {
+  try {
+    if (!planPath || !fs.existsSync(planPath)) return new Set();
+    return new Set(parsePlan(fs.readFileSync(planPath, 'utf8')).tasks
+      .filter(task => task.checked)
+      .map(task => task.id));
+  } catch {
+    return new Set();
+  }
+}
+
+// Build the completion record for a dangling attempt. If its task is already checked
+// off, the work happened outside the loop: record it accepted (out of band). Otherwise
+// it was interrupted and should be retried. Either way it is marked invalid so it never
+// trains routing on an outcome the loop did not itself measure.
+function orphanCompletion(envelope, checkedIds) {
+  const doneOutOfBand = Boolean(envelope.taskId && checkedIds.has(envelope.taskId));
+  return {
+    event: 'attempt.completed',
+    ...envelope,
+    status: doneOutOfBand ? 'completed-out-of-band' : 'interrupted',
+    finishedAt: new Date().toISOString(),
+    disposition: doneOutOfBand ? 'accepted' : 'regenerated',
+    action: doneOutOfBand ? 'complete-task' : 'retry-infrastructure',
+    cause: doneOutOfBand ? null : 'environment-failure',
+    success: doneOutOfBand,
+    valid: false,
+    totalCost: null,
+    costSource: 'unknown',
+  };
+}
+
 function recoverActiveAttempt(paths) {
   if (!fs.existsSync(paths.active)) return false;
   const active = readJson(paths.active);
@@ -203,24 +251,42 @@ function recoverActiveAttempt(paths) {
   }
   const alreadyCompleted = readLedger(paths.ledger)
     .some(record => record.event === 'attempt.completed' && record.attemptId === active.attemptId);
-  if (!alreadyCompleted) {
-    appendJsonLine(paths.ledger, {
-      event: 'attempt.completed',
-      ...active,
-      status: 'interrupted',
-      finishedAt: new Date().toISOString(),
-      disposition: 'regenerated',
-      action: 'retry-infrastructure',
-      cause: 'environment-failure',
-      success: false,
-      valid: false,
-      totalCost: null,
-      costSource: 'unknown',
-    });
-  }
+  const completion = orphanCompletion(active, checkedTaskIds(paths.plan));
+  if (!alreadyCompleted) appendJsonLine(paths.ledger, completion);
   fs.rmSync(paths.active, { force: true });
-  console.log(`pair-loop: recovered interrupted attempt ${active.attemptId}; retrying task ${active.taskId}`);
+  console.log(completion.status === 'completed-out-of-band'
+    ? `pair-loop: attempt ${active.attemptId} task ${active.taskId} was completed outside the loop; recorded as accepted`
+    : `pair-loop: recovered interrupted attempt ${active.attemptId}; retrying task ${active.taskId}`);
   return true;
+}
+
+// Close any attempt.started record for THIS working root that never got a matching
+// attempt.completed. A hard interrupt (crash, kill, sleep) or a manual .pair reset
+// strands starts in the shared global ledger; left dangling they make the safety cap and
+// pair-report under-count real runs. recoverActiveAttempt handles the single live
+// active-attempt.json; this heals every other orphan the ledger still carries. Scoped by
+// the absolute repo root (not repositoryId, which is shared across worktrees/clones of the
+// same origin) so a run in a sibling worktree with a live in-flight attempt is never
+// mistaken for an orphan. Records predating root stamping (no root field) are left alone.
+function reconcileOrphanedAttempts(paths, root) {
+  const ledger = readLedger(paths.ledger);
+  const completed = new Set(
+    ledger.filter(record => record.event === 'attempt.completed').map(record => record.attemptId),
+  );
+  const checkedIds = checkedTaskIds(paths.plan);
+  const seen = new Set();
+  let closed = 0;
+  for (const record of ledger) {
+    if (record.event !== 'attempt.started' || !record.attemptId) continue;
+    if (record.root !== root) continue;
+    if (completed.has(record.attemptId) || seen.has(record.attemptId)) continue;
+    seen.add(record.attemptId);
+    const { event, status, ...envelope } = record;
+    appendJsonLine(paths.ledger, orphanCompletion(envelope, checkedIds));
+    closed++;
+  }
+  if (closed > 0) console.log(`pair-loop: reconciled ${closed} dangling attempt(s) stranded by a prior run`);
+  return closed;
 }
 
 function routesFor(runtime) {
@@ -271,45 +337,122 @@ function chooseRoute(task, runtime, ledger, options, repoId) {
     return attempt.valid ? sum + (routes.find(route => route.id === attempt.routeId)?.expectedCost || 0) : sum;
   }, 0);
   if (spent >= strongest.expectedCost) return strongest;
-  if (last?.action === 'escalate') {
+  if (last?.action === 'escalate' || last?.action === 'retry-stronger') {
+    // An unknown prior route (e.g. an inline-coordinator attempt) escalates straight
+    // to the strongest configured route rather than restarting the ladder.
     const current = routes.find(route => route.id === last.routeId);
-    return routes.find(route => route.strength > (current?.strength || 1)) || routes.at(-1);
+    return routes.find(route => route.strength > (current?.strength ?? strongest.strength)) || strongest;
   }
-  if (last?.action === 'retry-infrastructure') return routes.find(route => route.id === last.routeId) || selectRoute(task, routes, ledger);
+  if (last?.action === 'retry-infrastructure') return routes.find(route => route.id === last.routeId) || selectRoute(task, routes);
   if (last?.action === 'retry-context' || last?.action === 'redesign') {
     const current = routes.find(route => route.id === last.routeId);
     return routes.find(route => route.strength > (current?.strength || 1)) || strongest;
   }
-  if (last?.action === 'local-fix') return routes.find(route => route.id === last.routeId) || selectRoute(task, routes, ledger);
-  const localHistory = ledger.filter(record => record.repositoryId === repoId);
-  const localSamples = localHistory.filter(record => record.event === 'attempt.completed' && record.valid).length;
-  return selectRoute(task, routes, localSamples >= 5 ? localHistory : ledger);
+  if (last?.action === 'local-fix') return routes.find(route => route.id === last.routeId) || selectRoute(task, routes);
+  return selectRoute(task, routes);
 }
 
-function workerPrompt(task, planPath, priorReview) {
+function workerPrompt(task, planPath, priorReview, approvedTests) {
   const reviewContext = priorReview?.findings?.length
     ? `\nThe previous review findings for this task are:\n${JSON.stringify(priorReview.findings, null, 2)}\nAddress them without expanding scope.`
     : '';
-  return `Work exactly one pair-plan task as the delegated implementation worker.\n\nTask ${task.id}: ${task.text}\nProfile: ${JSON.stringify({ type: task.type, complexity: task.complexity, risk: task.risk, scope: task.scope, uncertainty: task.uncertainty })}\nAcceptance criteria: ${task.acceptanceCriteria?.join(', ') || 'read the plan mapping'}\nOwned files: ${task.files.join(', ') || 'verification-only; do not expand ownership'}\nRequired verification: ${task.verify || 'read the plan'}\nPlan: ${planPath}\n\nRead the applicable AGENTS.md plus the plan's Intent Contract, Implementation Context, Capability Evidence, and Simplicity Contract before editing. Use repository and framework capabilities named in the evidence; do not invent APIs, wrappers, factories, registries, ports, or orchestration that the plan does not justify. Prefer the framework-native baseline and deep modules with small interfaces. If a load-bearing API or capability is absent from the pinned dependency/version, return blocked with a blocker beginning 'incorrect-plan:' and cite the observed evidence instead of approximating it with custom architecture. Follow TDD order, make the smallest complete implementation, and run the exact focused verification. Do not edit any file under .pair/. Do not work on another task.${reviewContext}\nReturn only the requested structured result.`;
+  const hitlContext = approvedTests?.length
+    ? `\nHITL-approved test set — write exactly these tests and no others; proposals the human rejected must not be written:\n${approvedTests.map(test => `- ${test.name} (${test.file}): ${test.purpose}`).join('\n')}`
+    : '';
+  return `Work exactly one pair-plan task as the delegated implementation worker.\n\nTask ${task.id}: ${task.text}\nProfile: ${JSON.stringify({ type: task.type, complexity: task.complexity, risk: task.risk, scope: task.scope, uncertainty: task.uncertainty })}\nAcceptance criteria: ${task.acceptanceCriteria?.join(', ') || 'read the plan mapping'}\nOwned files: ${task.files.join(', ') || 'verification-only; do not expand ownership'}\nRequired verification: ${task.verify || 'read the plan'}\nPlan: ${planPath}\n\nRead the applicable AGENTS.md plus the plan's Intent Contract, Implementation Context, Capability Evidence, and Simplicity Contract before editing. Use repository and framework capabilities named in the evidence; do not invent APIs, wrappers, factories, registries, ports, or orchestration that the plan does not justify. Prefer the framework-native baseline and deep modules with small interfaces. If a load-bearing API or capability is absent from the pinned dependency/version, return blocked with a blocker beginning 'incorrect-plan:' and cite the observed evidence instead of approximating it with custom architecture. Follow TDD order, make the smallest complete implementation, and run the exact focused verification. Do not edit any file under .pair/. Do not work on another task.${reviewContext}${hitlContext}\nReturn only the requested structured result.`;
+}
+
+// Inside a cmux pane the spawned worker/reviewer must reach the genuine Claude CLI,
+// not cmux's shim, for two reasons the shim source (cmux-claude-wrapper) makes explicit:
+//   1. It treats `-p` as a session entrypoint and injects `--session-id`, which
+//      collides with our `--no-session-persistence` → the CLI exits in ~1s with empty
+//      stdout, which pair-task can only read as an environment-failure.
+//   2. Before launching the real CLI it clears the inherited session-identity env so
+//      nested-session detection does not fire.
+// So: strip the `cmux-cli-shims` dirs from PATH (kills the injection path) AND clear the
+// same identity vars the wrapper does (clear_inherited_claude_session_identity_env).
+const NESTED_SESSION_ENV_KEYS = [
+  'CLAUDECODE',
+  'CLAUDE_CODE',
+  'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_BRIDGE_SESSION_ID',
+  'CLAUDE_CODE_PARENT_SESSION_ID',
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_EXECPATH',
+  'CLAUDE_CODE_SSE_PORT',
+];
+
+function runtimeEnv() {
+  const env = {
+    ...process.env,
+    PATH: (process.env.PATH || '')
+      .split(path.delimiter)
+      .filter(entry => entry && !entry.includes('cmux-cli-shims'))
+      .join(path.delimiter),
+    PAIR_STOP_GATE: 'off',
+    CLAUDE_STOP_GATE: 'off',
+  };
+  for (const key of NESTED_SESSION_ENV_KEYS) delete env[key];
+  return env;
+}
+
+// A short, human-readable reason a spawn produced no usable result.
+function runtimeDiagnostic(result) {
+  if (result.error) return `spawn error: ${result.error.message}`;
+  const stderr = (result.stderr || '').trim();
+  if (stderr) return stderr;
+  if (!(result.stdout || '').trim()) return `runtime exited ${result.status ?? 'null'} with no output`;
+  return '';
 }
 
 function runCommand(command, outputFile, timeoutMs) {
   const result = childProcess.spawnSync(command.file, command.args, {
     cwd: command.cwd,
     encoding: 'utf8',
-    env: { ...process.env, PAIR_STOP_GATE: 'off', CLAUDE_STOP_GATE: 'off' },
+    env: runtimeEnv(),
     timeout: timeoutMs,
   });
   fs.writeFileSync(outputFile, result.stdout || '', { mode: 0o600 });
+  if ((result.status ?? 1) !== 0 || !(result.stdout || '').trim()) {
+    const diagnostic = runtimeDiagnostic(result);
+    if (diagnostic) fs.writeFileSync(`${outputFile}.stderr`, diagnostic, { mode: 0o600 });
+  }
   return result;
 }
 
+// parseError marks a result we synthesized because the runtime produced nothing we
+// could parse into the worker schema — a toolchain failure, not a worker-authored
+// blocker. classifyOutcome escalates it to a stronger route instead of retrying the
+// same (often too-weak) model, and never trains routing on it.
+function parseErrorWorkerResult(summary) {
+  return {
+    status: 'blocked',
+    summary: typeof summary === 'string' && summary.trim() ? summary : 'missing structured output',
+    files_changed: [],
+    tests: [],
+    blocker: 'unstructured result',
+    parseError: true,
+  };
+}
+
+// A syntactically valid result is still a parse failure if it is not shaped like the
+// worker schema (no recognized status), so a weak model emitting `{}` escalates the
+// same way non-JSON does — mirroring reviewIsWellFormed on the review side.
+function asWorkerResult(candidate, summaryFallback) {
+  if (candidate && typeof candidate === 'object'
+    && (candidate.status === 'completed' || candidate.status === 'blocked')) {
+    return candidate;
+  }
+  return parseErrorWorkerResult(summaryFallback);
+}
+
 function parseWorkerResult(runtime, raw, outputPath) {
-  if (runtime === 'codex') return readJson(outputPath, { status: 'blocked', summary: 'missing structured output', files_changed: [], tests: [], blocker: 'missing structured output' });
+  if (runtime === 'codex') return asWorkerResult(readJson(outputPath), 'missing structured output');
   const envelope = readJsonFromString(raw);
   const candidate = envelope?.structured_output || envelope?.result || envelope;
-  if (typeof candidate === 'string') return readJsonFromString(candidate) || { status: 'blocked', summary: candidate, files_changed: [], tests: [], blocker: 'unstructured result' };
-  return candidate || { status: 'blocked', summary: 'missing structured output', files_changed: [], tests: [], blocker: 'missing structured output' };
+  if (typeof candidate === 'string') return asWorkerResult(readJsonFromString(candidate), candidate);
+  return asWorkerResult(candidate, 'missing structured output');
 }
 
 function readJsonFromString(raw) {
@@ -365,6 +508,46 @@ function verify(root, task, workerResult) {
   };
 }
 
+// The loop does not commit between tasks, so HEAD's tree accumulates earlier accepted
+// uncommitted work; resetting to the baseline COMMIT would destroy it. The revert target
+// is the pre-attempt WORKTREE state: a `git stash create` commit (tracked files, created
+// without moving anything) plus the list of then-untracked paths.
+function snapshotWorktree(root) {
+  const stash = git(root, ['stash', 'create', 'pair-v3 pre-attempt snapshot']);
+  const untracked = git(root, ['ls-files', '--others', '--exclude-standard']).stdout
+    .split('\n').filter(Boolean);
+  const dirty = Boolean(git(root, ['status', '--porcelain']).stdout.trim());
+  return { commit: stash.status === 0 ? (stash.stdout.trim() || null) : null, untracked, dirty };
+}
+
+// Restore the worktree to the pre-attempt snapshot after a rejected attempt so the next
+// (usually stronger) route starts from a clean canvas instead of paying to comprehend and
+// undo the failed attempt's code. The rejected work is saved as a scratch patch first.
+// `.pair/` is excluded: the review files written for this outcome must survive the revert
+// so the next attempt can read the findings.
+function revertToSnapshot(root, snapshot, rejectedPatchFile) {
+  // Capture the untracked list BEFORE writing the patch so the patch itself can never
+  // be swept up as an attempt-introduced file when it lands inside the repository.
+  const preexisting = new Set(snapshot?.untracked || []);
+  const nowUntracked = git(root, ['ls-files', '--others', '--exclude-standard']).stdout
+    .split('\n').filter(Boolean);
+  const diff = git(root, ['diff', 'HEAD']).stdout || '';
+  if (diff.trim()) fs.writeFileSync(rejectedPatchFile, diff, { mode: 0o600 });
+  for (const file of nowUntracked) {
+    if (!preexisting.has(file) && !file.startsWith('.pair/')) {
+      fs.rmSync(path.join(root, file), { recursive: true, force: true });
+    }
+  }
+  if (!snapshot?.commit && snapshot?.dirty) {
+    // The tracked snapshot failed while the tree held earlier uncommitted work: restoring
+    // from HEAD would destroy it, so leave tracked files alone rather than guess.
+    console.error('pair-loop: worktree snapshot was unavailable; tracked files were not reverted');
+    return;
+  }
+  const source = snapshot?.commit || 'HEAD';
+  git(root, ['restore', '--source', source, '--worktree', '--staged', '--', '.', ':(exclude).pair']);
+}
+
 function resolveBase(root) {
   const remote = git(root, ['rev-parse', '--abbrev-ref', 'origin/HEAD']);
   if (remote.status === 0 && remote.stdout.trim() && remote.stdout.trim() !== 'origin/HEAD') return remote.stdout.trim();
@@ -374,8 +557,11 @@ function resolveBase(root) {
   return 'HEAD';
 }
 
+// The reviewer reports ONLY material findings. Every finding must carry a concrete
+// failure_scenario this repository can actually reach — sensible-sounding but
+// unreachable-in-production observations are noise that burns fix cycles and tokens.
 function reviewPrompt(task, base, planPath) {
-  return `Independently review the complete current change for task ${task.id}: ${task.text}.\nBase: ${base}\nPlan: ${planPath}\n\nInspect staged, unstaged, committed, and untracked changes. Read the plan's Intent Contract, Capability Evidence, Simplicity Contract, task mapping, and acceptance criteria. Verify every finding with targeted code reads. Check correctness, regressions, security, and tests, then apply the deletion test: flag pass-through wrappers, one-adapter interfaces, speculative factories/registries, duplicated framework capability, unplanned public types, and layer-oriented work that does not serve an acceptance criterion. Verify framework-sensitive API claims against the pinned dependency, repository usage, or cited official evidence; an invented or unavailable API is a BLOCKER and normally requires redesign. Missing required tests or unmet acceptance criteria are BLOCKERs. Set recommended_action to approve, local-fix, rewrite, or redesign; use redesign when the plan or architecture is wrong and implementation retries cannot fix it. Do not edit files. Return only the requested structured result.`;
+  return `Independently review the complete current change for task ${task.id}: ${task.text}.\nBase: ${base}\nPlan: ${planPath}\n\nInspect staged, unstaged, committed, and untracked changes. Read the plan's Intent Contract, Capability Evidence, Simplicity Contract, task mapping, and acceptance criteria, and verify every finding with targeted code reads.\n\nReport ONLY material findings:\n- BLOCKER: an acceptance criterion is violated or left untested, required tests are missing, verification is broken, an API is invented or unavailable in the pinned dependency, a security vulnerability or data-loss path is introduced, or the Simplicity Contract is violated (pass-through wrapper, one-adapter interface, speculative factory/registry, duplicated framework capability, unplanned public type).\n- MAJOR: the change produces wrong behavior or a failure in this system's realistic operation. You must state the concrete failure_scenario (input/state -> wrong outcome) that this repository can actually reach with its real callers and configuration.\n\nDo NOT report style, naming, hypothetical edge cases outside the system's real operating envelope, defensive-programming or robustness suggestions, performance speculation, or improvement ideas — omit them entirely; they are noise in this workflow. If you cannot name a concrete reachable failure scenario, the finding does not exist. An empty findings list with verdict approve is the expected result for acceptable work.\n\nSet recommended_action to approve unless a reported finding justifies local-fix, rewrite, or redesign; use redesign only when the plan or architecture is wrong and implementation retries cannot fix it. Do not edit files. Return only the requested structured result.`;
 }
 
 function runReview({ runtime, route, root, task, planPath, scratchDir, attemptId, timeoutMs, dryRun, anchor = false }) {
@@ -405,8 +591,20 @@ function runReview({ runtime, route, root, task, planPath, scratchDir, attemptId
   }
   if (dryRun) return { status: 0, command, review: { verdict: 'approve', recommended_action: 'approve', summary: 'dry run', findings: [] }, usage: null };
   const result = runCommand(command, rawPath, timeoutMs);
-  const review = runtime === 'codex' ? readJson(outputPath) : parseWorkerResult('claude', result.stdout || '', outputPath);
-  return { status: result.status ?? 1, command, review: review || { verdict: 'fix-needed', recommended_action: 'rewrite', summary: 'review failed', findings: [] }, usage: parseRuntimeUsage(runtime, result.stdout || '') };
+  const parsed = runtime === 'codex' ? readJson(outputPath) : parseWorkerResult('claude', result.stdout || '', outputPath);
+  // A truncated or unparseable reviewer result must not pass as a real verdict. Force a
+  // failed review status so classifyOutcome treats it as reviewer-error and retries,
+  // and always hand back a schema-shaped review so file writing cannot crash.
+  const wellFormed = reviewIsWellFormed(parsed);
+  if (!wellFormed) {
+    console.error(`pair-loop: task ${task.id} review result was not schema-shaped; treating as reviewer-error (see ${rawPath})`);
+  }
+  return {
+    status: wellFormed ? (result.status ?? 1) : 1,
+    command,
+    review: normalizeReview(parsed),
+    usage: parseRuntimeUsage(runtime, result.stdout || ''),
+  };
 }
 
 function shouldRunAnchorReview(attemptId, task, review) {
@@ -421,10 +619,175 @@ function writeReviewFiles(root, review) {
   const dir = path.join(root, '.pair');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'review.json'), `${JSON.stringify(review, null, 2)}\n`);
-  const findings = review.findings.length === 0
+  const findingsList = Array.isArray(review.findings) ? review.findings : [];
+  const findings = findingsList.length === 0
     ? 'No findings.'
-    : review.findings.map(finding => `### ${finding.severity}: ${finding.title}\n- **File:** \`${finding.file}:${finding.line}\`\n- **Issue:** ${finding.detail}\n- **Suggested fix:** ${finding.suggestion}`).join('\n\n');
-  fs.writeFileSync(path.join(dir, 'review.md'), `## Summary\n${review.summary}\n\n## Findings\n${findings}\n\n## Verdict\n${review.verdict}\n`);
+    : findingsList.map(finding => `### ${finding.severity}: ${finding.title}\n- **File:** \`${finding.file}:${finding.line}\`\n- **Issue:** ${finding.detail}\n- **Failure scenario:** ${finding.failure_scenario || 'not stated'}\n- **Suggested fix:** ${finding.suggestion}`).join('\n\n');
+  fs.writeFileSync(path.join(dir, 'review.md'), `## Summary\n${review.summary || ''}\n\n## Findings\n${findings}\n\n## Verdict\n${review.verdict || 'fix-needed'}\n`);
+}
+
+// ---------------------------------------------------------------------------
+// HITL mode: with --hitl (or PAIR_HITL=1), a [type:test] task must have its exact
+// tests proposed to and approved by the human BEFORE any test is written. The
+// proposal is generated by a read-only spawn, persisted to .pair/test-proposal.json
+// bound to the task ID and plan contract digest (checkbox progress does not
+// invalidate it; editing the task does), and consumed by retries of the same task
+// without re-asking. The worker is then constrained to exactly the approved set.
+// ---------------------------------------------------------------------------
+
+function testProposalPath(root) {
+  return path.join(root, '.pair', 'test-proposal.json');
+}
+
+function readTestProposal(root, task, plan) {
+  const file = testProposalPath(root);
+  const proposal = readJson(file);
+  if (!proposal || !Array.isArray(proposal.tests)) return null;
+  if (proposal.taskId !== task.id || proposal.planDigest !== planContractDigest(plan)) {
+    fs.rmSync(file, { force: true });
+    return null;
+  }
+  return proposal;
+}
+
+function writeTestProposal(root, proposal) {
+  fs.mkdirSync(path.join(root, '.pair'), { recursive: true });
+  fs.writeFileSync(testProposalPath(root), `${JSON.stringify(proposal, null, 2)}\n`, { mode: 0o600 });
+}
+
+function clearTestProposal(root, taskId) {
+  const file = testProposalPath(root);
+  if (readJson(file)?.taskId === taskId) fs.rmSync(file, { force: true });
+}
+
+// selection: 'all' approves everything, 'none' rejects everything, otherwise
+// comma-separated 1-based indexes from the printed proposal approve those and
+// reject the rest. Pure so approval semantics stay testable.
+function applyTestApproval(proposal, selection) {
+  const value = String(selection ?? 'all').trim().toLowerCase();
+  const tests = proposal.tests.map(test => ({ ...test, approved: false }));
+  if (value === 'all') tests.forEach(test => { test.approved = true; });
+  else if (value !== 'none') {
+    for (const raw of value.split(',')) {
+      const index = Number.parseInt(raw.trim(), 10);
+      if (!Number.isInteger(index) || index < 1 || index > tests.length) {
+        throw new Error(`invalid test selection "${raw.trim()}"; use all, none, or 1-based indexes like 1,3`);
+      }
+      tests[index - 1].approved = true;
+    }
+  }
+  return { ...proposal, status: 'approved', tests };
+}
+
+function printTestProposal(proposal) {
+  console.log(`pair-loop: task ${proposal.taskId} proposes ${proposal.tests.length} test(s) — review before they are written:`);
+  proposal.tests.forEach((test, index) => {
+    console.log(`  [${index + 1}] ${test.name} — ${test.purpose} (${test.file})`);
+  });
+  console.log('pair-loop: approve with `pair-loop --approve-tests all` (indexes like 1,3 approve a subset; `none` rejects), then rerun pair-loop.');
+}
+
+function proposalPrompt(task, planPath) {
+  return `Propose the exact failing tests for pair-plan task ${task.id} WITHOUT writing or editing any file.\n\nTask ${task.id}: ${task.text}\nAcceptance criteria: ${task.acceptanceCriteria?.join(', ') || 'read the plan mapping'}\nOwned files: ${task.files.join(', ') || 'read the plan'}\nRequired verification: ${task.verify || 'read the plan'}\nPlan: ${planPath}\n\nRead the plan's Intent Contract, Capability Evidence, and Simplicity Contract plus the relevant repository code and existing tests first. Propose the minimal set of failing tests that pins the observable behavior of the mapped acceptance criteria. Follow the repository's existing test naming conventions. For each test return: name (the exact test/case name), purpose (one line: the behavior it pins and the defect it would catch), file (an owned test file path). Do not propose structure-mirroring tests (DTO/record shape, mapping plumbing, configuration wiring, framework-guaranteed behavior) — those are covered by the behavior-level integration test. Return only the requested structured result.`;
+}
+
+function runTestProposal({ runtime, route, root, task, planPath, scratchDir, timeoutMs }) {
+  const outputPath = path.join(scratchDir, `${task.id}.test-proposal.json`);
+  const rawPath = path.join(scratchDir, `${task.id}.test-proposal-events.jsonl`);
+  const prompt = proposalPrompt(task, planPath);
+  let command;
+  if (runtime === 'codex') {
+    const args = ['exec', '--json', '--ephemeral', '--sandbox', 'read-only', '--output-schema', TEST_PROPOSAL_SCHEMA_PATH, '--output-last-message', outputPath];
+    if (route.model && route.model !== 'default') args.push('--model', route.model);
+    if (route.effort && route.effort !== 'default') args.push('-c', `model_reasoning_effort="${route.effort}"`);
+    args.push(prompt);
+    command = { file: 'codex', args, cwd: root };
+  } else {
+    command = {
+      file: 'claude',
+      args: ['-p', prompt, '--output-format', 'json', '--no-session-persistence', '--permission-mode', 'dontAsk', '--disallowedTools', 'Edit,Write,MultiEdit,NotebookEdit,Task', '--json-schema', JSON.stringify(readJson(TEST_PROPOSAL_SCHEMA_PATH)), '--model', route.model, '--effort', route.effort === 'default' ? 'medium' : route.effort],
+      cwd: root,
+    };
+  }
+  const result = runCommand(command, rawPath, timeoutMs);
+  const envelope = readJsonFromString(result.stdout || '');
+  const candidate = envelope?.structured_output || envelope?.result || envelope;
+  const parsed = runtime === 'codex'
+    ? readJson(outputPath)
+    : (typeof candidate === 'string' ? readJsonFromString(candidate) : candidate);
+  const tests = Array.isArray(parsed?.tests)
+    ? parsed.tests.filter(test => test && typeof test === 'object' && test.name && test.file)
+    : [];
+  return { status: result.status ?? 1, tests, usage: parseRuntimeUsage(runtime, result.stdout || '') };
+}
+
+// Minimal synchronous TTY prompt (no dependencies): the loop is spawnSync-based,
+// so approval on a terminal blocks inline instead of forcing an exit/rerun cycle.
+function syncPromptTTY(question) {
+  process.stdout.write(question);
+  const buffer = Buffer.alloc(256);
+  const bytes = fs.readSync(process.stdin.fd, buffer, 0, 256, null);
+  return buffer.toString('utf8', 0, bytes).trim();
+}
+
+function promptApprovalTTY(proposal) {
+  printTestProposal(proposal);
+  const tests = proposal.tests.map(test => ({
+    ...test,
+    approved: /^y(es)?$/i.test(syncPromptTTY(`  approve [${test.name}]? [y/N] `)),
+  }));
+  return { ...proposal, status: 'approved', tests };
+}
+
+// Returns {action:'proceed', approvedTests} when the worker may run, or
+// {action:'await'} when the loop must pause for human approval. The generate
+// parameter is injectable for tests; production uses the read-only proposal spawn.
+function hitlGate({ root, plan, task, runtime, route, paths, options }, generate = runTestProposal) {
+  if (!options.hitl || task.type !== 'test') return { action: 'proceed', approvedTests: null };
+  if (options.dryRun) {
+    const existing = readTestProposal(root, task, plan);
+    return { action: 'proceed', approvedTests: existing?.tests?.filter(test => test.approved) || null };
+  }
+  let proposal = readTestProposal(root, task, plan);
+  if (!proposal) {
+    const generated = generate({
+      runtime,
+      route,
+      root,
+      task,
+      planPath: paths.plan,
+      scratchDir: paths.scratch,
+      timeoutMs: Number(process.env.PAIR_PROPOSAL_TIMEOUT_MS || 10 * 60 * 1000),
+    });
+    if (generated.status !== 0 || generated.tests.length === 0) {
+      fail(`task ${task.id} test proposal failed; see ${paths.scratch}`);
+    }
+    proposal = {
+      schema: 1,
+      taskId: task.id,
+      planDigest: planContractDigest(plan),
+      status: 'proposed',
+      tests: generated.tests.map(test => ({ ...test, approved: false })),
+    };
+    writeTestProposal(root, proposal);
+    if (generated.usage) {
+      appendJsonLine(paths.ledger, { event: 'test-proposal.generated', taskId: task.id, routeId: route.id, usage: generated.usage, at: new Date().toISOString() });
+    }
+  }
+  if (proposal.status !== 'approved') {
+    if (process.stdin.isTTY && process.stdout.isTTY) {
+      proposal = promptApprovalTTY(proposal);
+      writeTestProposal(root, proposal);
+    } else {
+      printTestProposal(proposal);
+      return { action: 'await' };
+    }
+  }
+  const approvedTests = proposal.tests.filter(test => test.approved);
+  if (approvedTests.length === 0) {
+    fail(`task ${task.id} has no approved tests; revise the plan task or delete .pair/test-proposal.json to repropose`);
+  }
+  return { action: 'proceed', approvedTests };
 }
 
 function completeTask(planPath, task) {
@@ -445,55 +808,99 @@ function addRecoveryContext(planPath, task, context) {
   fs.writeFileSync(planPath, lines.join('\n'));
 }
 
-function runOne(root, runtime, options, paths) {
-  const plan = fs.readFileSync(paths.plan, 'utf8');
-  const task = nextOpenTask(plan);
-  if (!task) return { done: true };
-  const ledger = readLedger(paths.ledger);
-  const repoId = repositoryId(root);
-  const prior = taskHistory(ledger, task.id, repoId);
-  if (prior.length >= options.maxAttempts) fail(`task ${task.id} reached the ${options.maxAttempts}-attempt safety cap`);
-  const route = chooseRoute(task, runtime, ledger, options, repoId);
-  const baselineCommit = git(root, ['rev-parse', 'HEAD']).stdout.trim();
-  const baseline = git(root, ['rev-parse', 'HEAD^{tree}']).stdout.trim();
-  let linkage;
+// Preflight: check every environmental invariant the loop depends on and report
+// ok/warn/fail lines instead of letting a broken link surface an hour later as a
+// generic environment-failure. Returns the number of failing checks.
+function runDoctor(root) {
+  const results = [];
+  const report = (level, name, detail) => results.push({ level, name, detail });
+
+  report('ok', 'git repository', root);
+
+  const pairPlan = path.join(root, '.pair', 'plan.md');
+  const loopPlan = path.join(root, '.claude-loop.md');
+  const plan = fs.existsSync(pairPlan) ? pairPlan : (fs.existsSync(loopPlan) ? loopPlan : null);
+  if (!plan) report('fail', 'plan', 'no .pair/plan.md or .claude-loop.md; promote a plan first');
+  else if (plan === pairPlan && process.env.PAIR_SKIP_PLAN_VALIDATION !== '1') {
+    const validation = childProcess.spawnSync(process.execPath, [path.join(SCRIPT_DIR, 'validate-plan'), plan], { cwd: root, encoding: 'utf8' });
+    if (validation.status === 0) report('ok', 'plan', '.pair/plan.md validates');
+    else report('fail', 'plan', (validation.stdout || validation.stderr || 'validation failed').trim().split('\n').slice(0, 3).join(' | '));
+  } else report('ok', 'plan', `${path.relative(root, plan)} present`);
+  if (plan === pairPlan) {
+    try {
+      const linkage = readWorkLinkage(root, fs.readFileSync(plan, 'utf8'));
+      report('ok', 'work linkage', linkage.workId ? `Work ${linkage.workId}` : 'plain plan (no canonical spec mirror)');
+    } catch (error) {
+      report('fail', 'work linkage', error.message);
+    }
+  }
+
+  const codex = commandExists('codex');
+  const claude = commandExists('claude');
+  if (!codex && !claude) report('fail', 'runtime', 'neither codex nor claude is on PATH');
+  else report('ok', 'runtime', `${[codex && 'codex', claude && 'claude'].filter(Boolean).join(', ')} available`);
+
+  if ((process.env.PATH || '').split(path.delimiter).some(entry => entry.includes('cmux-cli-shims'))) {
+    report('warn', 'PATH shims', 'cmux-cli-shims on PATH; stripped automatically for spawned runtimes');
+  }
+  const nested = NESTED_SESSION_ENV_KEYS.filter(key => process.env[key]);
+  if (nested.length > 0) report('warn', 'session env', `${nested.join(', ')} set; cleared automatically for spawned runtimes`);
+
+  const activeLoop = readJson(path.join(root, '.pair', 'active-loop.json'));
+  if (activeLoop?.pid) {
+    report('warn', 'active loop', processAlive(activeLoop.pid)
+      ? `pair-loop already running in process ${activeLoop.pid}`
+      : 'stale marker from a dead run; replaced on the next run');
+  }
+  if (fs.existsSync(path.join(root, '.pair', 'active-attempt.json'))) {
+    report('warn', 'active attempt', 'unresolved attempt; reconciled on the next run (finish an inline one with --complete)');
+  }
+
+  const dataDir = process.env.PAIR_DATA_DIR || path.join(os.homedir(), '.local', 'share', 'pair-v3');
   try {
-    linkage = readWorkLinkage(root, plan);
-  } catch (error) {
-    fail(error.message);
-  }
-  const attempt = createAttempt({
-    task,
-    route,
-    policyVersion: POLICY_VERSION,
-    baseline,
-    ...linkage,
-  });
-  attempt.baselineCommit = baselineCommit;
-  attempt.repositoryId = repoId;
-
-  const prompt = workerPrompt(task, paths.plan, readJson(path.join(root, '.pair', 'review.json')));
-  const outputPath = path.join(paths.scratch, `${attempt.attemptId}.worker-result.json`);
-  const rawPath = path.join(paths.scratch, `${attempt.attemptId}.worker-events.jsonl`);
-  const schema = readJson(WORKER_SCHEMA_PATH);
-  const command = buildRuntimeCommand({ runtime, root, prompt, model: route.model, effort: route.effort, schemaPath: WORKER_SCHEMA_PATH, outputPath, schema });
-
-  console.log(`pair-loop: task ${task.id} | ${runtime} ${route.model}/${route.effort} | risk=${task.risk} complexity=${task.complexity}`);
-  if (options.dryRun) {
-    console.log(JSON.stringify({ attempt, command }, null, 2));
-    return { done: false, dryRun: true };
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.accessSync(dataDir, fs.constants.W_OK);
+    report('ok', 'ledger', path.join(dataDir, 'attempts.jsonl'));
+  } catch {
+    report('fail', 'ledger', `${dataDir} is not writable`);
   }
 
-  fs.writeFileSync(paths.active, `${JSON.stringify(attempt, null, 2)}\n`);
-  appendJsonLine(paths.ledger, { event: 'attempt.started', ...attempt });
+  if (!commandExists('jq')) report('warn', 'jq', 'not on PATH; the stop-gate hook stays inert without it');
+  const verifyScript = path.join(root, '.pair', 'verify.sh');
+  if (fs.existsSync(verifyScript) && !(fs.statSync(verifyScript).mode & 0o111)) {
+    report('warn', 'verify.sh', 'present but not executable; verification falls back to replaying worker-reported commands');
+  }
 
-  const workerRun = runCommand(command, rawPath, Number(process.env.PAIR_TASK_TIMEOUT_MS || 60 * 60 * 1000));
-  const worker = parseWorkerResult(runtime, workerRun.stdout || '', outputPath);
+  for (const { level, name, detail } of results) console.log(`pair-doctor: ${level.padEnd(4)} ${name} — ${detail}`);
+  const fails = results.filter(item => item.level === 'fail').length;
+  const warns = results.filter(item => item.level === 'warn').length;
+  console.log(`pair-doctor: ${results.length - fails - warns} ok, ${warns} warn, ${fails} fail`);
+  return fails;
+}
+
+// Only low-risk, local-scope work is worth delegating to a cold headless worker under
+// --inline; the ledger shows warm-context inline implementation beats cold spawns on
+// everything harder (feature/high: 25% accepted at the strong tier, rewritten inline).
+function isDelegable(task) {
+  return task.risk === 'low' && task.scope === 'local';
+}
+
+function inlineBrief(task, planPath, priorReview, approvedTests) {
+  const body = workerPrompt(task, planPath, priorReview, approvedTests)
+    .replace('Work exactly one pair-plan task as the delegated implementation worker.', 'Implement exactly this one pair-plan task inline, in the current session, with full context.')
+    .replace('\nReturn only the requested structured result.', '');
+  return `--- INLINE TASK BRIEF ---\n${body}\nWhen done: run the exact verification yourself, then run \`pair-loop --complete\` so verification replay, independent review, classification, and the ledger still happen.\n--- END BRIEF ---`;
+}
+
+// Shared verify -> review -> classify -> record -> apply pipeline for both delegated
+// worker runs and inline coordinator completions. options.dryRun only stubs the
+// independent review (used by --complete tests); everything else runs for real.
+function assessAttempt({ root, runtime, options, paths, task, attempt, prior, snapshot, route, worker, workerRun, workerError }) {
   const verification = verify(root, task, worker);
   const reviewRun = workerRun.status === 0 && worker.status === 'completed'
-    ? runReview({ runtime, route, root, task, planPath: paths.plan, scratchDir: paths.scratch, attemptId: attempt.attemptId, timeoutMs: Number(process.env.PAIR_REVIEW_TIMEOUT_MS || 30 * 60 * 1000), dryRun: false })
+    ? runReview({ runtime, route, root, task, planPath: paths.plan, scratchDir: paths.scratch, attemptId: attempt.attemptId, timeoutMs: Number(process.env.PAIR_REVIEW_TIMEOUT_MS || 30 * 60 * 1000), dryRun: options.dryRun === true })
     : { status: 1, review: { verdict: 'fix-needed', recommended_action: 'rewrite', summary: 'worker did not complete', findings: [] }, usage: null };
-  const anchorRun = reviewRun.status === 0 && shouldRunAnchorReview(attempt.attemptId, task, reviewRun.review)
+  const anchorRun = reviewRun.status === 0 && !options.dryRun && shouldRunAnchorReview(attempt.attemptId, task, reviewRun.review)
     ? runReview({ runtime, route, root, task, planPath: paths.plan, scratchDir: paths.scratch, attemptId: `${attempt.attemptId}.anchor`, timeoutMs: Number(process.env.PAIR_REVIEW_TIMEOUT_MS || 30 * 60 * 1000), dryRun: false, anchor: true })
     : null;
   const anchorDisagrees = anchorRun?.review
@@ -505,11 +912,12 @@ function runOne(root, runtime, options, paths) {
     workerBlocker: worker.blocker,
     verification: verification.status,
     findings: effectiveReview.findings || [],
-    priorAttempts: prior.length,
+    priorAttempts: attemptCapStatus(prior, options.maxAttempts).substantive,
     priorModelAttempts: prior.filter(record => record.valid).length,
     runtimeStatus: workerRun.status ?? 1,
     reviewStatus: anchorRun ? (anchorRun.status ?? 1) : (reviewRun.status ?? 1),
     recommendedAction: effectiveReview.recommended_action,
+    workerParseError: worker.parseError === true,
   });
   const workerUsage = parseRuntimeUsage(runtime, workerRun.stdout || '');
   const measuredCosts = [workerUsage.costUsd, reviewRun.usage?.costUsd, anchorRun?.usage?.costUsd].filter(Number.isFinite);
@@ -535,12 +943,24 @@ function runOne(root, runtime, options, paths) {
     costSource: measuredCosts.length > 0 ? 'runtime' : 'route-estimate',
     success: outcome.disposition === 'accepted',
     valid: workerRun.status === 0 && reviewRun.status === 0 && (!anchorRun || anchorRun.status === 0),
+    runtimeError: workerError || null,
     ...outcome,
   };
   appendJsonLine(paths.ledger, completed);
   fs.rmSync(paths.active, { force: true });
 
-  if (outcome.action === 'complete-task') completeTask(paths.plan, task);
+  // Any outcome that retries or redoes the task starts the next attempt from a clean
+  // canvas: keep work only when it is accepted or locally fixable in place.
+  const revertActions = new Set(['escalate', 'redesign', 'retry-context', 'retry-infrastructure', 'retry-stronger']);
+  if (revertActions.has(outcome.action)) {
+    revertToSnapshot(root, snapshot, path.join(paths.scratch, `${attempt.attemptId}.rejected.patch`));
+    console.log(`pair-loop: task ${task.id} worktree restored to its pre-attempt state; rejected work saved to scratch`);
+  }
+
+  if (outcome.action === 'complete-task') {
+    completeTask(paths.plan, task);
+    clearTestProposal(root, task.id);
+  }
   if (outcome.action === 'retry-context') addRecoveryContext(paths.plan, task, worker.blocker);
   if (outcome.action === 'redesign') {
     const context = [effectiveReview.summary, ...(effectiveReview.findings || []).map(finding => finding.suggestion)].join(' ');
@@ -551,13 +971,144 @@ function runOne(root, runtime, options, paths) {
   return { done: false, action: outcome.action };
 }
 
+// Finish an inline attempt: the coordinator implemented the task in-session, and this
+// replays its verification, runs the independent review, classifies, and records —
+// the same evidence pipeline a delegated worker gets.
+function inlineComplete(root, runtime, options, paths) {
+  const active = readJson(paths.active);
+  if (!active?.attemptId) fail('no attempt is awaiting completion');
+  if (active.mode !== 'inline') fail('the active attempt is a delegated run; it is recovered automatically by the next pair-loop run');
+  const plan = fs.readFileSync(paths.plan, 'utf8');
+  const task = parsePlan(plan).tasks.find(item => item.id === active.taskId);
+  if (!task) fail(`task ${active.taskId} no longer exists in the plan`);
+  if (task.checked) fail(`task ${active.taskId} is already checked; nothing to complete`);
+  const prior = taskHistory(readLedger(paths.ledger), task.id, active.repositoryId);
+  const worker = {
+    status: 'completed',
+    summary: 'implemented inline by the coordinator session',
+    files_changed: task.files,
+    tests: task.verify ? [{ command: task.verify, status: 'pass' }] : [],
+  };
+  const route = { id: active.routeId, runtime: active.runtime, model: active.model, effort: active.effort, strength: 4 };
+  const result = assessAttempt({
+    root,
+    runtime,
+    options,
+    paths,
+    task,
+    attempt: active,
+    prior,
+    snapshot: active.snapshot,
+    route,
+    worker,
+    workerRun: { status: 0, stdout: '' },
+    workerError: '',
+  });
+  if (result.action === 'complete-task') console.log(`pair-loop: task ${task.id} completed inline and accepted`);
+  return result;
+}
+
+function runOne(root, runtime, options, paths) {
+  const plan = fs.readFileSync(paths.plan, 'utf8');
+  const task = nextOpenTask(plan);
+  if (!task) return { done: true };
+  const ledger = readLedger(paths.ledger);
+  const repoId = repositoryId(root);
+  const prior = taskHistory(ledger, task.id, repoId);
+  const cap = attemptCapStatus(prior, options.maxAttempts);
+  if (cap.unstable) fail(`task ${task.id} was interrupted ${cap.trailingInterrupts} times without completing; the runtime environment looks unstable — resolve it before rerunning`);
+  if (cap.overCap) fail(`task ${task.id} reached the ${options.maxAttempts}-attempt safety cap`);
+  const route = chooseRoute(task, runtime, ledger, options, repoId);
+  // HITL: pause for human approval of proposed tests BEFORE opening an attempt.
+  const gate = hitlGate({ root, plan, task, runtime, route, paths, options });
+  if (gate.action === 'await') return { done: false, awaitingApproval: true };
+  const baselineCommit = git(root, ['rev-parse', 'HEAD']).stdout.trim();
+  const baseline = git(root, ['rev-parse', 'HEAD^{tree}']).stdout.trim();
+  let linkage;
+  try {
+    linkage = readWorkLinkage(root, plan);
+  } catch (error) {
+    fail(error.message);
+  }
+  const inline = options.inline === true && !isDelegable(task);
+  const attempt = createAttempt({
+    task,
+    route: inline
+      ? { id: 'inline-coordinator', runtime: 'inline', model: 'coordinator', effort: 'default', strength: 4 }
+      : route,
+    policyVersion: POLICY_VERSION,
+    baseline,
+    ...linkage,
+  });
+  attempt.baselineCommit = baselineCommit;
+  attempt.repositoryId = repoId;
+  attempt.root = root;
+  const snapshot = snapshotWorktree(root);
+
+  if (inline) {
+    // Hand the task to the coordinator session: open the attempt, print the brief,
+    // and exit. `pair-loop --complete` closes it through the same evidence pipeline.
+    attempt.mode = 'inline';
+    attempt.snapshot = snapshot;
+    if (options.dryRun) {
+      console.log(JSON.stringify({ attempt }, null, 2));
+      return { done: false, dryRun: true };
+    }
+    fs.writeFileSync(paths.active, `${JSON.stringify(attempt, null, 2)}\n`);
+    appendJsonLine(paths.ledger, { event: 'attempt.started', ...attempt });
+    console.log(`pair-loop: task ${task.id} | inline coordinator | risk=${task.risk} complexity=${task.complexity}`);
+    console.log(inlineBrief(task, paths.plan, readJson(path.join(root, '.pair', 'review.json')), gate.approvedTests));
+    return { done: false, inlineHandoff: true };
+  }
+
+  const prompt = workerPrompt(task, paths.plan, readJson(path.join(root, '.pair', 'review.json')), gate.approvedTests);
+  const outputPath = path.join(paths.scratch, `${attempt.attemptId}.worker-result.json`);
+  const rawPath = path.join(paths.scratch, `${attempt.attemptId}.worker-events.jsonl`);
+  const schema = readJson(WORKER_SCHEMA_PATH);
+  const command = buildRuntimeCommand({ runtime, root, prompt, model: route.model, effort: route.effort, schemaPath: WORKER_SCHEMA_PATH, outputPath, schema });
+
+  console.log(`pair-loop: task ${task.id} | ${runtime} ${route.model}/${route.effort} | risk=${task.risk} complexity=${task.complexity}`);
+  if (options.dryRun) {
+    console.log(JSON.stringify({ attempt, command }, null, 2));
+    return { done: false, dryRun: true };
+  }
+
+  fs.writeFileSync(paths.active, `${JSON.stringify(attempt, null, 2)}\n`);
+  appendJsonLine(paths.ledger, { event: 'attempt.started', ...attempt });
+
+  const workerRun = runCommand(command, rawPath, Number(process.env.PAIR_TASK_TIMEOUT_MS || 60 * 60 * 1000));
+  const workerError = (workerRun.status ?? 1) !== 0 || !(workerRun.stdout || '').trim()
+    ? runtimeDiagnostic(workerRun)
+    : '';
+  if (workerError) console.error(`pair-loop: task ${task.id} worker runtime failed — ${workerError.split('\n')[0].slice(0, 300)} (see ${rawPath}.stderr)`);
+  const worker = parseWorkerResult(runtime, workerRun.stdout || '', outputPath);
+  return assessAttempt({ root, runtime, options, paths, task, attempt, prior, snapshot, route, worker, workerRun, workerError });
+}
+
 function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
-    console.log('Usage: pair-task [--runtime codex|claude|auto] [--model MODEL] [--effort LEVEL] [--once] [--dry-run] [--max-attempts N]');
+    console.log('Usage: pair-task [--runtime codex|claude|auto] [--model MODEL] [--effort LEVEL] [--once] [--inline] [--complete] [--doctor] [--dry-run] [--hitl] [--approve-tests all|1,3|none] [--max-attempts N]');
     return;
   }
   const root = gitRoot();
+  if (options.doctor) process.exit(runDoctor(root) > 0 ? 1 : 0);
+  if (options.approveTests !== undefined) {
+    const proposal = readJson(testProposalPath(root));
+    if (!proposal?.tests) fail('no test proposal is awaiting approval');
+    let approved;
+    try {
+      approved = applyTestApproval(proposal, options.approveTests);
+    } catch (error) {
+      fail(error.message);
+    }
+    writeTestProposal(root, approved);
+    const kept = approved.tests.filter(test => test.approved).length;
+    console.log(`pair-loop: approved ${kept}/${approved.tests.length} proposed test(s) for task ${approved.taskId}${kept === 0
+      ? ' — none approved; revise the plan task or delete .pair/test-proposal.json to repropose'
+      : '; rerun pair-loop to write them'}`);
+    return;
+  }
   const runtime = resolveRuntime(options.runtime);
   const pairPlan = path.join(root, '.pair', 'plan.md');
   const loopPlan = path.join(root, '.claude-loop.md');
@@ -591,9 +1142,19 @@ function main() {
   const cleanupActiveLoop = () => endActivePairLoop(root, activeLoop);
   if (activeLoop) process.once('exit', cleanupActiveLoop);
   try {
+    if (options.complete) {
+      inlineComplete(root, runtime, options, paths);
+      return;
+    }
     recoverActiveAttempt(paths);
+    reconcileOrphanedAttempts(paths, root);
     while (true) {
       const result = runOne(root, runtime, options, paths);
+      if (result.awaitingApproval) {
+        console.log('pair-loop: paused — a test proposal is awaiting your approval');
+        break;
+      }
+      if (result.inlineHandoff) break;
       if (result.done || result.dryRun || options.once) break;
     }
     if (!nextOpenTask(fs.readFileSync(plan, 'utf8'))) console.log('pair-loop: all plan tasks complete');
@@ -608,11 +1169,26 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
+  NESTED_SESSION_ENV_KEYS,
   addRecoveryContext,
+  applyTestApproval,
   beginActivePairLoop,
+  chooseRoute,
+  clearTestProposal,
   endActivePairLoop,
+  hitlGate,
+  isDelegable,
   isExpectedFailingTestTask,
+  parseWorkerResult,
+  readTestProposal,
   readWorkLinkage,
+  reconcileOrphanedAttempts,
   recoverActiveAttempt,
+  revertToSnapshot,
+  runtimeDiagnostic,
+  runtimeEnv,
+  snapshotWorktree,
   verify,
+  workerPrompt,
+  writeTestProposal,
 };

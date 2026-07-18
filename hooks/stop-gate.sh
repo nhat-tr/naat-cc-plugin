@@ -26,14 +26,24 @@ if command -v jq > /dev/null 2>&1 && [[ -n "$hook_input" ]]; then
 fi
 proj="${CLAUDE_PROJECT_DIR:-${hook_cwd:-$PWD}}"
 
-# pair-loop owns this file. If a coordinator turn tries to stop while an
-# attempt is in flight or survived a crash, force it to resolve the attempt.
+# pair-loop owns this file. Block a stop only while the attempt's owning pair-loop
+# process is still alive. active-attempt.json carries no pid of its own, so use the
+# sibling active-loop.json owner as the liveness proxy. An orphaned active-attempt.json
+# (loop crashed/killed/reset) must NOT trap the session — the next pair-loop run
+# reconciles it from the ledger.
 active_attempt="$proj/.pair/active-attempt.json"
 if [[ -f "$active_attempt" ]]; then
   command -v jq > /dev/null 2>&1 || exit 0
-  task=$(jq -r '.taskId // "unknown"' "$active_attempt" 2> /dev/null || echo unknown)
-  jq -n --arg r "Pair attempt for task $task is still active. Resume pair-loop or classify/recover the attempt before stopping." '{decision: "block", reason: $r}'
-  exit 0
+  active_loop="$proj/.pair/active-loop.json"
+  owner_pid=""
+  if [[ -f "$active_loop" && ! -L "$active_loop" ]]; then
+    owner_pid=$(jq -r '.pid // empty' "$active_loop" 2> /dev/null || true)
+  fi
+  if [[ "$owner_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$owner_pid" 2> /dev/null; then
+    task=$(jq -r '.taskId // "unknown"' "$active_attempt" 2> /dev/null || echo unknown)
+    jq -n --arg r "Pair attempt for task $task is still active. Resume pair-loop or classify/recover the attempt before stopping." '{decision: "block", reason: $r}'
+    exit 0
+  fi
 fi
 
 gate=""

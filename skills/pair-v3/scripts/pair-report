@@ -5,7 +5,21 @@ const os = require('node:os');
 const path = require('node:path');
 
 const dataDir = process.env.PAIR_DATA_DIR || path.join(os.homedir(), '.local', 'share', 'pair-v3');
-const ledger = process.argv[2] || path.join(dataDir, 'attempts.jsonl');
+const args = process.argv.slice(2);
+if (args.includes('--help') || args.includes('-h')) {
+  console.log([
+    'Usage: pair-report [LEDGER_PATH] [--json]',
+    '',
+    'Summarize the pair-v3 attempt ledger by route/type/risk.',
+    `Default ledger: ${path.join(dataDir, 'attempts.jsonl')} (override with PAIR_DATA_DIR or a LEDGER_PATH argument).`,
+    'Columns: attempts, quality (accepted/valid), dispositions, findings (BLOCKER/MAJOR), tokens, cost.',
+    'Interrupted attempts (crashes/kills reconciled on the next run) are reported separately from real tries.',
+  ].join('\n'));
+  process.exit(0);
+}
+// A flag must never be mistaken for the ledger path; only a non-flag argument selects it.
+const asJson = args.includes('--json');
+const ledger = args.find(arg => !arg.startsWith('-')) || path.join(dataDir, 'attempts.jsonl');
 if (!fs.existsSync(ledger)) {
   console.log('pair-report: no attempts recorded');
   process.exit(0);
@@ -27,6 +41,7 @@ for (const attempt of attempts) {
     type: attempt.profile?.type || '?',
     risk: attempt.profile?.risk || '?',
     attempts: 0,
+    interrupted: 0,
     valid: 0,
     accepted: 0,
     localFix: 0,
@@ -45,6 +60,7 @@ for (const attempt of attempts) {
     measuredCosts: 0,
   };
   group.attempts++;
+  if (attempt.status === 'interrupted') group.interrupted++;
   if (attempt.valid) group.valid++;
   if (attempt.disposition === 'accepted') group.accepted++;
   if (attempt.disposition === 'local-fix') group.localFix++;
@@ -68,7 +84,7 @@ for (const attempt of attempts) {
   groups.set(key, group);
 }
 
-if (process.argv.includes('--json')) {
+if (asJson) {
   console.log(JSON.stringify([...groups.values()], null, 2));
   process.exit(0);
 }
