@@ -444,7 +444,7 @@ class SessionStore {
           throw new Error(`browser turn ${replyTo} does not exist${hint}`);
         }
         // Oldest-only guard: acknowledging a newer turn advances the cursor past an older
-        // unacknowledged batch and silently drops it. Mirror agent-conversation-delivery's ledger.
+        // unacknowledged batch and silently drops it.
         if (oldestUnacknowledged && target.seq > oldestUnacknowledged.seq) {
           throw new Error(
             `out of order: reply to oldest unacknowledged turn ${oldestUnacknowledged.seq} before ${target.seq}`,

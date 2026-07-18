@@ -203,6 +203,13 @@
         "claude"
       ]
     },
+    "skill.vuln-autofix": {
+      "type": "skill",
+      "canonical_file": "skills/vuln-autofix/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
     "skill.module-deepening": {
       "type": "skill",
       "canonical_file": "skills/module-deepening/SKILL.md",

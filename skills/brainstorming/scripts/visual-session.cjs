@@ -454,11 +454,11 @@ async function start(options) {
       revision: initialDocument.revision,
       elk_preflight: options.elkPreflight,
       feedback_delivery: {
+        mechanism: 'background_wait',
         automatic: idleDelivery ? 'codex_idle_worker' : 'not_probed',
-        fallback: 'cli_foreground',
         wait_receiver: deliveryState.listening ? 'listening' : 'not_listening',
       },
-      next_action: 'Open connection_url, then keep one wait_for_feedback call or one foreground CLI wait active.',
+      next_action: 'Share connection_url, then run `wait` as a background task and end your turn; you are woken automatically when the user submits feedback (Codex also auto-delivers via its idle worker).',
     } : {}),
   }));
 
@@ -540,11 +540,7 @@ async function publish(options) {
   const { preflightWorkspaceDocument } = require('./workspace-render-preflight.cjs');
   await preflightWorkspaceDocument(document);
   const output = writeDocumentIntoLiveSession(metadata, document);
-  console.log(JSON.stringify({
-    type: 'screen.published',
-    screen_file: output,
-    connection_url: sessionConnectionUrl(metadata),
-  }));
+  console.log(JSON.stringify({ type: 'screen.published', screen_file: output }));
 }
 
 async function present(options) {
@@ -581,7 +577,7 @@ async function present(options) {
       session_dir: live.session_dir,
       connection_url: sessionConnectionUrl(live),
       elk_preflight: elkPreflight,
-      note: 'Reused the live session — the browser URL is unchanged. Re-paste connection_url to the user.',
+      note: 'Reused the live session — the browser URL is unchanged.',
     }));
     return;
   }
@@ -717,7 +713,7 @@ function reply(options) {
     ? fs.readFileSync(path.resolve(options.messageFile), 'utf8')
     : options.message;
   const record = new SessionStore(metadata.state_dir).publishAgentReply({ replyTo, message });
-  console.log(JSON.stringify({ ...record, connection_url: sessionConnectionUrl(metadata) }));
+  console.log(JSON.stringify(record));
 }
 
 function status(options) {

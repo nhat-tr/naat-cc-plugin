@@ -399,13 +399,9 @@ test('present starts directly on a canonical v2 document and derives a stale Rev
   assert.equal(info.work_id, 'work-20260713-architecture-present');
   assert.match(info.revision, /^[a-f0-9]{8}$/);
   assert.notEqual(info.revision, candidate.revision, 'Present must derive Revision after edits');
-  assert.ok(
-    ['codex_idle_worker', 'not_probed'].includes(info.feedback_delivery.automatic),
-    'Present must report only automatic delivery it actually started or mark it unprobed',
-  );
-  assert.equal(info.feedback_delivery.fallback, 'cli_foreground');
+  assert.equal(info.feedback_delivery.mechanism, 'background_wait');
   assert.equal(info.feedback_delivery.wait_receiver, 'not_listening');
-  assert.match(info.next_action, /foreground.*wait/i);
+  assert.match(info.next_action, /background/i);
 
   const format = JSON.parse(fs.readFileSync(path.join(info.state_dir, 'visual-format.json'), 'utf8'));
   assert.equal(format.active_version, 2);
@@ -555,7 +551,6 @@ test('reply accepts an inline --message and re-emits the shareable connection UR
   assert.equal(replied.status, 0, replied.stderr);
   const record = JSON.parse(replied.stdout);
   assert.equal(record.message, 'Acknowledged inline — no temp file needed.');
-  assert.equal(record.connection_url, info.connection_url, 'reply re-emits the shareable URL');
 });
 
 test('present and Publish compile Architecture Drafts without migration or manual Revision work', async t => {

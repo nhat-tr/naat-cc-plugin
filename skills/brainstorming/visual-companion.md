@@ -69,7 +69,7 @@ Keep the target project as the working directory so active-session discovery fol
 <skill-dir>/scripts/start-server.sh
 ```
 
-Codex and Claude **must remain in foreground** because their command harnesses can reap detached children. Retain the running execution handle. Do not add background, daemon, polling, or model-resume machinery.
+Codex and Claude keep the **server** in foreground because their command harnesses can reap detached children; retain the running execution handle. The only backgrounded command is the feedback `wait` (below), and only through the harness's own background-command mechanism — do not daemonize the server, poll it, or resume a model process to watch it.
 
 The first output record contains `connection_url`, `screen_file`, `state_dir`, and `active_file`. Share `connection_url`; never persist its capability token. A restart creates a new `connection_url` and invalidates the old one.
 
@@ -77,7 +77,7 @@ To change the document or switch the Workspace Kind mid-review, run `present` or
 
 **When the user asks to "restart the visual server," re-presenting IS the restart** — just re-run `present`; it reuses the live session and re-renders the current document. **Never `kill` the server process and start a fresh `present`**: that cold-starts on a new port with a new token, minting a new `connection_url` and silently orphaning the open tab — the exact failure re-presenting exists to avoid. A full `stop` + fresh start is only for abandoning the session entirely, and then you must tell the user to close the old tab because its submissions go to a dead port.
 
-**Always re-paste the full `connection_url` to the user after every `present`, `publish`, represent, and `reply` — on its own line, as a real link.** Every one of those commands re-emits `connection_url` for exactly this reason, and `status` recovers it if you lost it. Never tell the user "same URL, just refresh": the link scrolls out of view over a long review, and if the port ever changed a stale link fails silently. Re-pasting the current link every time is cheap; making the user hunt for it is the most common way this companion frustrates them.
+Share `connection_url` with the user **once**, when you first `present` — it is stable for the server's lifetime, so do not re-paste it on every step. If the user loses it, recover it with `status`, which re-emits the current `connection_url`; `present`, `publish`, and represent re-emit it too, so a mid-review re-present hands back a working link automatically.
 
 Sessions default to `$CLAUDE_SCRATCH_DIR/<repo>-<hash>/brainstorm/<session-id>` (the `-<hash>` suffix disambiguates same-named repos). Run `status`, `drain`, `reply`, and `stop` from the project directory, or pass `--session-dir <dir>` to target a specific session regardless of your current directory. If the derived pointer is missing, these commands fall back to the one live session in scratch and error only when several are running at once. Use `--project-dir` only when the user explicitly asks to retain the visual session.
 
@@ -170,60 +170,34 @@ The user can select decisions, annotate any rendered `data-brainstorm-id`, add a
 
 > Feedback saved. Waiting for Codex or Claude to pick it up from this session.
 
-After publishing the visual document and sharing the browser URL, invoke one `wait_for_feedback` MCP tool call from the original conversation with the full review-window timeout:
-
-```json
-{ "timeoutMs": 900000 }
-```
-
-`wait_for_feedback` is the primary wake boundary on **both Codex and Claude Code**: the plugin's `.mcp.json` registers the `visual-companion-feedback` MCP server (`visual-mcp-server.mjs`) for Claude, and Codex registers the same server. The MCP call completes the already-active tool call with the oldest durable Feedback Batch, so the agent continues in the same turn without polling or starting another model process. Cancellation or timeout does not acknowledge or consume a batch.
-
-**Prefer the MCP tool over a foreground CLI `wait`.** A CLI `wait` shell blocks your turn for the whole review window — often 15+ minutes of dead churn — and on timeout tempts a second blocking wait. Make the `wait_for_feedback` tool call instead. And when the user has *already* told you they submitted feedback, or asks you to "check": the batch is waiting, so pick it up immediately with one short `wait_for_feedback` (or a single `drain`) and then revise and re-present — do **not** open a fresh long wait, and do **not** start unrelated investigation while feedback is in hand. Picking up submitted feedback is always the next action, before anything else.
-
-Claude additionally exposes the `visual-companion-channel` notification (`ack_feedback` plus a research-preview capability that stays inert unless Claude is launched with `--dangerously-load-development-channels` or the plugin is allowlisted) — a supplementary idle-delivery signal, not the wake boundary.
-
-The CLI Wait below is recovery for environments where the MCP server is unavailable. It consults the same durable store as the MCP wait and preserves the same delivery semantics:
+Feedback returns to you **automatically through a background wait** — no manual ping and no frozen foreground turn. Once `present` has shared the `connection_url`, run the wait as a **background task**, then **end your turn**:
 
 ```bash
 node <skill-dir>/scripts/visual-session.cjs wait --timeout-ms 900000
 ```
 
-Run CLI Wait as one blocking foreground command. Never launch it with a background flag. Do not use `codex exec resume`, `claude --resume`, CLI `resume`, a background subagent, a second model process, or repeated drain/status calls as live delivery. They do not complete the original active tool call and waste tokens.
+Launch it through the harness's own background-command mechanism (a backgrounded command re-invokes you when it exits); do **not** run it as a blocking foreground command that burns your turn for the whole review window. When the user submits a Feedback Batch in the browser, the background `wait` exits with that batch and the harness automatically re-invokes you. Then revise the Visual Document, `publish` it — which reuses the live session in place, keeping the same port, token, and `connection_url` — mirror a concise `reply` into browser history, and launch **another** background `wait` for the next batch. Each browser review is one such cycle; never watch the session with a drain/status timer or a second model process.
 
-### Runtime registration and idle delivery
+When the user has *already* told you they submitted feedback, or asks you to "check," the batch is already durable — pull it immediately with `drain` (or a single short `wait`) rather than opening a fresh long wait, and revise before starting any unrelated work. Picking up submitted feedback is always the next action.
 
-Runtime installs expose complementary paths. Both Codex and Claude register `visual-companion-feedback` (the `wait_for_feedback` MCP Wait) from the plugin's `.mcp.json`. Codex additionally owns one `AgentConversationDelivery` worker when `CODEX_THREAD_ID` is available; that worker uses Codex App Server `thread/resume` and starts a turn only after the observed thread status is `idle`; active, missing, or failed targets remain durably queued. Claude additionally loads `visual-companion-channel`; the Channel process resolves the repository's Active Session Pointer after startup, emits `notifications/claude/channel`, and advances the Reply cursor only through `ack_feedback`.
-
-Both registered entrypoints may start before a Visual Session exists. They bind when the Active Session Pointer appears and never persist a Capability Token or Feedback Batch content in runtime evidence. Claude custom Channels remain research preview: use the development-channel flag for this plugin unless Anthropic has allowlisted it, and treat an unavailable open Channel as queued rather than delivered. See the [Codex App Server protocol](https://developers.openai.com/codex/app-server/), [Claude Channels reference](https://code.claude.com/docs/en/channels-reference), and [Claude plugin reference](https://code.claude.com/docs/en/plugins-reference).
-
-Run capability diagnostics without contacting a conversation or changing runtime configuration:
-
-```bash
-node <skill-dir>/scripts/runtime-pilot.cjs --check-only
-```
-
-`capability_state: supported` means the installed CLI exposes the required protocol surface. `delivery_state: queued` with `reason_code: not_probed` is intentional until a delivery pilot observes a real target; capability support is not a delivery claim.
-
-If MCP and CLI Wait are unavailable or have timed out, drain the oldest pending batch once:
+`drain` is the explicit "check now": it returns the oldest pending Feedback Batch immediately, or `{"type":"empty"}` when nothing is queued. Use it whenever you want to pull feedback synchronously instead of waiting on it.
 
 ```bash
 node <skill-dir>/scripts/visual-session.cjs drain
 ```
 
-Treat the returned message, annotations, choices, and screen identity as one user response. Update the Core Anchor when intent changed. Answer in the same active agent turn, revise the active Visual Document (`workspace.json` for v2; `screen.json` only for v1 compatibility) if spatial feedback helps, and mirror a concise reply into browser history:
+Treat the returned message, annotations, choices, and screen identity as one user response. Update the Core Anchor when intent changed. Revise the active Visual Document (`workspace.json` for v2; `screen.json` only for v1 compatibility) if spatial feedback helps, and mirror a concise reply into browser history:
 
 ```bash
 node <skill-dir>/scripts/visual-session.cjs reply \
   --message-file <scratch-response-file>
 ```
 
-`--reply-to` is optional: omit it to acknowledge the batch you were just served (the oldest unacknowledged turn), so the ack cursor always advances without recomputing the sparse global seq. Pass `--reply-to <turn-seq>` only to target a specific turn; a `--reply-to` that skips an older unacknowledged batch is refused, so an earlier batch can never be silently dropped.
+`reply` acknowledges the served batch and renders a short response into browser history. Use `--message TEXT` for a short inline acknowledgement, or `--message-file FILE` for a long or multi-line revision note that would fight shell escaping. `--reply-to` is optional: omit it to acknowledge the batch you were just served (the oldest unacknowledged turn), so the ack cursor advances without recomputing the sparse global seq. Pass `--reply-to <turn-seq>` only to target a specific turn; a `--reply-to` that skips an older unacknowledged batch is refused, so an earlier batch can never be silently dropped.
 
-`wait` and `drain` include a `pending` count of unacknowledged batches (the returned turn included). After replying, drain again while `pending` was greater than 1 — the user queued another batch during your turn.
+`wait` and `drain` include a `pending` count of unacknowledged batches (the returned turn included). After replying, `drain` again while `pending` was greater than 1 — the user queued another batch during your turn. Once every batch is acknowledged, `drain` returns `{"type":"empty"}` until the user submits again.
 
 When Publish replaces the active Visual Document, the browser diffs Revisions and marks exactly what moved: `new`/`updated` flags on changed Components and a strip listing removed ones. Reviewers also have keyboard shortcuts (`a` toggles annotate, `Esc` exits, `⌘/Ctrl+Enter` saves the Feedback Batch).
-
-`reply` acknowledges the batch. A later `drain` returns `{"type":"empty"}` until another batch is submitted. This is **zero agent polling**: use one blocking wait per browser review, never repeat drain/status on a timer, and never spawn another model process to watch the session.
 
 ## The Visual Is a Normal Repo Artifact
 
@@ -246,7 +220,7 @@ Because artifacts resolve against the repo, they persist regardless of where ses
 - Keep v1 documents under 5 KB where practical. Keep v2 documents well below the 512 KiB safety cap by including only decision-relevant content.
 - Scaffold once; never spend model turns repairing a guessed section shape.
 - Do not echo the whole document into chat; summarize decisions and deltas.
-- Use SSE only for browser refresh. There is no WebSocket, browser polling, or agent polling; the agent side uses one blocking MCP Wait, with CLI Wait as recovery.
+- Use SSE only for browser refresh. There is no WebSocket, browser polling, or agent polling; the agent side uses one backgrounded `wait` per review window, woken automatically when feedback arrives.
 - Do not inspect generated shell code during normal use; this guide is the operating contract.
 - Stop the session when the visual interview ends.
 
@@ -278,9 +252,4 @@ Relevant reusable resources:
 - `scripts/workspace-scaffold.cjs` — deterministic, schema-valid v2 scaffold for all five Workspace Kinds
 - `scripts/visual-session.cjs` — scaffold, start, publish, drain, reply, status, export, and stop
 - `scripts/session-store.cjs` — durable feedback and acknowledgement store
-- `scripts/delivery-core.cjs` — active Wait, lifecycle detection, and content-free delivery evidence
-- `scripts/visual-mcp-server.mjs` — primary `wait_for_feedback` MCP transport
-- `scripts/agent-conversation-delivery.cjs` — durable delivery identity, queue, replay, and acknowledgement ledger
-- `scripts/codex-app-server-adapter.cjs` — observed-idle Codex `thread/resume` / `turn/start` adapter
-- `scripts/claude-channel-server.mjs` — Claude Channel notification and `ack_feedback` entrypoint
-- `scripts/runtime-pilot.cjs` — secret-safe installed capability and delivery diagnostics
+- `scripts/delivery-core.cjs` — blocking wait primitive and drain

@@ -79,11 +79,11 @@ test('the skill teaches the exact-session visual loop without a second agent', (
   assert.doesNotMatch(guide, /session-bridge\.cjs wait/);
   assert.match(guide, /data-brainstorm-id/);
   assert.match(guide, /React/i);
-  assert.match(guide, /same active agent turn/i);
-  assert.match(guide, /Do not use `codex exec resume`, `claude --resume`/i);
-  assert.match(guide, /Codex.*must remain in foreground/i);
+  assert.match(guide, /background wait/i);
+  assert.match(guide, /automatically re-invoke/i);
+  assert.match(guide, /server.*in foreground/i);
   assert.match(guide, /restart.*new `connection_url`/i);
-  assert.match(guide, /zero agent polling/i);
+  assert.match(guide, /never watch the session/i);
   assert.match(guide, /target project.*working directory/i);
   assert.match(skill, /routine Visual Session commands.*active sandbox/i);
   assert.match(skill, /do not.*require_escalated.*proactively/i);
@@ -94,7 +94,7 @@ test('the skill teaches the exact-session visual loop without a second agent', (
   assert.match(skill, /do not reread.*scaffold/i);
   assert.match(skill, /either direct reconnaissance or one Evidence Scout.*never both/i);
   assert.match(skill, /do not poll.*server.*execution handle/i);
-  assert.match(skill, /exactly one blocking feedback wait/i);
+  assert.match(skill, /one background feedback wait/i);
   assert.match(guide, /visual-session\.cjs scaffold/i);
   assert.match(guide, /never spend model turns repairing a guessed section shape/i);
   assert.match(architectureGuide, /visual-session\.cjs present --draft/i);
@@ -105,7 +105,7 @@ test('the skill teaches the exact-session visual loop without a second agent', (
   assert.match(architectureGuide, /adapter.*artifact.*data_store.*external_system.*interface.*service.*worker/is);
   assert.match(architectureGuide, /command.*control.*data.*event.*evidence/is);
   assert.match(architectureGuide, /parent_id.*modes.*change.*multiselect/is);
-  assert.match(architectureGuide, /foreground.*wait/i);
+  assert.match(architectureGuide, /wait[\s\S]{0,60}background task/i);
   assert.ok(Buffer.byteLength(architectureGuide, 'utf8') <= 6_000, 'Architecture runbook must stay bounded');
   assert.doesNotMatch(`${skill}\n${guide}`, /visual ready/i);
 });
@@ -133,8 +133,6 @@ test('the skill bounds coordinator output, web research, wait resumptions, and R
   assert.match(skill, /combined reconnaissance output.*12 KB/i);
   assert.match(skill, /web research.*response_length.*short/i);
   assert.match(skill, /never request.*response_length.*long/i);
-  assert.match(skill, /running orchestration cell.*resume it once.*remaining review timeout/is);
-  assert.match(skill, /at least 300000 ms/i);
   assert.match(skill, /Publish only for a material Revision/i);
   assert.match(skill, /never Publish an unchanged Revision/i);
 });

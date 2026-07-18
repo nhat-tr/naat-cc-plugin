@@ -95,9 +95,9 @@ node <skill-dir>/scripts/visual-session.cjs publish --draft <architecture-draft.
 
 ## Receive Feedback
 
-Read `feedback_delivery` truthfully. `automatic: codex_idle_worker` means that worker started; `not_probed` is not a connection claim. `wait_receiver: not_listening` means no blocking receiver was observed yet.
+`feedback_delivery.mechanism` is `background_wait`; `wait_receiver: not_listening` means no wait has bound to the store yet.
 
-Use an injected Claude Channel delivery when it arrives. Otherwise use one callable `wait_for_feedback` request or one foreground CLI Wait. Never run Wait in the background, poll status, start a second model, or ask the user to type in the terminal.
+Run one `visual-session.cjs wait --timeout-ms <ms>` **as a background task** and end your turn; when the user submits feedback the wait exits and you are re-invoked automatically. Use `drain` only for an explicit synchronous check. Do not poll status on a timer, start a second model, or ask the user to type in the terminal.
 
 ## Recovery
 
