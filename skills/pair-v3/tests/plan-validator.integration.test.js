@@ -42,17 +42,6 @@ test('canonical validator accepts the canonical plan and rejects a non-runnable 
   assert.match(invalid.stdout, /stable task ID|Intent Contract|Capability Evidence/);
 });
 
-test('pair-v2 validator wrapper delegates to the canonical validator', t => {
-  const plan = scratchFile(t, 'valid-plan.md', validPairPlan());
-  const wrapped = childProcess.spawnSync('bash', [
-    path.resolve(__dirname, '../../pair-v2/scripts/validate-plan.sh'),
-    plan,
-  ], { encoding: 'utf8' });
-
-  assert.equal(wrapped.status, 0, `${wrapped.stdout}${wrapped.stderr}`);
-  assert.match(wrapped.stdout, /validate-plan: OK/);
-});
-
 test('canonical validator accepts the compact Pair-lite execution contract', t => {
   const plan = validPairLitePlan();
   const result = validate(scratchFile(t, 'pair-lite-plan.md', plan));

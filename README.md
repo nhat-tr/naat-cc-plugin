@@ -84,7 +84,6 @@ Notes:
 | az-pr-reviewer | opus | (spawned by az-pr-review) | Deep design review of a checked-out PR worktree in a fresh, unanchored context |
 | az-review-response | sonnet | `/az-review-response` | Fetch PR comment threads, give an overview, then draft evidence-backed responses per thread |
 | kibana-analyst | opus | `/kibana-logs` | Search Elasticsearch logs AND investigate production errors, quoting evidence verbatim |
-| pair-reviewer | opus | (delegate mid-session) | In-session pair-v2 reviewer: diff vs plan, writes .pair/review.*, BLOCKERs feed the stop-gate |
 | mech | haiku | (delegate by default) | Cheap mechanical worker: renames, repetitive edits, boilerplate, known commands — standalone briefs only |
 
 ### Claude Code Commands
@@ -110,9 +109,7 @@ Notes:
 | `kube-vuln` | Triage container-image vulnerabilities (Trivy reports) in a Kubernetes namespace |
 | `mermaid-validate` | Validate Mermaid diagram blocks right after they're written or edited |
 | `module-deepening` | Tactical refactoring heuristics — deletion test, depth-as-leverage, two-adapter rule |
-| `pair-v2` | Headless doer/reviewer pair-programming workflow; `.pair/` state, stop-gate enforced |
 | `pair-v4` | Visible Codex/Claude coordinator, durable per-Work state, reusable Review Session, verification, review, and recovery controls |
-| `pair-v3` | Compatibility entry point; `--legacy-v3` explicitly restores the old split headless lifecycle |
 | `session-replay-note` | Turn a coding-agent session into a teaching-oriented Obsidian demo (notes + Canvas) |
 | `typescript` | TypeScript implementation guidance — React/Next.js, Node, type safety, testing |
 | `ubiquitous-language` | Extract a domain-term glossary from the conversation into `UBIQUITOUS_LANGUAGE.md` |
@@ -141,9 +138,11 @@ only through the previewed `--discard-attempt ... --confirm-discard` operation.
 `pair-report` summarizes repository-local quality, findings, tokens, resumptions,
 and cost evidence.
 
-Pair v3 and Pair v2 remain compatibility surfaces. `pair-loop --legacy-v3` is
-the explicit route to the old split headless lifecycle; existing `pair-loop`,
-`--once`, `--inline`, and `--complete` entry points still work against v4 state.
+Pair v2 and Pair v3 are retired as skills — the agent no longer surfaces them,
+and the pair-v3 directory remains only as the pair-v4 runtime engine (scripts,
+not a skill). `pair-loop --legacy-v3` is still the explicit CLI route to the old
+split headless lifecycle; existing `pair-loop`, `--once`, `--inline`, and
+`--complete` entry points still work against v4 state.
 
 ##### Pair v4 quick start
 
@@ -158,46 +157,6 @@ the explicit route to the old split headless lifecycle; existing `pair-loop`,
    `--takeover`, or the exclusive human-edit commands without losing state.
 5. **Complete** — Pair replays verification, reviews complete patches, advances
    Review Slices, then runs cumulative verification/review and records completion.
-
-##### Pair v2 legacy details
-
-`pair-v2` is a `workflow_skill`, not a plain guidance skill — it ships executable
-scripts under `skills/pair-v2/scripts/`:
-
-- `pair-review` — headless, one-shot reviewer. Runs `claude -p` with a fresh
-  context against the working-tree diff + plan, writes `.pair/review.md` /
-  `.pair/review.json`, and appends BLOCKER findings back into `.pair/plan.md`
-  as unchecked tasks. Use `/pair-promote` first to produce the plan it reviews.
-- `validate-plan.sh` — compatibility wrapper around the shared pair-v3 parser.
-  It enforces intent/capability/simplicity contracts, stable task and AC IDs,
-  grounded files, profiles, dependency order, TDD order, and exact verification.
-- `workflow-metrics` — measures agent-workflow friction (interrupts, tool
-  rejections, stop-gate blocks, pair-review runs, etc.) from Claude Code
-  session JSONLs, so a workflow change can be judged on evidence.
-- `pair-loop [interval] [--auto]` — one-command overnight loop: validates the
-  plan, then launches a FRESH claude session (cheap fixed context per wakeup)
-  with `/loop <interval>` working `.pair/plan.md` (or `.claude-loop.md`);
-  model/effort picked interactively or via flags. Interval ticks ride out
-  token-limit outages, and a SUPERVISOR relaunches a fresh session if the
-  session dies while tasks remain (crash/quota-exit resilience + context
-  recycling; caps at `PAIR_LOOP_MAX_RESTARTS`, default 10). `--auto` uses
-  permission-mode auto so an unattended run can never stall on an approval
-  prompt. Run it in a cmux/tmux pane and leave the pane open.
-
-##### Nvim keymaps (dotfiles `nhat/pair.lua` — v2 driver)
-
-| Key | Action |
-|-----|--------|
-| `<leader>pi` | Init — create `.pair/spec.md` skeleton |
-| `<leader>ps` / `pp` / `pr` | Open spec / plan / review.md |
-| `<leader>pl` | Open `.claude-loop.md` (loop state file) |
-| `<leader>pv` / `pV` | Run headless code reviewer (full / eco) + auto-import findings |
-| `<leader>pC` | Challenge the plan itself (`pair-review --plan`) before implementing |
-| `<leader>px` | Cancel the running review (kills the claude child too) |
-| `<leader>pc` | Validate plan structure (`validate-plan.sh`, instant) |
-| `<leader>pd` | Diff working tree vs base (Diffview) |
-| `<leader>pD` | Done — archive `.pair/` |
-| `<leader>ni` | Re-import `.pair/review.json` findings as notes |
 
 ### Hooks
 

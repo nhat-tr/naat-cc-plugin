@@ -105,24 +105,34 @@ test('pair promotion writes one tests-first Review Slice instead of RED/GREEN mi
   assert.doesNotMatch(skill, /red-expect:/i);
 });
 
-test('the compatibility engine owns validation while pair-v2 remains a wrapper', () => {
+test('the pair-v4 runtime engine owns plan validation', () => {
   const pairTask = read('skills/pair-v3/scripts/pair-task');
-  const legacyWrapper = read('skills/pair-v2/scripts/validate-plan.sh');
 
   assert.match(pairTask, /path\.join\(SCRIPT_DIR, ["']validate-plan["']\)/);
   assert.doesNotMatch(pairTask, /pair-v2/);
-  assert.match(legacyWrapper, /pair-v3\/scripts\/validate-plan/);
+});
+
+test('pair-v1, pair-v2, and pair-v3 are offboarded as discoverable skills', () => {
+  const manifest = JSON.parse(read('metadata/runtime-asset-map.json'));
+  // The agent must never pick these up: no SKILL.md and no manifest skill asset.
+  assert.equal(manifest.assets['skill.pair-v2'], undefined);
+  assert.equal(manifest.assets['skill.pair-v3'], undefined);
+  assert.equal(manifest.assets['agent.pair-reviewer'], undefined);
+  assert.equal(fs.existsSync(path.join(root, 'skills/pair-v2')), false);
+  assert.equal(fs.existsSync(path.join(root, 'skills/pair-v3/SKILL.md')), false);
+  assert.equal(fs.existsSync(path.join(root, 'agents/pair-reviewer.md')), false);
+  // The pair-v3 tree remains as the pair-v4 runtime engine — scripts, not a skill.
+  assert.equal(fs.existsSync(path.join(root, 'skills/pair-v3/scripts/pair-loop')), true);
+  assert.notEqual(manifest.assets['skill.pair-v4'], undefined);
 });
 
 test('Pair v4 runbook is visible, resumable, repository-local, and portable across Claude and Codex', () => {
   const skill = read('skills/pair-v4/SKILL.md');
-  const compatibility = read('skills/pair-v3/SKILL.md');
   const manifest = JSON.parse(read('metadata/runtime-asset-map.json'));
   const hooks = read('hooks/hooks.json');
   const ownerAdapter = read('skills/pair-v3/scripts/pair-owner-adapter');
 
   assert.deepEqual(manifest.assets['skill.pair-v4'].supported_runtimes, ['claude', 'codex']);
-  assert.deepEqual(manifest.assets['skill.pair-v3'].supported_runtimes, ['claude', 'codex']);
   assert.deepEqual(manifest.assets['cli.pair-v4'].supported_runtimes, ['claude', 'codex']);
   assert.match(skill, /exactly three tmux panes/i);
   assert.match(skill, /visible Codex or Claude coordinator/i);
@@ -143,7 +153,6 @@ test('Pair v4 runbook is visible, resumable, repository-local, and portable acro
   assert.match(skill, /no default two-interruption, two-attempt, two-plan-review, or two-final-review stops/i);
   assert.match(skill, /omit raw prompts, transcripts, private reasoning/i);
   assert.match(skill, /--legacy-v3/);
-  assert.match(compatibility, /Pair v4 supersedes this workflow/i);
   assert.doesNotMatch(skill, /AskUserQuestion/);
 });
 
@@ -171,22 +180,6 @@ test('digest-bound plan challenge is a portable Codex and Claude CLI', () => {
   const schema = JSON.parse(read('skills/pair-v3/schemas/plan-review-result.json'));
   assert.ok(schema.properties.findings.items.required.includes('origin'));
   assert.deepEqual(schema.properties.findings.items.properties.origin.enum, ['plan', 'environment']);
-});
-
-test('the independent plan reviewer checks both evidence record types', () => {
-  const pairReview = read('skills/pair-v2/scripts/pair-review');
-
-  assert.match(pairReview, /Dependency.*name@version/i);
-  assert.match(pairReview, /Repository capability/i);
-  assert.match(pairReview, /model memory/i);
-});
-
-test('legacy pair review keeps scratch artifacts under the configured scratch root', () => {
-  const pairReview = read('skills/pair-v2/scripts/pair-review');
-
-  assert.match(pairReview, /CLAUDE_SCRATCH_DIR/);
-  assert.match(pairReview, /\.claude-scratch/);
-  assert.doesNotMatch(pairReview, /TMPDIR|\/tmp/);
 });
 
 test('visual brainstorming is explicit, authenticated, and uses the configured scratch root', () => {

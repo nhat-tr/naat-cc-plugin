@@ -217,21 +217,6 @@
         "claude"
       ]
     },
-    "skill.pair-v2": {
-      "type": "workflow_skill",
-      "canonical_file": "skills/pair-v2/SKILL.md",
-      "supported_runtimes": [
-        "claude"
-      ]
-    },
-    "skill.pair-v3": {
-      "type": "workflow_skill",
-      "canonical_file": "skills/pair-v3/SKILL.md",
-      "supported_runtimes": [
-        "claude",
-        "codex"
-      ]
-    },
     "skill.pair-v4": {
       "type": "workflow_skill",
       "canonical_file": "skills/pair-v4/SKILL.md",
@@ -398,13 +383,6 @@
     "agent.az-pr-reviewer": {
       "type": "agent",
       "canonical_file": "agents/az-pr-reviewer.md",
-      "supported_runtimes": [
-        "claude"
-      ]
-    },
-    "agent.pair-reviewer": {
-      "type": "agent",
-      "canonical_file": "agents/pair-reviewer.md",
       "supported_runtimes": [
         "claude"
       ]
