@@ -2,4 +2,11 @@
 set -euo pipefail
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
+if [[ "${1:-}" == "--challenge-plan" ]]; then
+  shift
+  exec node "$script_dir/pair-plan-challenge" "$@"
+fi
+if [[ "${1:-}" == "--approve-plan" ]]; then
+  exec node "$script_dir/pair-plan-challenge" "$@"
+fi
 exec node "$script_dir/pair-task" "$@"

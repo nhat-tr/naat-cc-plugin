@@ -26,12 +26,26 @@ function validPairPlan() {
     '- **Real seams:** none.',
     '- **Rejected abstractions:** command factory and one-adapter port.',
     '',
+    '## Change Map',
+    '- `tests/greeting.test.js` — focused greeting behavior tests.',
+    '- `tests/greeting.integration.test.js` — real command-boundary verification.',
+    '- `src/greeting.js` — greeting behavior.',
+    '- `src/commands/greeting.js` — existing command registration.',
+    '',
     '## Streams',
-    '### Stream 1: Greeting behavior - complexity: S',
+    '### Stream 1: Greeting behavior - complexity: M',
     '**Depends on:** none',
-    '- [ ] Task 1.1 - write failing tests for greeting [type:test] [phase:red] [risk:low] [scope:local] [uncertainty:low] [ac:AC-1] - files: `tests/greeting.test.js` - verify: `node --test tests/greeting.test.js` - **S**',
-    '- [ ] Task 1.2 - write failing integration test for the greeting command [type:test] [phase:red] [risk:medium] [scope:cross-module] [uncertainty:low] [ac:AC-1] - files: `tests/greeting.integration.test.js` - verify: `node --test tests/greeting.integration.test.js` - **M**',
-    '- [ ] Task 1.3 - implement the greeting behavior [type:feature] [risk:low] [scope:local] [uncertainty:low] [ac:AC-1] - files: `src/greeting.js` - verify: `node --test tests/greeting.test.js tests/greeting.integration.test.js` - **S**',
+    '- [ ] Task 1.1 - deliver the requested greeting through the real command boundary [type:feature] [tdd:cycle] [red:assertion] [risk:medium] [scope:cross-module] [uncertainty:low] [ac:AC-1] - files: `tests/greeting.test.js`, `tests/greeting.integration.test.js`, `src/greeting.js` - tests: `tests/greeting.test.js`, `tests/greeting.integration.test.js` - red: `node --test tests/greeting.test.js tests/greeting.integration.test.js` - red-expect: `greeting command prints requested greeting` - verify: `node --test tests/greeting.test.js tests/greeting.integration.test.js` - **M**',
+    '  - **Consumes:** repository:`src/commands/help.js#registerHelp`',
+    '  - **Produces:** `src/greeting.js#greet(name): string`',
+    '  - **Defect:** the command ignores the requested greeting text.',
+    '  - **Review boundary:** greeting behavior can be approved independently of command registration.',
+    '  - **Test boundary:** unit, integration',
+    '- [ ] Task 1.2 - register the verified greeting behavior in the existing command table [type:feature] [tdd:covered-by 1.1] [risk:low] [scope:local] [uncertainty:low] [ac:AC-1] - files: `src/commands/greeting.js` - verify: `node --test tests/greeting.integration.test.js` - **S**',
+    '  - **Consumes:** 1.1:`src/greeting.js#greet(name): string`',
+    '  - **Produces:** `src/commands/greeting.js#registerGreeting(registry): void`',
+    '  - **Defect:** the verified greeting is absent from command dispatch.',
+    '  - **Review boundary:** registration wiring can be approved without changing greeting semantics.',
     '',
     '## Acceptance Criteria',
     '- [ ] AC-1: the command prints the requested greeting.',
@@ -41,4 +55,29 @@ function validPairPlan() {
   ].join('\n');
 }
 
-module.exports = { validPairPlan };
+function validPairLitePlan() {
+  return [
+    '# Task: Add greeting command',
+    '',
+    '**Pair mode:** lite',
+    '',
+    '## Intent Contract',
+    '- **Spec:** `.pair/spec.md`',
+    '- **Purpose:** Let a user request and receive a greeting.',
+    '- **Repository evidence:** `src/commands/help.js#registerHelp` and `package.json`.',
+    '- **Constraints:** Preserve the current command API; no new command framework.',
+    '- **Verification:** `node --test tests/greeting.integration.test.js`',
+    '',
+    '## Streams',
+    '### Stream 1: Greeting behavior',
+    '- [ ] Task 1.1 - deliver the requested greeting through the real command boundary [risk:medium] [ac:AC-1] [test:integration] - files: `tests/greeting.integration.test.js`, `src/greeting.js`, `src/commands/greeting.js` - tests: `tests/greeting.integration.test.js` - verify: `node --test tests/greeting.integration.test.js` - **M**',
+    '',
+    '## Acceptance Criteria',
+    '- [ ] AC-1: the command prints the requested greeting.',
+    '',
+    '## Open Questions',
+    '- None.',
+  ].join('\n');
+}
+
+module.exports = { validPairLitePlan, validPairPlan };

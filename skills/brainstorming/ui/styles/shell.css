@@ -1122,7 +1122,7 @@ ul {
   top: 0;
   display: grid;
   grid-column: 3;
-  grid-template-rows: auto minmax(0, auto) auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, auto) minmax(10rem, 3fr) minmax(0, 2fr);
   min-width: 0;
   height: 100vh;
   border-left: 1px solid var(--vc-line);
@@ -1277,10 +1277,35 @@ ul {
 
 .feedback-compose {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: var(--vc-space-3);
   min-width: 0;
+  min-height: 0;
   padding: var(--vc-space-3) var(--vc-space-4);
   border-bottom: 1px solid var(--vc-line);
+  overflow: hidden;
+}
+
+.feedback-compose-scroll {
+  display: grid;
+  align-content: start;
+  gap: var(--vc-space-3);
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.feedback-compose-actions {
+  display: grid;
+  gap: var(--vc-space-2);
+  min-width: 0;
+  padding-top: var(--vc-space-3);
+  border-top: 1px solid var(--vc-line);
+  background: var(--vc-page);
+}
+
+.feedback-compose-actions .screen-error {
+  margin: 0;
 }
 
 .annotation-compose {
@@ -1475,6 +1500,15 @@ body[data-profile="business"] {
     border-top: 1px solid var(--vc-line);
     border-left: 0;
     overflow: visible;
+  }
+
+  .feedback-compose {
+    grid-template-rows: auto auto auto;
+    overflow: visible;
+  }
+
+  .feedback-compose-scroll {
+    overflow-y: visible;
   }
 
   .feedback-thread-gutter {

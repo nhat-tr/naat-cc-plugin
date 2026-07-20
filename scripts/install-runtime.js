@@ -20,6 +20,10 @@ function parseArgs(argv) {
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    if (arg === '--help' || arg === '-h') {
+      args.command = 'help';
+      continue;
+    }
     if (arg === 'list' || arg === 'doctor') {
       args.command = arg;
       continue;
@@ -44,6 +48,7 @@ function parseArgs(argv) {
       args.uninstall = true;
       continue;
     }
+    throw new Error(`unknown option ${arg}`);
   }
 
   return args;
@@ -388,7 +393,12 @@ function declareRuntimeDelivery(manifest, runtime, dryRun, operations) {
 }
 
 function managedPairHook(entry) {
-  return (entry.hooks || []).some(hook => typeof hook.command === 'string' && hook.command.includes('my-claude-code/hooks/stop-gate.sh'));
+  return (entry.hooks || []).some(hook => typeof hook.command === 'string' && (
+    hook.command.includes('my-claude-code/hooks/stop-gate.sh') ||
+    hook.command.includes('my-claude-code/hooks/pair-owner.sh') ||
+    hook.command.includes('/hooks/stop-gate.sh') ||
+    hook.command.includes('/hooks/pair-owner.sh')
+  ));
 }
 
 function installCodexHooks(codexDir, pluginDir, dryRun, operations) {
@@ -410,8 +420,10 @@ function installCodexHooks(codexDir, pluginDir, dryRun, operations) {
       hooks: (entry.hooks || []).map(hook => ({
         ...hook,
         command: typeof hook.command === 'string' && hook.command.includes('my-claude-code/hooks/stop-gate.sh')
-          ? `bash ${JSON.stringify(path.join(pluginDir, 'hooks', 'stop-gate.sh'))}`
-          : hook.command,
+          ? `PAIR_HOOK_RUNTIME=codex bash ${JSON.stringify(path.join(pluginDir, 'hooks', 'stop-gate.sh'))}`
+          : typeof hook.command === 'string' && hook.command.includes('my-claude-code/hooks/pair-owner.sh')
+            ? `PAIR_HOOK_RUNTIME=codex bash ${JSON.stringify(path.join(pluginDir, 'hooks', 'pair-owner.sh'))}`
+            : hook.command,
       })),
     }));
     current.hooks[event] = [...existing, ...rendered];
@@ -566,7 +578,18 @@ function doctor(manifest) {
 }
 
 function main() {
-  const args = parseArgs(process.argv.slice(2));
+  let args;
+  try {
+    args = parseArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(`install-runtime: ${error.message}`);
+    process.exitCode = 2;
+    return;
+  }
+  if (args.command === 'help') {
+    console.log('Usage: install-runtime.js [list|doctor] [--runtime claude|codex|copilot|all] [--scope repo|global|all] [--json] [--dry-run] [--uninstall]');
+    return;
+  }
   const manifest = loadManifest();
 
   if (args.command === 'list') {

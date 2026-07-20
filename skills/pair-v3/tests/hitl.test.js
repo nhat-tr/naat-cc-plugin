@@ -8,6 +8,7 @@ const test = require('node:test');
 const {
   applyTestApproval,
   hitlGate,
+  redWorkerPrompt,
   readTestProposal,
   workerPrompt,
   writeTestProposal,
@@ -25,8 +26,20 @@ function testRepo(t) {
   return root;
 }
 
-const PLAN = '- [ ] Task 1.1 - write failing tests for greeting\n';
-const TASK = { id: '1.1', type: 'test', text: 'write failing tests for greeting', files: ['tests/g.test.js'], acceptanceCriteria: ['AC-1'], verify: 'x' };
+const PLAN = '- [ ] Task 1.1 - deliver greeting behavior through one RED to GREEN cycle\n';
+const TASK = {
+  id: '1.1',
+  type: 'feature',
+  tddMode: 'cycle',
+  redMode: 'assertion',
+  text: 'deliver greeting behavior through one RED to GREEN cycle',
+  files: ['tests/g.test.js', 'src/g.js'],
+  testFiles: ['tests/g.test.js'],
+  acceptanceCriteria: ['AC-1'],
+  redVerify: 'node --test tests/g.test.js',
+  redExpected: 'expected greeting',
+  verify: 'node --test tests/g.test.js',
+};
 
 function proposalFor(plan, overrides = {}) {
   return {
@@ -73,7 +86,7 @@ test('readTestProposal enforces task and plan-contract binding but survives chec
   assert.equal(fs.existsSync(path.join(root, '.pair', 'test-proposal.json')), false, 'stale proposal file is removed');
 });
 
-test('hitlGate is inert when off or for non-test tasks', t => {
+test('hitlGate is inert when off and preserves covered-by behavior in legacy mode', t => {
   const root = testRepo(t);
   const paths = { plan: 'plan.md', scratch: root, ledger: path.join(root, 'ledger.jsonl') };
   const explode = () => { throw new Error('generator must not run'); };
@@ -83,7 +96,7 @@ test('hitlGate is inert when off or for non-test tasks', t => {
     { action: 'proceed', approvedTests: null },
   );
   assert.deepEqual(
-    hitlGate({ root, plan: PLAN, task: { ...TASK, type: 'feature' }, runtime: 'claude', route: { id: 'r' }, paths, options: { hitl: true } }, explode),
+    hitlGate({ root, plan: PLAN, task: { ...TASK, tddMode: 'covered-by' }, runtime: 'claude', route: { id: 'r' }, paths, options: { hitl: true, legacyV3: true } }, explode),
     { action: 'proceed', approvedTests: null },
   );
 });
@@ -123,12 +136,32 @@ test('hitlGate proceeds with exactly the approved subset once approval exists', 
 
 test('workerPrompt constrains the worker to the approved test set', () => {
   const approved = [{ name: 'Greet_WhenAsked_ThenPrintsGreeting', purpose: 'pins AC-1', file: 'tests/g.test.js' }];
+  const redPrompt = redWorkerPrompt(TASK, '.pair/plan.md', approved);
+  assert.match(redPrompt, /HITL-approved test set/);
+  assert.match(redPrompt, /write exactly these tests and no others/);
+
   const prompt = workerPrompt(TASK, '.pair/plan.md', null, approved);
-  assert.match(prompt, /HITL-approved test set/);
-  assert.match(prompt, /write exactly these tests and no others/);
+  assert.match(prompt, /RED phase used this HITL-approved test set/);
+  assert.match(prompt, /Do not add, remove, weaken, or rewrite those tests/);
   assert.match(prompt, /Greet_WhenAsked_ThenPrintsGreeting/);
 
   assert.doesNotMatch(workerPrompt(TASK, '.pair/plan.md', null, null), /HITL-approved/);
+});
+
+test('worker prompts carry retry context as workflow evidence outside the plan', () => {
+  const priorReview = {
+    retry_context: 'The named caller could not be found under the declared Review Slice.',
+    findings: [],
+  };
+
+  assert.match(
+    redWorkerPrompt(TASK, '.pair/plan.md', null, priorReview),
+    /named caller could not be found/,
+  );
+  assert.match(
+    workerPrompt(TASK, '.pair/plan.md', priorReview, null),
+    /named caller could not be found/,
+  );
 });
 
 test('pair-task --approve-tests applies a selection from the command line', t => {

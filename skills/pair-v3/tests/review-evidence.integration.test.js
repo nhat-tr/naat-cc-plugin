@@ -24,6 +24,7 @@ const {
   writeDecisionRecord,
 } = require('../../brainstorming/scripts/work-lineage.cjs');
 const { validPairPlan } = require('./support/pair-plan-fixture');
+const { pairStatePaths, readPairEvents } = require('../scripts/lib/pair-state');
 
 const workId = 'work-20260712-review-evidence';
 const canonicalSpecPath = `docs/work/${workId}/spec.md`;
@@ -49,8 +50,12 @@ function digest(content) {
 function linkedPlan() {
   return validPairPlan()
     .replace(
-      '[ac:AC-1] - files: `src/greeting.js` - verify: `node --test tests/greeting.test.js tests/greeting.integration.test.js`',
-      '[ac:AC-2,AC-1] - files: `src/greeting.js`, `tests/greeting.test.js` - verify: `node --test tests/greeting.test.js tests/greeting.integration.test.js`',
+      '[ac:AC-1] - files: `tests/greeting.test.js`, `tests/greeting.integration.test.js`, `src/greeting.js`',
+      '[ac:AC-1,AC-2] - files: `tests/greeting.test.js`, `tests/greeting.integration.test.js`, `src/greeting.js`',
+    )
+    .replace(
+      '[ac:AC-1] - files: `src/commands/greeting.js`',
+      '[ac:AC-1] - files: `src/commands/greeting.js`, `tests/greeting.test.js`',
     )
     .replace(
       '- [ ] AC-1: the command prints the requested greeting.',
@@ -126,11 +131,11 @@ test('attempt review evidence persists immutable Work-linked patch sets and a cu
   git(root, 'commit', '-qm', 'implement greeting');
   const headTree = git(root, 'rev-parse', 'HEAD^{tree}');
 
-  const task = parsePlan(plan).tasks.find(candidate => candidate.id === '1.3');
+  const task = parsePlan(plan).tasks.find(candidate => candidate.id === '1.1');
   const attempt = createAttempt({
     task,
     route: { id: 'codex-default-medium', runtime: 'codex', model: 'default', effort: 'medium' },
-    policyVersion: '3.1.0',
+    policyVersion: '3.2.0',
     baseline: baseTree,
     now: '2026-07-12T12:00:00.000Z',
     workId,
@@ -153,7 +158,7 @@ test('attempt review evidence persists immutable Work-linked patch sets and a cu
     planDigest,
     decisionRecordIds: [decisionRecordId],
     acceptanceCriteria: ['AC-1', 'AC-2'],
-    expectedFiles: ['src/greeting.js', 'tests/greeting.test.js'],
+    expectedFiles: ['src/greeting.js', 'tests/greeting.integration.test.js', 'tests/greeting.test.js'],
     baseTree,
   });
 
@@ -177,8 +182,8 @@ test('attempt review evidence persists immutable Work-linked patch sets and a cu
     patch_digest: changeIds.get(file),
     acceptance_criteria: file.startsWith('src/') ? ['AC-2'] : ['AC-1'],
     attribution: file.startsWith('src/')
-      ? { kind: 'review_slice', review_slice_ids: ['1.3'] }
-      : { kind: 'cross_slice', review_slice_ids: ['1.1', '1.3'] },
+      ? { kind: 'review_slice', review_slice_ids: ['1.1'] }
+      : { kind: 'cross_slice', review_slice_ids: ['1.1', '1.2'] },
   }));
   const patchSet = buildPatchSet({
     attempt_id: attempt.attemptId,
@@ -240,7 +245,7 @@ test('attempt review evidence persists immutable Work-linked patch sets and a cu
     head_tree: headTree,
     files: fileEvidence.map((file, index) => index === 0 ? {
       ...file,
-      attribution: { kind: 'cross_slice', review_slice_ids: ['1.1', '1.3'] },
+      attribution: { kind: 'cross_slice', review_slice_ids: ['1.1', '1.2'] },
     } : file),
   });
   const inconsistentReview = updatePatchSetReview(createPatchSetReview(inconsistentPatchSet), {
@@ -292,7 +297,8 @@ test('attempt review evidence persists immutable Work-linked patch sets and a cu
   const storedPatchSet = JSON.parse(patchSetBytes);
   const storedManifest = JSON.parse(fs.readFileSync(persisted.manifestPath, 'utf8'));
   const storedReview = JSON.parse(fs.readFileSync(persisted.reviewPath, 'utf8'));
-  const ledgerRecord = JSON.parse(fs.readFileSync(persisted.ledgerPath, 'utf8').trim());
+  const ledgerRecord = readPairEvents(root, workId)
+    .find(event => event.event === 'attempt.review-evidence.persisted');
 
   assert.deepEqual({
     attempt_id: storedPatchSet.attempt_id,
@@ -323,6 +329,12 @@ test('attempt review evidence persists immutable Work-linked patch sets and a cu
   assert.equal(storedReview.whole_feature_verdict.verdict, 'approved');
   assert.deepEqual(storedReview.whole_feature_verdict.acceptance_criteria, ['AC-1', 'AC-2']);
   assert.equal(storedReview.can_approve, true);
+  assert.equal(
+    persisted.evidenceDirectory,
+    path.join(pairStatePaths(root, workId).attempts, attempt.attemptId, 'review-evidence'),
+  );
+  assert.equal(persisted.ledgerPath, pairStatePaths(root, workId).events);
+  assert.equal(fs.existsSync(path.join(dataDirectory, 'attempts.jsonl')), false, 'legacy dataDirectory is ignored as an authority');
   assert.deepEqual({
     event: ledgerRecord.event,
     attemptId: ledgerRecord.attemptId,

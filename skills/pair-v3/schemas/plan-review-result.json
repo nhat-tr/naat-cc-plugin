@@ -1,0 +1,49 @@
+{
+  "type": "object",
+  "properties": {
+    "verdict": { "enum": ["approve", "fix-needed"] },
+    "summary": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": { "enum": ["BLOCKER", "MAJOR"] },
+          "origin": { "enum": ["plan", "environment"] },
+          "category": {
+            "enum": [
+              "intent",
+              "evidence",
+              "scope",
+              "interfaces",
+              "tdd",
+              "verification",
+              "sequencing",
+              "simplicity"
+            ]
+          },
+          "task_id": { "type": ["string", "null"] },
+          "line": { "type": "integer", "minimum": 1 },
+          "title": { "type": "string" },
+          "detail": { "type": "string" },
+          "failure_scenario": { "type": "string" },
+          "suggestion": { "type": "string" }
+        },
+        "required": [
+          "severity",
+          "origin",
+          "category",
+          "task_id",
+          "line",
+          "title",
+          "detail",
+          "failure_scenario",
+          "suggestion"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["verdict", "summary", "findings"],
+  "additionalProperties": false
+}

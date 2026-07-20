@@ -10,6 +10,7 @@
         "type": "object",
         "properties": {
           "severity": { "enum": ["BLOCKER", "MAJOR"] },
+          "origin": { "enum": ["implementation", "plan", "environment"] },
           "file": { "type": "string" },
           "line": { "type": "integer", "minimum": 1 },
           "title": { "type": "string" },
@@ -17,7 +18,7 @@
           "failure_scenario": { "type": "string" },
           "suggestion": { "type": "string" }
         },
-        "required": ["severity", "file", "line", "title", "detail", "failure_scenario", "suggestion"],
+        "required": ["severity", "origin", "file", "line", "title", "detail", "failure_scenario", "suggestion"],
         "additionalProperties": false
       }
     }

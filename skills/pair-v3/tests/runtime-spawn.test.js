@@ -4,6 +4,7 @@ const test = require('node:test');
 
 const {
   NESTED_SESSION_ENV_KEYS,
+  resolveRuntime,
   runtimeDiagnostic,
   runtimeEnv,
 } = require('../scripts/pair-task');
@@ -43,7 +44,8 @@ test('runtimeEnv strips cmux-cli-shims entries but keeps real PATH dirs', t => {
   assert.ok(entries.includes(realDir), 'real PATH dir must survive');
 });
 
-test('runtimeEnv clears every nested-session identity variable', t => {
+test('runtimeEnv clears Codex and Claude nested-session identity variables', t => {
+  assert.ok(NESTED_SESSION_ENV_KEYS.includes('CODEX_THREAD_ID'));
   const overrides = Object.fromEntries(NESTED_SESSION_ENV_KEYS.map(key => [key, 'set']));
   withEnv(t, overrides);
 
@@ -59,6 +61,38 @@ test('runtimeEnv forces the stop gate off for the spawned runtime', t => {
   const env = runtimeEnv();
   assert.equal(env.PAIR_STOP_GATE, 'off');
   assert.equal(env.CLAUDE_STOP_GATE, 'off');
+});
+
+test('auto task routing keeps Codex inside an existing Codex sandbox', () => {
+  assert.equal(
+    resolveRuntime('auto', {
+      available: ['codex', 'claude'],
+      env: { CODEX_THREAD_ID: 'thread', CODEX_SANDBOX: 'seatbelt' },
+    }),
+    'codex',
+  );
+  assert.equal(
+    resolveRuntime('auto', {
+      available: ['codex', 'claude'],
+      env: { CODEX_THREAD_ID: 'thread', CODEX_SANDBOX: 'seatbelt' },
+      allowCrossRuntimeFallback: true,
+    }),
+    'codex',
+  );
+  assert.equal(
+    resolveRuntime('codex', {
+      available: ['codex', 'claude'],
+      env: { CODEX_THREAD_ID: 'thread', CODEX_SANDBOX: 'seatbelt' },
+    }),
+    'codex',
+  );
+  assert.equal(
+    resolveRuntime('codex', {
+      available: ['codex', 'claude'],
+      env: {},
+    }),
+    'codex',
+  );
 });
 
 test('runtimeDiagnostic reports a spawn error first', () => {

@@ -338,10 +338,7 @@ test('run-batch consumes the canonical review-index manifest and derives exact c
 
 test('canonical oversized Review Slice derives a useful local shortlist without caller annotations', t => {
   const filler = Array.from({ length: 1_250 }, (_value, index) => `// changed-${index}`).join('\n');
-  const plan = validPairPlan().replace(
-    'files: `src/greeting.js`',
-    'files: `src/greeting.js`, `tests/greeting.test.js`',
-  );
+  const plan = validPairPlan();
   const harness = canonicalManifestFixture(t, {
     purpose: 'scout-canonical-oversized',
     plan,
@@ -359,7 +356,7 @@ test('canonical oversized Review Slice derives a useful local shortlist without 
   assert.equal(result.status, 0, result.stderr);
   const batch = JSON.parse(fs.readFileSync(output, 'utf8'));
   const oversized = batch.packets.flatMap(packet => packet.oversized_review_slices)
-    .find(item => item.review_slice_id === '1.3');
+    .find(item => item.review_slice_id === '1.1');
   assert.ok(oversized);
   assert.deepEqual(oversized.shortlist.public_symbols, [
     'AgentConversationDelivery',

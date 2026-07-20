@@ -13,16 +13,26 @@ const REQUIRED_PLAN_SECTIONS = [
   'implementation context',
   'capability evidence',
   'simplicity contract',
+  'change map',
   'streams',
   'acceptance criteria',
   'open questions',
 ];
 
+const TASK_BUDGETS = {
+  S: { files: 3, acceptanceCriteria: 1, text: 240 },
+  M: { files: 6, acceptanceCriteria: 2, text: 420 },
+  L: { files: 10, acceptanceCriteria: 3, text: 650 },
+};
+const RED_MODES = ['assertion', 'compile', 'runtime'];
+const TEST_BOUNDARIES = ['unit', 'integration', 'e2e'];
+const RISK_STRENGTH = { low: 1, medium: 2, high: 3, critical: 4 };
+
 function planContractDigest(plan) {
   if (typeof plan !== 'string') throw new TypeError('Pair plan must be a string');
   const normalized = plan
     .replace(
-      /^(\s*[-*]\s+)\[[xX]\](\s+(?:Task\b|AC-[1-9][0-9]*:))/gm,
+      /^(\s*[-*]\s+)\[[-xX ]\](\s+(?:Task\b|AC-[1-9][0-9]*:))/gm,
       '$1[ ]$2',
     )
     .replace(
@@ -58,29 +68,56 @@ function inferScope(text, files) {
   return roots.size > 1 ? 'cross-module' : 'local';
 }
 
+function parseConsumes(raw) {
+  if (!raw || /^none\.?$/i.test(raw.trim())) return [];
+  const entries = [];
+  for (const match of raw.matchAll(/(?:^|;)\s*(repository|[A-Za-z0-9._-]+)\s*:\s*`([^`]+)`/gi)) {
+    entries.push({ source: match[1], contract: match[2].trim() });
+  }
+  return entries;
+}
+
+function parseProduces(raw) {
+  if (!raw || /^none\.?$/i.test(raw.trim())) return [];
+  return [...raw.matchAll(/`([^`]+)`/g)].map(match => match[1].trim());
+}
+
+function parseTestBoundaries(raw) {
+  if (!raw) return [];
+  return raw.split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
+}
+
 function taskFromParts(id, rawText, lineNumber, prefix = '') {
   const fileClause = rawText.match(/\s*[-:–—]\s*files?:\s*((?:`[^`]+`(?:\s*,\s*)?)+)/i)?.[1] || '';
   const files = [...fileClause.matchAll(/`([^`]+)`/g)].map(item => item[1]);
+  const testFileClause = rawText.match(/\s*[-:–—]\s*tests?:\s*((?:`[^`]+`(?:\s*,\s*)?)+)/i)?.[1] || '';
+  const testFiles = [...testFileClause.matchAll(/`([^`]+)`/g)].map(item => item[1]);
+  const redVerify = rawText.match(/\s*[-:–—]\s*red:\s*`([^`]+)`/i)?.[1]?.trim() || '';
+  const redExpected = rawText.match(/\s*[-:–—]\s*red-expect:\s*`([^`]+)`/i)?.[1]?.trim() || '';
   const verify = rawText.match(/\s*[-:–—]\s*verify:\s*`([^`]+)`/i)?.[1]?.trim() || '';
-  const complexityMatch = rawText.match(/\*\*([SML])\*\*\s*$/i);
+  const complexityMatch = rawText.match(/\*\*([SML])\*\*/i);
   const complexity = complexityMatch?.[1]?.toUpperCase() || 'M';
-  const tags = Object.fromEntries([...rawText.matchAll(/\[(type|risk|scope|uncertainty|phase|ac|tdd):([^\]]+)\]/gi)]
+  const tags = Object.fromEntries([...rawText.matchAll(/\[(type|risk|scope|uncertainty|phase|ac|tdd|red|test):([^\]]+)\]/gi)]
     .map(item => [item[1].toLowerCase(), item[2].trim()]));
   const acceptanceCriteria = (tags.ac || '')
     .split(',')
     .map(value => value.trim())
     .filter(Boolean);
   const text = rawText
-    .replace(/\s*\[(?:type|risk|scope|uncertainty|phase|ac|tdd):[^\]]+\]/gi, '')
+    .replace(/\s*\[(?:type|risk|scope|uncertainty|phase|ac|tdd|red|test):[^\]]+\]/gi, '')
     .replace(/\s*[-:–—]\s*files?:\s*(?:`[^`]+`(?:\s*,\s*)?)+/i, '')
+    .replace(/\s*[-:–—]\s*tests?:\s*(?:`[^`]+`(?:\s*,\s*)?)+/i, '')
+    .replace(/\s*[-:–—]\s*red-expect:\s*`[^`]+`/i, '')
+    .replace(/\s*[-:–—]\s*red:\s*`[^`]+`/i, '')
     .replace(/\s*[-:–—]\s*verify:\s*`[^`]+`/i, '')
-    .replace(/\s*[-:–—]\s*\*\*[SML]\*\*\s*$/i, '')
+    .replace(/\s*(?:[-:–—·])\s*\*\*[SML]\*\*/gi, '')
     .trim();
   const joined = `${text} ${files.join(' ')}`;
 
   return {
     id,
     text: `${prefix}${text}`,
+    description: text,
     complexity,
     complexityExplicit: Boolean(complexityMatch),
     type: tags.type?.toLowerCase() || inferType(text),
@@ -89,16 +126,60 @@ function taskFromParts(id, rawText, lineNumber, prefix = '') {
     uncertainty: tags.uncertainty?.toLowerCase()
       || (/\b(investigat|unknown|explor|spike)\b/i.test(text) ? 'high' : 'medium'),
     phase: tags.phase?.toLowerCase() || null,
-    // [tdd:covered-by <task-id>] marks structural work whose behavior is pinned by a
-    // red test elsewhere in the plan instead of a stream-local (often useless) test.
+    tddMode: tags.tdd?.toLowerCase() === 'cycle'
+      ? 'cycle'
+      : tags.tdd?.toLowerCase() === 'red-contract'
+        ? 'red-contract'
+        : tags.tdd?.match(/^covered-by\s+/i)
+          ? 'covered-by'
+          : null,
     tddCoveredBy: tags.tdd?.match(/^covered-by\s+([A-Za-z0-9._-]+)$/i)?.[1] || null,
+    redMode: tags.red?.toLowerCase() || null,
+    redVerify,
+    redExpected,
     acceptanceCriteria,
     files,
+    testFiles,
     verify,
+    consumesRaw: '',
+    consumes: [],
+    producesRaw: '',
+    produces: [],
+    defect: '',
+    reviewBoundary: '',
+    testBoundaries: parseTestBoundaries(tags.test || ''),
     explicitTags: new Set(Object.keys(tags)),
     raw: rawText,
     line: lineNumber,
   };
+}
+
+function addTaskMetadata(task, label, value) {
+  const normalized = label.toLowerCase();
+  const clause = {
+    profile: value,
+    files: ` - files: ${value}`,
+    tests: ` - tests: ${value}`,
+    red: ` - red: ${value}`,
+    'red expect': ` - red-expect: ${value}`,
+    verify: ` - verify: ${value}`,
+  }[normalized];
+  if (!clause) return;
+
+  const reparsed = taskFromParts(task.id, `${task.description} ${task.metadataRaw || ''}${clause}`, task.line);
+  const preserved = {
+    checked: task.checked,
+    streamId: task.streamId,
+    consumesRaw: task.consumesRaw,
+    consumes: task.consumes,
+    producesRaw: task.producesRaw,
+    produces: task.produces,
+    defect: task.defect,
+    reviewBoundary: task.reviewBoundary,
+  };
+  Object.assign(task, reparsed, preserved, {
+    metadataRaw: `${task.metadataRaw || ''}${clause}`,
+  });
 }
 
 function sectionMap(lines) {
@@ -132,6 +213,7 @@ function parsePlan(plan) {
   const executableCheckboxesOutsidePlan = [];
   let currentSection = '';
   let currentStream = null;
+  let currentTask = null;
 
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
@@ -139,11 +221,12 @@ function parsePlan(plan) {
     if (sectionHeading) {
       currentSection = sectionHeading[1].trim().toLowerCase();
       currentStream = null;
+      currentTask = null;
       continue;
     }
 
     if (currentSection !== 'streams') {
-      if (currentSection !== 'acceptance criteria' && /^\s*[-*]\s+\[ \]\s+/.test(line)) {
+      if (currentSection !== 'acceptance criteria' && /^\s*[-*]\s+\[[ -]\]\s+/.test(line)) {
         executableCheckboxesOutsidePlan.push({ line: index + 1, text: line.trim(), section: currentSection });
       }
       continue;
@@ -159,6 +242,7 @@ function parsePlan(plan) {
         tasks: [],
       };
       streams.push(currentStream);
+      currentTask = null;
       continue;
     }
 
@@ -169,7 +253,29 @@ function parsePlan(plan) {
       continue;
     }
 
-    const checkbox = line.match(/^\s*[-*]\s+\[([ xX])\]\s+(.+)$/);
+    const taskContract = line.match(/^\s{2,}[-*]\s+\*\*(Consumes|Produces|Defect|Review boundary|Test boundary):\*\*\s*(.+)\s*$/i);
+    if (taskContract && currentTask) {
+      const key = taskContract[1].toLowerCase();
+      const value = taskContract[2].trim();
+      if (key === 'consumes') {
+        currentTask.consumesRaw = value;
+        currentTask.consumes = parseConsumes(value);
+      } else if (key === 'produces') {
+        currentTask.producesRaw = value;
+        currentTask.produces = parseProduces(value);
+      } else if (key === 'defect') currentTask.defect = value;
+      else if (key === 'review boundary') currentTask.reviewBoundary = value;
+      else if (key === 'test boundary') currentTask.testBoundaries = parseTestBoundaries(value);
+      continue;
+    }
+
+    const taskMetadata = line.match(/^\s{2,}[-*]\s+\*\*(Profile|Files|Tests|Red|Red expect|Verify):\*\*\s*(.+)\s*$/i);
+    if (taskMetadata && currentTask) {
+      addTaskMetadata(currentTask, taskMetadata[1], taskMetadata[2].trim());
+      continue;
+    }
+
+    const checkbox = line.match(/^\s*[-*]\s+\[([ xX-])\]\s+(.+)$/);
     if (!checkbox) continue;
     const taskMatch = checkbox[2].match(/^(?:Task\s+)?([A-Za-z0-9._-]+)\s*[-:–—]\s*(.+)$/i);
     if (!taskMatch) {
@@ -178,15 +284,18 @@ function parsePlan(plan) {
     }
     const task = taskFromParts(taskMatch[1], taskMatch[2], index + 1);
     task.checked = checkbox[1].toLowerCase() === 'x';
+    task.active = checkbox[1] === '-';
+    task.marker = task.checked ? 'accepted' : task.active ? 'active' : 'queued';
     task.streamId = currentStream.id;
     currentStream.tasks.push(task);
     tasks.push(task);
+    currentTask = task;
   }
 
   const acceptanceCriteria = [];
   const malformedAcceptanceCriteria = [];
   for (const item of sections.get('acceptance criteria')?.lines || []) {
-    const checkbox = item.text.match(/^\s*[-*]\s+\[([ xX])\]\s+(.+)$/);
+    const checkbox = item.text.match(/^\s*[-*]\s+\[([ xX-])\]\s+(.+)$/);
     if (!checkbox) continue;
     const criterion = checkbox[2].match(/^([A-Za-z0-9._-]+)\s*:\s*(.+)$/);
     if (!criterion) {
@@ -197,6 +306,7 @@ function parsePlan(plan) {
       id: criterion[1],
       text: criterion[2].trim(),
       checked: checkbox[1].toLowerCase() === 'x',
+      active: checkbox[1] === '-',
       line: item.line,
     });
   }
@@ -221,6 +331,21 @@ function parsePlan(plan) {
   const openQuestions = (sections.get('open questions')?.lines || [])
     .filter(item => /^\s*[-*]\s+/.test(item.text));
 
+  const changeMap = (sections.get('change map')?.lines || [])
+    .filter(item => /^\s*[-*]\s+`[^`]+`\s+[-–—:]/.test(item.text))
+    .map(item => ({
+      ...item,
+      path: item.text.match(/`([^`]+)`/)?.[1] || '',
+    }));
+
+  const verificationLines = [
+    ...(sections.get('intent contract')?.lines || []),
+    ...(sections.get('implementation context')?.lines || []),
+  ].filter(item => /\*\*Verification:\*\*/i.test(item.text));
+  const fullVerificationCommands = [...new Set(verificationLines.flatMap(item =>
+    [...item.text.matchAll(/`([^`]+)`/g)].map(match => match[1].trim()),
+  ).filter(Boolean))];
+
   return {
     lines,
     sections,
@@ -231,6 +356,8 @@ function parsePlan(plan) {
     acceptanceCriteria,
     malformedAcceptanceCriteria,
     capabilityEvidence,
+    changeMap,
+    fullVerificationCommands,
     openQuestions,
   };
 }
@@ -249,13 +376,171 @@ function isConcreteValue(value) {
   return !/^(?:<[^>]+>|todo|tbd|unknown|to be determined)\.?$/i.test(normalized);
 }
 
+function minimumRisk(task) {
+  if (task.risk === 'critical') return 'critical';
+  if (task.scope === 'contract' || task.scope === 'architecture') return 'high';
+  if (task.scope === 'cross-module' || task.complexity === 'L'
+      || task.files.length > 3 || task.acceptanceCriteria.length > 1) return 'medium';
+  return 'low';
+}
+
+function isRepositoryRelativeFile(file) {
+  return Boolean(file)
+    && !file.startsWith('/')
+    && !file.startsWith('~')
+    && !file.split(/[\\/]/).includes('..');
+}
+
+function validateLitePlan(plan, parsed) {
+  const errors = [];
+  const warnings = [];
+  const requiredSections = [
+    'intent contract',
+    'streams',
+    'acceptance criteria',
+    'open questions',
+  ];
+
+  if (/plan-phase:\s*sketch|<!--\s*sketch/i.test(plan)) {
+    errors.push('plan is still a sketch');
+  }
+  if (Buffer.byteLength(plan, 'utf8') > 24 * 1024) {
+    errors.push('Pair-lite plan exceeds 24 KiB; keep repository investigation and history outside the executable plan');
+  }
+  if (parsed.tasks.length > 12) {
+    errors.push(`Pair-lite plan has ${parsed.tasks.length} tasks; split independent Work capabilities (maximum 12 slices)`);
+  }
+  for (const name of requiredSections) {
+    const section = parsed.sections.get(name);
+    if (!section) errors.push(`missing ## ${name.replace(/\b\w/g, value => value.toUpperCase())} section`);
+    else if (!sectionContent(section)) errors.push(`## ${section.heading} section is empty`);
+  }
+  const intent = sectionContent(parsed.sections.get('intent contract'));
+  for (const field of ['Spec', 'Purpose', 'Repository evidence', 'Constraints', 'Verification']) {
+    const match = intent.match(new RegExp(`\\*\\*${escapeRegExp(field)}:\\*\\*[ \\t]*([^\\r\\n]*)`, 'i'));
+    if (!match) errors.push(`## Intent Contract is missing **${field}:**`);
+    else if (!isConcreteValue(match[1])) errors.push(`**${field}:** must have a concrete value in ## Intent Contract`);
+  }
+  const fullVerificationLine = parsed.sections.get('intent contract')?.lines
+    .find(item => /\*\*Verification:\*\*/i.test(item.text));
+  if (fullVerificationLine && !/`[^`]+`/.test(fullVerificationLine.text)) {
+    errors.push('**Verification:** must contain at least one exact backticked command');
+  }
+  for (const item of parsed.executableCheckboxesOutsidePlan) {
+    errors.push(`line ${item.line} has an executable checkbox outside ## Streams; keep only task and Acceptance Criteria state in the plan`);
+  }
+  if (parsed.streams.length === 0) errors.push('no stream headings found under ## Streams');
+  for (const malformed of parsed.malformedTaskLines) {
+    errors.push(`line ${malformed.line} has a task checkbox without a stable task ID`);
+  }
+  if (parsed.tasks.length === 0) errors.push('no runnable tasks with stable IDs found');
+
+  const criterionIds = new Set();
+  const coveredCriteria = new Set();
+  for (const malformed of parsed.malformedAcceptanceCriteria) {
+    errors.push(`line ${malformed.line} has an acceptance criterion without a stable ID`);
+  }
+  if (parsed.acceptanceCriteria.length === 0) errors.push('no acceptance criteria with stable IDs found');
+  for (const criterion of parsed.acceptanceCriteria) {
+    if (criterionIds.has(criterion.id)) errors.push(`duplicate acceptance criterion ID ${criterion.id}`);
+    criterionIds.add(criterion.id);
+  }
+
+  const taskIds = new Set();
+  for (const task of parsed.tasks) {
+    if (taskIds.has(task.id)) errors.push(`duplicate task ID ${task.id}`);
+    taskIds.add(task.id);
+    if (!task.explicitTags.has('risk')) errors.push(`Task ${task.id} is missing explicit risk`);
+    else if (!PROFILE_VALUES.risk.includes(task.risk)) errors.push(`Task ${task.id} has invalid risk "${task.risk}"`);
+    if (!task.complexityExplicit) errors.push(`Task ${task.id} is missing explicit S/M/L complexity`);
+    if (task.files.length === 0) errors.push(`Task ${task.id} must name at least one owned file`);
+    for (const file of task.files) {
+      if (!isRepositoryRelativeFile(file)) {
+        errors.push(`Task ${task.id} file ${file} is outside the repository`);
+      }
+    }
+    if (!task.verify) errors.push(`Task ${task.id} must include an exact verify command`);
+    if (task.acceptanceCriteria.length === 0) errors.push(`Task ${task.id} must reference at least one acceptance criterion with [ac:...]`);
+    for (const criterion of task.acceptanceCriteria) {
+      coveredCriteria.add(criterion);
+      if (!criterionIds.has(criterion)) errors.push(`Task ${task.id} references unknown acceptance criterion ${criterion}`);
+    }
+    if (task.uncertainty === 'high') {
+      errors.push(`Task ${task.id} still expresses unresolved investigation; ground it before promotion`);
+    }
+    const floor = minimumRisk(task);
+    if (RISK_STRENGTH[task.risk] < RISK_STRENGTH[floor]) {
+      errors.push(`Task ${task.id} risk ${task.risk} understates its ${task.scope}/${task.complexity} change shape; minimum risk is ${floor}`);
+    }
+    const budget = TASK_BUDGETS[task.complexity] || TASK_BUDGETS.M;
+    if (task.files.length > budget.files) {
+      errors.push(`Task ${task.id} owns ${task.files.length} files; ${task.complexity} slices may own at most ${budget.files}`);
+    }
+    if (task.acceptanceCriteria.length > budget.acceptanceCriteria) {
+      errors.push(`Task ${task.id} maps ${task.acceptanceCriteria.length} acceptance criteria; ${task.complexity} slices may map at most ${budget.acceptanceCriteria}`);
+    }
+    if (task.text.length > budget.text) {
+      errors.push(`Task ${task.id} description is ${task.text.length} characters; ${task.complexity} slices are limited to ${budget.text}`);
+    }
+    if (task.type !== 'docs') {
+      if (task.testFiles.length === 0) {
+        errors.push(`Task ${task.id} must identify its test-owned files with - tests: \`...\``);
+      }
+      for (const testFile of task.testFiles) {
+        if (!task.files.includes(testFile)) errors.push(`Task ${task.id} test file ${testFile} is not included in its owned files`);
+      }
+      if (task.testBoundaries.length === 0) {
+        errors.push(`Task ${task.id} must declare [test:unit|integration|e2e]`);
+      }
+      for (const boundary of task.testBoundaries) {
+        if (!TEST_BOUNDARIES.includes(boundary)) errors.push(`Task ${task.id} has unsupported test boundary "${boundary}"`);
+      }
+    }
+  }
+  for (const criterion of parsed.acceptanceCriteria) {
+    if (!coveredCriteria.has(criterion.id)) errors.push(`acceptance criterion ${criterion.id} is not covered by any task`);
+  }
+  const integrationTasks = parsed.tasks.filter((task) =>
+    task.testBoundaries.includes('integration') || task.testBoundaries.includes('e2e'),
+  );
+  if (integrationTasks.length === 0) {
+    errors.push('no Pair-lite slice declares an integration or e2e test boundary for the Acceptance Criteria');
+  }
+  const blockingQuestion = (parsed.sections.get('open questions')?.lines || [])
+    .find(item => /\[blocking\]/i.test(item.text));
+  if (blockingQuestion) errors.push(`line ${blockingQuestion.line} contains a blocking open question`);
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    tasksTotal: parsed.tasks.length,
+    tasksOpen: parsed.tasks.filter(task => !task.checked).length,
+    parsed,
+  };
+}
+
 function validatePlan(plan) {
   const parsed = parsePlan(plan);
+  if (/^\*\*Pair mode:\*\*\s*lite\s*$/im.test(plan)) {
+    return validateLitePlan(plan, parsed);
+  }
   const errors = [];
   const warnings = [];
 
   if (/plan-phase:\s*sketch|<!--\s*sketch/i.test(plan)) {
     errors.push('plan is still a sketch');
+  }
+  if (Buffer.byteLength(plan, 'utf8') > 64 * 1024) {
+    errors.push('plan exceeds 64 KiB; split independent subsystems into separate Work plans and keep execution history out of the plan contract');
+  }
+  if (parsed.tasks.length > 24) {
+    errors.push(`plan has ${parsed.tasks.length} tasks; split independent subsystems into separate Work plans (maximum 24 Review Slices)`);
+  }
+  for (const sectionName of parsed.sections.keys()) {
+    if (/^(?:execution|implementation|progress|recovery)(?: log| history| notes)?$/i.test(sectionName)) {
+      errors.push(`## ${parsed.sections.get(sectionName).heading} does not belong in the plan contract; use the attempt ledger or canonical Work evidence`);
+    }
   }
 
   for (const name of REQUIRED_PLAN_SECTIONS) {
@@ -291,6 +576,8 @@ function validatePlan(plan) {
     errors.push(`line ${malformed.line} has a task checkbox without a stable task ID`);
   }
   if (parsed.tasks.length === 0) errors.push('no runnable tasks with stable IDs found');
+  if (parsed.changeMap.length === 0) errors.push('## Change Map must map exact repository-relative files to one responsibility each');
+  const changeMapPaths = new Set(parsed.changeMap.map(item => item.path));
 
   const taskIds = new Set();
   const criterionIds = new Set();
@@ -314,6 +601,12 @@ function validatePlan(plan) {
     }
     if (!task.complexityExplicit) errors.push(`Task ${task.id} is missing explicit S/M/L complexity`);
     if (task.files.length === 0) errors.push(`Task ${task.id} must name at least one owned file`);
+    for (const file of task.files) {
+      if (!isRepositoryRelativeFile(file)) {
+        errors.push(`Task ${task.id} file ${file} is outside the repository; create a separate Work plan for the other repository`);
+      }
+      if (!changeMapPaths.has(file)) errors.push(`Task ${task.id} file ${file} is missing from ## Change Map`);
+    }
     if (!task.verify) errors.push(`Task ${task.id} must include an exact verify command`);
     if (task.acceptanceCriteria.length === 0) errors.push(`Task ${task.id} must reference at least one acceptance criterion with [ac:...]`);
     for (const criterion of task.acceptanceCriteria) {
@@ -323,21 +616,84 @@ function validatePlan(plan) {
     if (task.uncertainty === 'high') {
       errors.push(`Task ${task.id} has high uncertainty; resolve it with capability evidence before promotion`);
     }
+    const floor = minimumRisk(task);
+    if (RISK_STRENGTH[task.risk] < RISK_STRENGTH[floor]) {
+      errors.push(`Task ${task.id} risk ${task.risk} understates its ${task.scope}/${task.complexity} change shape; minimum risk is ${floor}`);
+    }
+
+    const budget = TASK_BUDGETS[task.complexity] || TASK_BUDGETS.M;
+    if (task.files.length > budget.files) {
+      errors.push(`Task ${task.id} owns ${task.files.length} files; ${task.complexity} Review Slices may own at most ${budget.files}`);
+    }
+    if (task.acceptanceCriteria.length > budget.acceptanceCriteria) {
+      errors.push(`Task ${task.id} maps ${task.acceptanceCriteria.length} acceptance criteria; ${task.complexity} Review Slices may map at most ${budget.acceptanceCriteria}`);
+    }
+    if (task.text.length > budget.text) {
+      errors.push(`Task ${task.id} description is ${task.text.length} characters; ${task.complexity} Review Slices are limited to ${budget.text} — split independent behavior`);
+    }
+
+    if (task.type !== 'docs') {
+      if (!task.consumesRaw || (task.consumes.length === 0 && !/^none\.?$/i.test(task.consumesRaw))) {
+        errors.push(`Task ${task.id} must declare parseable **Consumes:** entries as repository:\`contract\` or <task-id>:\`contract\``);
+      }
+      if (!task.producesRaw || task.produces.length === 0) {
+        errors.push(`Task ${task.id} must declare at least one exact **Produces:** contract`);
+      }
+      if (!isConcreteValue(task.defect)) errors.push(`Task ${task.id} must name one concrete **Defect:** class`);
+      if (!isConcreteValue(task.reviewBoundary)) errors.push(`Task ${task.id} must state an independently approvable **Review boundary:**`);
+    }
+
     if (task.phase && task.phase !== 'red') errors.push(`Task ${task.id} has unsupported phase "${task.phase}"`);
-    if (task.phase === 'red' && task.type !== 'test') errors.push(`Task ${task.id} uses phase:red but is not a test task`);
-    if (task.type === 'test' && task.phase !== 'red') errors.push(`Task ${task.id} is a test task and must use [phase:red]`);
-    if (task.explicitTags.has('tdd') && !task.tddCoveredBy) {
-      errors.push(`Task ${task.id} has a malformed tdd tag; use [tdd:covered-by <red-test-task-id>]`);
+    if (task.type === 'test') {
+      if (task.phase !== 'red' || task.tddMode !== 'red-contract') {
+        errors.push(`Task ${task.id} is a standalone test contract and must use [type:test] [phase:red] [tdd:red-contract]`);
+      }
+    } else if (task.phase) {
+      errors.push(`Task ${task.id} uses phase:red but is not a standalone [type:test] [tdd:red-contract] task`);
+    }
+    if (task.type !== 'docs' && !['cycle', 'covered-by', 'red-contract'].includes(task.tddMode)) {
+      errors.push(`Task ${task.id} must use [tdd:cycle], [tdd:covered-by <task-id>], or the exceptional [tdd:red-contract]`);
+    }
+    if (task.tddMode === 'cycle' || task.tddMode === 'red-contract') {
+      if (task.testFiles.length === 0) errors.push(`Task ${task.id} must identify its test-owned files with - tests: \`...\``);
+      for (const testFile of task.testFiles) {
+        if (!task.files.includes(testFile)) errors.push(`Task ${task.id} test file ${testFile} is not included in its owned files`);
+      }
+      if (!RED_MODES.includes(task.redMode)) errors.push(`Task ${task.id} must declare [red:${RED_MODES.join('|')}]`);
+      if (!task.redVerify) errors.push(`Task ${task.id} must include an exact red command with - red: \`...\``);
+      if (!isConcreteValue(task.redExpected)) errors.push(`Task ${task.id} must include a concrete - red-expect: \`...\` signal`);
+      if (task.testBoundaries.length === 0) errors.push(`Task ${task.id} must declare **Test boundary:** unit, integration, or e2e`);
+      for (const boundary of task.testBoundaries) {
+        if (!TEST_BOUNDARIES.includes(boundary)) errors.push(`Task ${task.id} has unsupported test boundary "${boundary}"`);
+      }
+    }
+    if (task.explicitTags.has('tdd') && !task.tddMode) {
+      errors.push(`Task ${task.id} has a malformed tdd tag; use cycle, red-contract, or covered-by <task-id>`);
     }
   }
 
   const tasksById = new Map(parsed.tasks.map(task => [task.id, task]));
+  const taskOrder = new Map(parsed.tasks.map((task, index) => [task.id, index]));
   for (const task of parsed.tasks) {
-    if (!task.tddCoveredBy) continue;
-    const covering = tasksById.get(task.tddCoveredBy);
-    if (!covering) errors.push(`Task ${task.id} declares tdd:covered-by unknown task ${task.tddCoveredBy}`);
-    else if (covering.type !== 'test' || covering.phase !== 'red') {
-      errors.push(`Task ${task.id} tdd:covered-by must reference a [type:test] [phase:red] task`);
+    if (task.tddCoveredBy) {
+      const covering = tasksById.get(task.tddCoveredBy);
+      if (!covering) errors.push(`Task ${task.id} declares tdd:covered-by unknown task ${task.tddCoveredBy}`);
+      else if (!['cycle', 'red-contract'].includes(covering.tddMode)) {
+        errors.push(`Task ${task.id} tdd:covered-by must reference a prior [tdd:cycle] or [tdd:red-contract] Review Slice`);
+      } else if (taskOrder.get(covering.id) >= taskOrder.get(task.id)) {
+        errors.push(`Task ${task.id} tdd:covered-by references ${covering.id}, which is not earlier in plan order`);
+      }
+    }
+    for (const consumed of task.consumes) {
+      if (consumed.source.toLowerCase() === 'repository') continue;
+      const producer = tasksById.get(consumed.source);
+      if (!producer) {
+        errors.push(`Task ${task.id} consumes ${consumed.contract} from unknown Task ${consumed.source}`);
+      } else if (taskOrder.get(producer.id) >= taskOrder.get(task.id)) {
+        errors.push(`Task ${task.id} consumes ${consumed.contract} from Task ${producer.id}, which is not earlier in plan order`);
+      } else if (!producer.produces.includes(consumed.contract)) {
+        errors.push(`Task ${task.id} consumes ${consumed.contract} from Task ${producer.id}, but that exact contract is not produced there`);
+      }
     }
   }
 
@@ -358,28 +714,15 @@ function validatePlan(plan) {
       else if (streamIndex.get(dependency) >= index) errors.push(`Stream ${stream.id} depends on Stream ${dependency}, which appears later; topologically order streams`);
     }
     const first = stream.tasks[0];
-    // A purely structural stream (DTOs, wiring, plumbing) may skip its own red test
-    // when every implementation task in it is pinned by a red test elsewhere via
-    // [tdd:covered-by ...] — a stream-local test there would mirror structure, not
-    // behavior, and mirror tests fail on refactors instead of defects.
-    const redExempt = stream.tasks.length > 0
-      && stream.tasks.every(task => task.type === 'test' || task.tddCoveredBy);
-    if (!first || ((first.type !== 'test' || first.phase !== 'red') && !redExempt)) {
-      errors.push(`Stream ${stream.id} must start with an explicit [type:test] [phase:red] task, or every implementation task in it must declare [tdd:covered-by <red-test-task-id>]`);
-    }
-    const firstImplementation = stream.tasks.findIndex(task => task.type !== 'test');
-    if (firstImplementation >= 0) {
-      for (const task of stream.tasks.slice(firstImplementation + 1)) {
-        if (task.phase === 'red') errors.push(`Task ${task.id} schedules a failing test after implementation in Stream ${stream.id}`);
-      }
+    const cycleExempt = stream.tasks.length > 0
+      && stream.tasks.every(task => task.type === 'docs' || task.tddCoveredBy);
+    if (!first || (!['cycle', 'red-contract'].includes(first.tddMode) && !cycleExempt)) {
+      errors.push(`Stream ${stream.id} must start with a behavior-sized [tdd:cycle] or [tdd:red-contract] Review Slice, unless every task is docs or covered by an earlier slice`);
     }
   }
 
-  const integrationTasks = parsed.tasks.filter(task => task.type === 'test' && /integration[- ]test/i.test(task.text));
-  if (integrationTasks.length === 0) errors.push('no integration-test task covering acceptance criteria');
-  for (const task of integrationTasks) {
-    if (task.phase !== 'red') errors.push(`integration-test Task ${task.id} must be scheduled as [phase:red] before implementation`);
-  }
+  const integrationTasks = parsed.tasks.filter(task => task.testBoundaries.includes('integration') || task.testBoundaries.includes('e2e'));
+  if (integrationTasks.length === 0) errors.push('no TDD Review Slice declares integration or e2e verification for the acceptance criteria');
 
   if (parsed.capabilityEvidence.length === 0) {
     errors.push('Capability Evidence must contain at least one structured **Dependency:** or **Repository capability:** entry');
@@ -419,13 +762,24 @@ function validatePlan(plan) {
 }
 
 function nextOpenTask(plan) {
+  const parsed = parsePlan(plan);
+  if (parsed.tasks.length > 0) {
+    const open = parsed.tasks.find(task => task.active)
+      || parsed.tasks.find(task => !task.checked);
+    if (open) return open;
+  }
+  // Acceptance Criteria are completion state, not executable work. Canonical Pair
+  // plans declare their model work under Streams; once those tasks are closed the
+  // runner is finished. The generic checkbox fallback remains available for the
+  // deliberately simpler .claude-loop.md format, which has no Stream contract.
+  if (parsed.streams.length > 0) return null;
   const lines = plan.split(/\r?\n/);
   let explicitSection = '';
   for (let index = 0; index < lines.length; index++) {
     const heading = lines[index].match(/^##\s+(.+)/);
     if (heading) explicitSection = heading[1].trim().toLowerCase();
     if (explicitSection === 'acceptance criteria') continue;
-    const match = lines[index].match(/^\s*[-*]\s+\[ \]\s+(?:Task\s+)?([A-Za-z0-9._-]+)\s*[-:–—]\s*(.+)$/i);
+    const match = lines[index].match(/^\s*[-*]\s+\[[ -]\]\s+(?:Task\s+)?([A-Za-z0-9._-]+)\s*[-:–—]\s*(.+)$/i);
     if (match) return taskFromParts(match[1], match[2].trim(), index + 1);
   }
 
@@ -435,10 +789,10 @@ function nextOpenTask(plan) {
     for (let index = 0; index < lines.length; index++) {
       const heading = lines[index].match(/^##\s+(.+)/);
       if (heading) section = heading[1].trim().toLowerCase();
-      const checkbox = lines[index].match(/^\s*[-*]\s+\[([ xX])\]\s+(.+)$/);
+      const checkbox = lines[index].match(/^\s*[-*]\s+\[([ xX-])\]\s+(.+)$/);
       if (!checkbox || section !== targetSection) continue;
       ordinal++;
-      if (checkbox[1] !== ' ') continue;
+      if (![' ', '-'].includes(checkbox[1])) continue;
       if (targetSection === 'tasks') return taskFromParts(`loop.${ordinal}`, checkbox[2].trim(), index + 1);
       const namedCriterion = checkbox[2].match(/^([A-Za-z0-9._-]+)\s*:\s*(.+)$/);
       const id = namedCriterion?.[1] || `AC${ordinal}`;
@@ -451,8 +805,11 @@ function nextOpenTask(plan) {
 
 function staticStrength(profile) {
   if (profile.risk === 'critical' || profile.uncertainty === 'high') return 4;
-  if (profile.risk === 'high' || profile.complexity === 'L' || profile.scope === 'architecture') return 3;
-  if (profile.risk === 'medium' || profile.complexity === 'M' || profile.scope === 'contract') return 2;
+  if (profile.risk === 'high' || profile.complexity === 'L'
+      || profile.scope === 'contract' || profile.scope === 'architecture'
+      || (profile.files?.length || 0) > 6
+      || (profile.acceptanceCriteria?.length || 0) > 2) return 3;
+  if (profile.risk === 'medium' || profile.complexity === 'M' || profile.scope === 'cross-module') return 2;
   return 1;
 }
 
@@ -477,12 +834,13 @@ function selectRoute(profile, routes) {
   return ranked.find(route => route.strength >= needed) || strongest;
 }
 
-function classifyOutcome({ workerStatus, workerBlocker = '', verification, findings = [], priorAttempts = 0, priorModelAttempts = priorAttempts, runtimeStatus = 0, reviewStatus = 0, recommendedAction = 'approve', workerParseError = false }) {
+function classifyOutcome({ workerStatus, workerBlocker = '', verification, ownership = null, findings = [], priorRetryCounts = {}, runtimeStatus = 0, reviewStatus = 0, recommendedAction = 'approve', workerParseError = false }) {
+  const retried = action => (priorRetryCounts[action] || 0) > 0;
   // A runtime that exits non-zero failed to run (spawn error, timeout, shim collision):
   // a stronger model cannot fix that, so retry the SAME route once. Never train routing on
   // it; a blocker the worker actually authored is handled by the task-ambiguity branch below.
   if (runtimeStatus !== 0) {
-    return priorAttempts > 0
+    return retried('retry-infrastructure')
       ? { disposition: 'human-takeover', action: 'stop', cause: 'environment-failure' }
       : { disposition: 'regenerated', action: 'retry-infrastructure', cause: 'environment-failure' };
   }
@@ -490,22 +848,33 @@ function classifyOutcome({ workerStatus, workerBlocker = '', verification, findi
   // This is usually a model too weak to emit structured output (e.g. the cheapest tier), so
   // retry on a STRONGER route rather than burning another attempt on the same one.
   if (workerParseError) {
-    return priorAttempts > 0
+    return retried('retry-stronger')
       ? { disposition: 'human-takeover', action: 'stop', cause: 'environment-failure' }
       : { disposition: 'regenerated', action: 'retry-stronger', cause: 'environment-failure' };
   }
   if (workerStatus === 'blocked' && /\bincorrect-plan\b/i.test(workerBlocker)) {
-    return priorAttempts > 0
-      ? { disposition: 'human-takeover', action: 'stop', cause: 'incorrect-plan' }
-      : { disposition: 'redesign', action: 'redesign', cause: 'incorrect-plan' };
+    return { disposition: 'redesign', action: 'return-to-promotion', cause: 'incorrect-plan' };
+  }
+  // Crossing the Review Slice boundary is neither a generic verification defect nor
+  // proof that the plan is wrong. Feed the exact boundary evidence back once; if the
+  // same class recurs, promotion must decide whether ownership needs to expand.
+  if (ownership?.status === 'fail') {
+    return retried('retry-ownership')
+      ? { disposition: 'redesign', action: 'return-to-promotion', cause: 'incorrect-plan' }
+      : { disposition: 'regenerated', action: 'retry-ownership', cause: 'integration-conflict' };
+  }
+  if (workerStatus === 'blocked' && /^verification-defect:/i.test(workerBlocker)) {
+    return retried('retry-verification')
+      ? { disposition: 'human-takeover', action: 'stop', cause: 'verification-defect' }
+      : { disposition: 'regenerated', action: 'retry-verification', cause: 'verification-defect' };
   }
   if (workerStatus === 'blocked') {
-    return priorAttempts > 0
+    return retried('retry-context')
       ? { disposition: 'human-takeover', action: 'stop', cause: 'task-ambiguity' }
       : { disposition: 'regenerated', action: 'retry-context', cause: 'task-ambiguity' };
   }
   if (reviewStatus !== 0) {
-    return priorAttempts > 0
+    return retried('retry-infrastructure')
       ? { disposition: 'human-takeover', action: 'stop', cause: 'reviewer-error' }
       : { disposition: 'regenerated', action: 'retry-infrastructure', cause: 'reviewer-error' };
   }
@@ -516,24 +885,38 @@ function classifyOutcome({ workerStatus, workerBlocker = '', verification, findi
   const blockers = findings.filter(finding => finding.severity === 'BLOCKER').length;
   const majors = findings.filter(finding => finding.severity === 'MAJOR').length;
   const material = blockers + majors;
+  const environmentFindings = findings.filter(finding => finding.origin === 'environment').length;
+  if (environmentFindings > 0) {
+    return retried('retry-infrastructure')
+      ? { disposition: 'human-takeover', action: 'stop', cause: 'environment-failure' }
+      : { disposition: 'regenerated', action: 'retry-infrastructure', cause: 'environment-failure' };
+  }
+  const planFindings = findings.filter(finding => finding.origin === 'plan').length;
+  if (planFindings > 0) {
+    return { disposition: 'redesign', action: 'return-to-promotion', cause: 'incorrect-plan' };
+  }
   if (recommendedAction === 'redesign' && material > 0) {
-    return priorAttempts > 0
-      ? { disposition: 'human-takeover', action: 'stop', cause: 'incorrect-plan' }
-      : { disposition: 'redesign', action: 'redesign', cause: 'incorrect-plan' };
+    return { disposition: 'redesign', action: 'return-to-promotion', cause: 'incorrect-plan' };
+  }
+  if (recommendedAction === 'local-fix' && material > 0) {
+    return { disposition: 'local-fix', action: 'local-fix', cause: 'model-capability' };
   }
   if (recommendedAction === 'rewrite' && material > 0) {
-    return { disposition: 'substantial-rewrite', action: 'escalate', cause: 'model-capability' };
+    return retried('retry-review')
+      ? { disposition: 'human-takeover', action: 'stop', cause: 'model-capability' }
+      : { disposition: 'regenerated', action: 'retry-review', cause: 'model-capability' };
   }
   if (verification === 'fail') {
-    return priorModelAttempts > 0
-      ? { disposition: 'substantial-rewrite', action: 'escalate', cause: 'model-capability' }
-      : { disposition: 'local-fix', action: 'local-fix', cause: 'model-capability' };
+    return retried('retry-verification')
+      ? { disposition: 'human-takeover', action: 'stop', cause: 'verification-defect' }
+      : { disposition: 'regenerated', action: 'retry-verification', cause: 'verification-defect' };
   }
 
-  if (blockers > 0 || (majors > 0 && priorModelAttempts > 0)) {
-    return { disposition: 'substantial-rewrite', action: 'escalate', cause: 'model-capability' };
+  if (blockers > 0 || majors > 0) {
+    return retried('retry-review')
+      ? { disposition: 'human-takeover', action: 'stop', cause: 'model-capability' }
+      : { disposition: 'regenerated', action: 'retry-review', cause: 'model-capability' };
   }
-  if (majors > 0) return { disposition: 'local-fix', action: 'local-fix', cause: 'model-capability' };
   return { disposition: 'accepted', action: 'complete-task', cause: null };
 }
 
@@ -542,9 +925,22 @@ function classifyOutcome({ workerStatus, workerBlocker = '', verification, findi
 // parses into a partial object that is missing findings; treating it as a real verdict
 // once produced bogus "redesign" dispositions and crashed writeReviewFiles.
 function reviewIsWellFormed(review) {
+  const text = value => typeof value === 'string' && value.trim().length > 0;
   return Boolean(review)
     && (review.verdict === 'approve' || review.verdict === 'fix-needed')
-    && Array.isArray(review.findings);
+    && ['approve', 'local-fix', 'rewrite', 'redesign'].includes(review.recommended_action)
+    && text(review.summary)
+    && Array.isArray(review.findings)
+    && review.findings.every(finding => Boolean(finding)
+      && (finding.severity === 'BLOCKER' || finding.severity === 'MAJOR')
+      && ['implementation', 'plan', 'environment'].includes(finding.origin)
+      && text(finding.file)
+      && Number.isInteger(finding.line)
+      && finding.line >= 1
+      && text(finding.title)
+      && text(finding.detail)
+      && text(finding.failure_scenario)
+      && text(finding.suggestion));
 }
 
 // Coerce any parsed review into the review schema shape so downstream classification
@@ -572,29 +968,43 @@ function normalizeReview(review) {
 // The safety cap and escalation must count real attempts at the task, not toolchain
 // interruptions. An interrupted attempt (hard kill/crash/manual .pair reset, recorded
 // status:'interrupted') did not exercise the model, so it must not consume the retry
-// budget nor push classifyOutcome toward human-takeover. A run of trailing interrupts,
-// however, means the environment itself is unstable and the task cannot make progress.
+// budget nor push classifyOutcome toward human-takeover. Pair v4 treats repeated
+// interruptions as observable recovery evidence, never as a count-based stop condition.
 function attemptCapStatus(history, maxAttempts) {
   const records = Array.isArray(history) ? history : [];
-  const substantive = records.filter(record => record.status !== 'interrupted').length;
+  const substantiveRecords = records.filter(record => !['interrupted', 'completed-out-of-band'].includes(record.status));
+  const retryCounts = {};
+  for (const record of substantiveRecords) {
+    if (typeof record.action !== 'string' || !record.action.startsWith('retry-')) continue;
+    retryCounts[record.action] = (retryCounts[record.action] || 0) + 1;
+  }
+  const substantive = substantiveRecords.length;
   let trailingInterrupts = 0;
   for (let index = records.length - 1; index >= 0 && records[index]?.status === 'interrupted'; index--) {
     trailingInterrupts++;
   }
-  // "Unstable" means the runtime keeps dying before completing. Require at least two
-  // back-to-back interruptions so a single crash under a tight --max-attempts (e.g. 1)
-  // never hard-fails a task that has not actually been attempted.
   return {
     substantive,
     trailingInterrupts,
+    retryCounts,
     overCap: substantive >= maxAttempts,
-    unstable: trailingInterrupts >= Math.max(2, maxAttempts),
+    unstable: false,
+    warning: trailingInterrupts >= 2 ? 'repeated-interruptions' : null,
   };
 }
 
-function buildRuntimeCommand({ runtime, root, prompt, model, effort, schemaPath, outputPath, schema }) {
+function buildRuntimeCommand({ runtime, root, prompt, model, effort, schemaPath, outputPath, schema, externalSandbox = false }) {
   if (runtime === 'codex') {
-    const args = ['exec', '--json', '--ephemeral', '--sandbox', 'workspace-write', '-C', root];
+    const args = [
+      'exec',
+      '--json',
+      '--ephemeral',
+      ...(externalSandbox
+        ? ['--dangerously-bypass-approvals-and-sandbox']
+        : ['--sandbox', 'workspace-write']),
+      '-C',
+      root,
+    ];
     if (model && model !== 'default') args.push('--model', model);
     if (effort && effort !== 'default') args.push('-c', `model_reasoning_effort="${effort}"`);
     if (schemaPath) args.push('--output-schema', schemaPath);
@@ -678,6 +1088,14 @@ function createAttempt({
     decisionRecordIds: [...new Set(decisionRecordIds)].sort(),
     acceptanceCriteria: [...new Set(task.acceptanceCriteria || [])].sort(),
     expectedFiles: [...new Set(task.files || [])].sort(),
+    tddMode: task.tddMode || null,
+    redContract: task.redVerify ? {
+      mode: task.redMode,
+      command: task.redVerify,
+      expectedSignal: task.redExpected,
+    } : null,
+    consumes: task.consumes || [],
+    produces: task.produces || [],
     verificationCommand: task.verify || null,
     startedAt: now,
     status: 'running',

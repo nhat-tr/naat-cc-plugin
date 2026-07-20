@@ -232,6 +232,14 @@
         "codex"
       ]
     },
+    "skill.pair-v4": {
+      "type": "workflow_skill",
+      "canonical_file": "skills/pair-v4/SKILL.md",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
     "skill.pair-promote": {
       "type": "skill",
       "canonical_file": "skills/pair-promote/SKILL.md",
@@ -343,6 +351,22 @@
     "cli.pair-loop": {
       "type": "cli",
       "canonical_file": "bin/pair-loop",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
+    "cli.pair-v4": {
+      "type": "cli",
+      "canonical_file": "bin/pair-v4",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
+    "cli.pair-plan-challenge": {
+      "type": "cli",
+      "canonical_file": "bin/pair-plan-challenge",
       "supported_runtimes": [
         "claude",
         "codex"

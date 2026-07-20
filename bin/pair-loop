@@ -1,3 +1,10 @@
 #!/usr/bin/env bash
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+if [[ "${1:-}" == "--challenge-plan" ]]; then
+  shift
+  exec node "$SCRIPT_DIR/../skills/pair-v3/scripts/pair-plan-challenge" "$@"
+fi
+if [[ "${1:-}" == "--approve-plan" ]]; then
+  exec node "$SCRIPT_DIR/../skills/pair-v3/scripts/pair-plan-challenge" "$@"
+fi
 exec "$SCRIPT_DIR/../skills/pair-v3/scripts/pair-loop" "$@"

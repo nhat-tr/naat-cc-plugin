@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { validPairPlan } = require('./support/pair-plan-fixture');
+const { validPairLitePlan, validPairPlan } = require('./support/pair-plan-fixture');
 
 function scratchFile(t, name, content) {
   const scratchRoot = process.env.CLAUDE_SCRATCH_DIR
@@ -51,4 +51,13 @@ test('pair-v2 validator wrapper delegates to the canonical validator', t => {
 
   assert.equal(wrapped.status, 0, `${wrapped.stdout}${wrapped.stderr}`);
   assert.match(wrapped.stdout, /validate-plan: OK/);
+});
+
+test('canonical validator accepts the compact Pair-lite execution contract', t => {
+  const plan = validPairLitePlan();
+  const result = validate(scratchFile(t, 'pair-lite-plan.md', plan));
+
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /validate-plan: OK/);
+  assert.ok(Buffer.byteLength(plan) < Buffer.byteLength(validPairPlan()) / 3);
 });

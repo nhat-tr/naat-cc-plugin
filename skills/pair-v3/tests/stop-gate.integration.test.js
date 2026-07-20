@@ -6,107 +6,164 @@ const path = require('node:path');
 const test = require('node:test');
 
 const hook = path.resolve(__dirname, '../../../hooks/stop-gate.sh');
+const ownerAdapter = path.resolve(__dirname, '../scripts/pair-owner-adapter');
+const orientAdapter = path.resolve(__dirname, '../scripts/pair-orient');
+const { appendPairEvent, loadPairState } = require('../scripts/lib/pair-state');
+const { pauseWork, takeoverWork } = require('../scripts/lib/pair-control');
 
-function fixture(t, tasks = 2) {
+function fixture(t) {
   const scratchBase = process.env.CLAUDE_SCRATCH_DIR || path.join(os.homedir(), '.claude-scratch');
   const root = fs.mkdtempSync(path.join(scratchBase, 'my-claude-code-stop-gate-'));
-  const pairDir = path.join(root, '.pair');
-  const scratch = path.join(root, 'scratch');
-  fs.mkdirSync(pairDir, { recursive: true });
-  fs.mkdirSync(scratch, { recursive: true });
-  fs.writeFileSync(
-    path.join(pairDir, 'plan.md'),
-    Array.from({ length: tasks }, (_value, index) => `- [ ] Task ${index + 1}`).join('\n'),
-  );
+  childProcess.spawnSync('git', ['init', '-q'], { cwd: root });
+  fs.mkdirSync(path.join(root, '.pair'), { recursive: true });
+  appendPairEvent(root, { event: 'work.opened', workId: 'work-stop-contract', phase: 'ready' });
+  appendPairEvent(root, {
+    event: 'attempt.started', attemptId: '1.1-stop', taskId: '1.1', phase: 'implementing',
+  });
+  appendPairEvent(root, {
+    event: 'continuation.claimed', workId: 'work-stop-contract', session_id: 'owner-session', runtime: 'codex',
+  });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  return { pairDir, root, scratch };
+  return root;
 }
 
-function activate(pairDir, runId = 'run-one', pid = process.pid) {
-  fs.writeFileSync(path.join(pairDir, 'active-loop.json'), `${JSON.stringify({
-    schema: 1,
-    run_id: runId,
-    pid,
-    plan: '.pair/plan.md',
-  })}\n`);
-}
-
-function writeActiveAttempt(pairDir, taskId = '1.1') {
-  fs.writeFileSync(path.join(pairDir, 'active-attempt.json'), `${JSON.stringify({ attemptId: `${taskId}-x`, taskId })}\n`);
-}
-
-function stopGate(root, scratch, max = 2) {
-  return childProcess.spawnSync('bash', [hook], {
+function invoke(root, runtime, sessionId, extra = {}) {
+  const result = childProcess.spawnSync('bash', [hook], {
     cwd: root,
     encoding: 'utf8',
     env: {
       ...process.env,
-      CLAUDE_SCRATCH_DIR: scratch,
-      PAIR_STOP_GATE_MAX: String(max),
+      PAIR_HOOK_RUNTIME: runtime,
+      PAIR_STOP_GATE: 'on',
     },
-    input: `${JSON.stringify({ cwd: root })}\n`,
+    input: `${JSON.stringify({
+      cwd: root,
+      session_id: sessionId,
+      hook_event_name: 'Stop',
+      ...extra,
+    })}\n`,
   });
-}
-
-function decision(result) {
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim() ? JSON.parse(result.stdout) : null;
 }
 
-test('a dormant Pair plan never activates the Stop gate', t => {
-  const { root, scratch } = fixture(t);
-  assert.equal(decision(stopGate(root, scratch)), null);
+function captureOwner(root, sessionId, command) {
+  return childProcess.spawnSync(process.execPath, [ownerAdapter], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, PAIR_HOOK_RUNTIME: 'claude' },
+    input: `${JSON.stringify({
+      cwd: root,
+      session_id: sessionId,
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command },
+    })}\n`,
+  });
+}
+
+function orient(root, sessionId = 'orient-session') {
+  return childProcess.spawnSync(process.execPath, [orientAdapter], {
+    cwd: root,
+    encoding: 'utf8',
+    input: `${JSON.stringify({ cwd: root, session_id: sessionId, hook_event_name: 'SessionStart' })}\n`,
+  });
+}
+
+test('native Stop contract continues only the owning Codex and Claude session', t => {
+  const root = fixture(t);
+  assert.equal(invoke(root, 'codex', 'owner-session').continue, false);
+  assert.equal(invoke(root, 'codex', 'other-codex'), null);
+  takeoverWork(root, 'claude-owner', 'claude');
+  assert.equal(invoke(root, 'claude', 'claude-owner').decision, 'block');
+  assert.equal(invoke(root, 'claude', 'other-claude'), null);
 });
 
-test('a live Active Pair Loop marker activates the Stop gate', t => {
-  const { pairDir, root, scratch } = fixture(t);
-  activate(pairDir);
-  assert.match(decision(stopGate(root, scratch)).reason, /Stop gate \(1\/2\).*2 unchecked/u);
+test('Codex and Claude native Stop response shapes are exact', t => {
+  const root = fixture(t);
+  const codex = invoke(root, 'codex', 'owner-session');
+  assert.equal(codex.continue, false);
+  assert.match(codex.stopReason, /attempt 1\.1-stop.*implementing/i);
+  assert.deepEqual(Object.keys(codex).sort(), ['continue', 'stopReason']);
+
+  takeoverWork(root, 'claude-owner', 'claude');
+  const claude = invoke(root, 'claude', 'claude-owner', { stop_hook_active: true });
+  assert.equal(claude.decision, 'block');
+  assert.match(claude.reason, /attempt 1\.1-stop.*implementing/i);
+  assert.deepEqual(Object.keys(claude).sort(), ['decision', 'reason']);
 });
 
-test('an exhausted run stays allowed until progress or a new Pair Loop run', t => {
-  const { pairDir, root, scratch } = fixture(t);
-  activate(pairDir);
+test('Claude captures ownership from the exact Pair Bash invocation, not an unrelated command', t => {
+  const root = fixture(t);
+  appendPairEvent(root, {
+    event: 'continuation.claimed', workId: 'work-stop-contract', session_id: null, runtime: null,
+  });
 
-  assert.match(decision(stopGate(root, scratch)).reason, /\(1\/2\)/u);
-  assert.match(decision(stopGate(root, scratch)).reason, /\(2\/2\)/u);
-  assert.equal(decision(stopGate(root, scratch)), null);
-  assert.equal(decision(stopGate(root, scratch)), null, 'same run must remain latched open');
+  const unrelated = captureOwner(root, 'unrelated-session', 'rg -n pair-loop README.md');
+  assert.equal(unrelated.status, 0, unrelated.stderr);
+  assert.equal(loadPairState(root).continuation.owner_session_id, null);
 
-  fs.writeFileSync(path.join(pairDir, 'plan.md'), '- [x] Task 1\n- [ ] Task 2\n');
-  assert.match(decision(stopGate(root, scratch)).reason, /\(1\/2\).*1 unchecked/u);
-
-  assert.match(decision(stopGate(root, scratch)).reason, /\(2\/2\)/u);
-  assert.equal(decision(stopGate(root, scratch)), null);
-  activate(pairDir, 'run-two');
-  assert.match(decision(stopGate(root, scratch)).reason, /\(1\/2\)/u);
+  const captured = captureOwner(root, 'claude-pair-owner', 'PAIR_RUNTIME=auto pair-loop --runtime auto');
+  assert.equal(captured.status, 0, captured.stderr);
+  assert.equal(loadPairState(root).continuation.owner_session_id, 'claude-pair-owner');
+  assert.equal(invoke(root, 'claude', 'claude-pair-owner').decision, 'block');
+  assert.equal(invoke(root, 'claude', 'unrelated-session'), null);
 });
 
-test('a stale Active Pair Loop marker cannot activate the Stop gate', t => {
-  const { pairDir, root, scratch } = fixture(t);
-  activate(pairDir, 'stale-run', 2147483647);
-  assert.equal(decision(stopGate(root, scratch)), null);
+test('unrelated sessions stop normally while pause releases continuation ownership', t => {
+  const root = fixture(t);
+  assert.equal(invoke(root, 'codex', 'unrelated-session'), null);
+  pauseWork(root);
+  assert.equal(invoke(root, 'codex', 'owner-session'), null);
+  assert.equal(loadPairState(root).continuation.owner_session_id, null);
+
+  takeoverWork(root, 'new-owner', 'codex');
+  assert.equal(invoke(root, 'codex', 'owner-session'), null);
+  assert.equal(invoke(root, 'codex', 'new-owner'), null, 'paused Work does not auto-continue even after takeover');
 });
 
-test('an active attempt owned by a live pair-loop blocks stopping', t => {
-  const { pairDir, root, scratch } = fixture(t);
-  activate(pairDir);
-  writeActiveAttempt(pairDir, '2.3');
-  assert.match(decision(stopGate(root, scratch)).reason, /attempt for task 2\.3 is still active/u);
+test('orientation names a material blocker without telling a new session to advance it', t => {
+  const root = fixture(t);
+  appendPairEvent(root, {
+    event: 'work.blocked', workId: 'work-stop-contract', phase: 'reviewing',
+    reason: 'canonical contract needs a human decision',
+  });
+
+  const result = orient(root);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /canonical contract needs a human decision/i);
+  assert.match(result.stdout, /do not dispatch/i);
+  assert.doesNotMatch(result.stdout, /advance only the saved phase/i);
 });
 
-test('an orphaned active attempt (dead owner) never traps the session', t => {
-  const { pairDir, root, scratch } = fixture(t);
-  activate(pairDir, 'dead-run', 2147483647);
-  writeActiveAttempt(pairDir, '2.3');
-  // The dead owner must not produce an "attempt is still active" block; the stale
-  // active-loop marker is cleared and the stop is allowed.
-  assert.equal(decision(stopGate(root, scratch)), null);
+test('evidence progress is reported and no checkbox or fixed retry count opens the gate', t => {
+  const root = fixture(t);
+  for (let index = 0; index < 10; index++) {
+    const response = invoke(root, 'codex', 'owner-session');
+    assert.equal(response.continue, false);
+  }
+  appendPairEvent(root, {
+    event: 'phase.progressed', attemptId: '1.1-stop', taskId: '1.1', phase: 'verifying',
+    evidence_digest: 'a'.repeat(64),
+  });
+  const progressed = invoke(root, 'codex', 'owner-session');
+  assert.match(progressed.stopReason, /verifying/);
+  assert.match(progressed.stopReason, /evidence sequence/i);
 });
 
-test('an active attempt with no loop marker at all does not trap the session', t => {
-  const { pairDir, root, scratch } = fixture(t);
-  writeActiveAttempt(pairDir, '2.3');
-  assert.equal(decision(stopGate(root, scratch)), null);
+test('hook infrastructure failure never deletes or rewrites the durable phase', t => {
+  const root = fixture(t);
+  const before = loadPairState(root);
+  const pointer = path.join(root, '.pair', 'current-run.json');
+  fs.writeFileSync(pointer, '{corrupt');
+  assert.equal(invoke(root, 'codex', 'owner-session'), null);
+  fs.writeFileSync(pointer, `${JSON.stringify({
+    schema: 4,
+    work_id: 'work-stop-contract',
+    run: '.pair/runs/work-stop-contract',
+  })}\n`);
+  const after = loadPairState(root);
+  assert.equal(after.active.attempt_id, before.active.attempt_id);
+  assert.equal(after.active.phase, before.active.phase);
 });
-

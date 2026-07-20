@@ -7,22 +7,65 @@ const test = require('node:test');
 
 const {
   beginActivePairLoop,
+  bindAttemptLedger,
+  changedPathsSinceSnapshot,
   chooseRoute,
   endActivePairLoop,
+  finalReviewCapStatus,
+  finalGateFailureCapStatus,
   isExpectedFailingTestTask,
+  parseArgs,
   parseWorkerResult,
   readWorkLinkage,
   reconcileOrphanedAttempts,
   recoverActiveAttempt,
   revertToSnapshot,
+  runReview,
+  shouldRunTaskReview,
+  shouldRunAnchorReview,
   snapshotWorktree,
+  taskHistory,
   verify,
+  verifyRed,
+  writeCumulativeReviewPatch,
+  writeReviewSlicePatch,
+  workAttemptCapStatus,
 } = require('../scripts/pair-task');
 const { planContractDigest } = require('../scripts/lib/pair-core');
 const {
   createWorkRoot,
   writeDecisionRecord,
 } = require('../../brainstorming/scripts/work-lineage.cjs');
+
+test('Pair v4 has no implicit count ceilings while legacy v3 keeps its compatibility ceiling', () => {
+  const keys = [
+    'PAIR_MAX_TASK_ATTEMPTS',
+    'PAIR_MAX_WORK_ATTEMPTS',
+    'PAIR_MAX_FINAL_REVIEWS',
+    'PAIR_LEGACY_V3',
+  ];
+  const prior = new Map(keys.map(key => [key, process.env[key]]));
+  for (const key of keys) delete process.env[key];
+  try {
+    assert.deepEqual(
+      {
+        task: parseArgs([]).maxAttempts,
+        work: parseArgs([]).maxWorkAttempts,
+        final: parseArgs([]).maxFinalReviews,
+      },
+      { task: null, work: null, final: null },
+    );
+    assert.equal(parseArgs(['--legacy-v3']).maxAttempts, 3);
+    assert.equal(parseArgs(['--max-attempts', '7']).maxAttempts, 7);
+    assert.equal(parseArgs(['--max-work-attempts', '11']).maxWorkAttempts, 11);
+    assert.equal(parseArgs(['--max-final-reviews', '5']).maxFinalReviews, 5);
+  } finally {
+    for (const [key, value] of prior) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
 
 function testRepo(t) {
   const scratchRoot = process.env.CLAUDE_SCRATCH_DIR
@@ -33,6 +76,25 @@ function testRepo(t) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
+
+test('attempt history stays repository-local when the optional legacy source changes', t => {
+  const root = testRepo(t);
+  fs.mkdirSync(path.join(root, '.pair'), { recursive: true });
+  const first = path.join(root, 'data-a', 'attempts.jsonl');
+  const second = path.join(root, 'data-b', 'attempts.jsonl');
+
+  assert.equal(
+    bindAttemptLedger(root, first, 'work-20260718-ledger').ledger,
+    '.pair/runs/work-20260718-ledger/events.jsonl',
+  );
+  assert.doesNotThrow(() => bindAttemptLedger(root, second, 'work-20260718-ledger'));
+  const binding = JSON.parse(fs.readFileSync(path.join(root, '.pair', 'ledger-bindings.json'), 'utf8'));
+  assert.equal(binding.authority, 'repository');
+  assert.equal(
+    binding.bindings['work:work-20260718-ledger'].ledger,
+    '.pair/runs/work-20260718-ledger/events.jsonl',
+  );
+});
 
 test('verify replays a reported passing command', t => {
   const root = testRepo(t);
@@ -55,19 +117,122 @@ test('verify rejects a claimed pass when command replay fails', t => {
 
 test('verify proves a tests-first task by replaying the expected failure', t => {
   const root = testRepo(t);
-  const result = verify(root, { type: 'test', text: 'write failing tests for behavior' }, {
-    tests: [{ command: 'node -e "process.exit(1)"', status: 'fail' }],
+  const redCommand = 'node -e "console.error(\'greeting assertion failed\'); process.exit(1)"';
+  const result = verify(root, {
+    type: 'test', phase: 'red', tddMode: 'red-contract', redMode: 'assertion',
+    redVerify: redCommand, redExpected: 'greeting assertion failed', testFiles: [],
+  }, {
+    tests: [{ command: redCommand, status: 'fail' }],
   });
 
   assert.equal(result.status, 'pass');
-  assert.match(result.output, /expected failure reproduced/);
+  assert.match(result.output, /RED assertion failure reproduced/);
 });
 
 test('tests-first detection honors the explicit red phase', () => {
-  assert.equal(isExpectedFailingTestTask({ type: 'test', phase: 'red', text: 'capture expected behavior' }), true);
+  assert.equal(isExpectedFailingTestTask({ type: 'test', phase: 'red', tddMode: 'red-contract' }), true);
+  assert.equal(isExpectedFailingTestTask({ type: 'test', phase: 'red' }), false, 'legacy arbitrary RED tasks are not accepted');
 });
 
-test('recoverActiveAttempt classifies an interrupted attempt before retry', t => {
+test('Pair-lite uses a conditional task-review policy and always permits an explicit override', () => {
+  assert.equal(shouldRunTaskReview({ risk: 'low' }, {}, {}), false);
+  assert.equal(shouldRunTaskReview({ risk: 'high' }, {}, {}), false);
+  assert.equal(shouldRunTaskReview({ risk: 'critical' }, {}, {}), true);
+  assert.equal(shouldRunTaskReview({ risk: 'low' }, {}, { PAIR_TASK_REVIEW: 'all' }), true);
+  assert.equal(shouldRunTaskReview({ risk: 'critical' }, {}, { PAIR_TASK_REVIEW: 'off' }), false);
+  assert.equal(shouldRunTaskReview({ risk: 'low' }, { legacyV3: true }, {}), true);
+});
+
+test('Work-level attempt budget spans plan digests and ignores interruptions', () => {
+  const ledger = [
+    { event: 'attempt.completed', attemptId: 'attempt-a', status: 'completed', repositoryId: 'repo', workId: 'work', planDigest: 'old' },
+    { event: 'attempt.completed', attemptId: 'attempt-a', status: 'completed', repositoryId: 'repo', workId: 'work', planDigest: 'old' },
+    { event: 'attempt.completed', attemptId: 'attempt-b', status: 'interrupted', repositoryId: 'repo', workId: 'work', planDigest: 'new' },
+    { event: 'attempt.completed', attemptId: 'attempt-c', status: 'completed', repositoryId: 'repo', workId: 'work', planDigest: 'new' },
+    { event: 'attempt.completed', attemptId: 'attempt-d', status: 'completed', repositoryId: 'other', workId: 'work', planDigest: 'new' },
+  ];
+
+  assert.deepEqual(workAttemptCapStatus(ledger, 'repo', 'work', 2), {
+    attempts: 2,
+    maxAttempts: 2,
+    overCap: true,
+  });
+});
+
+test('Task retry history counts one completion per attempt ID', () => {
+  const completion = {
+    event: 'attempt.completed',
+    attemptId: 'attempt-a',
+    taskId: '1.1',
+    repositoryId: 'repo',
+    workId: 'work',
+    planDigest: 'digest',
+    status: 'completed',
+    action: 'retry-verification',
+  };
+  assert.equal(
+    taskHistory([completion, { ...completion }], '1.1', 'repo', 'work', 'digest').length,
+    1,
+  );
+});
+
+test('the cumulative verdict allows one closure review and then requires human takeover', () => {
+  const ledger = [
+    { event: 'final-review.completed', repositoryId: 'repo', workId: 'work', classification: 'findings' },
+    { event: 'final-review.completed', repositoryId: 'repo', workId: 'other', classification: 'findings' },
+  ];
+  assert.deepEqual(finalReviewCapStatus(ledger, 'repo', 'work', 2), {
+    reviews: 1,
+    maxReviews: 2,
+    overCap: false,
+  });
+  ledger.push({ event: 'final-review.completed', repositoryId: 'repo', workId: 'work', classification: 'findings' });
+  assert.equal(finalReviewCapStatus(ledger, 'repo', 'work', 2).overCap, true);
+});
+
+test('the cumulative deterministic gate stops after two failed replays', () => {
+  const ledger = [
+    { event: 'final-gate.completed', repositoryId: 'repo', workId: 'work', status: 'fail' },
+    { event: 'final-gate.completed', repositoryId: 'repo', workId: 'work', status: 'pass' },
+    { event: 'final-gate.completed', repositoryId: 'repo', workId: 'work', status: 'fail' },
+  ];
+  assert.deepEqual(finalGateFailureCapStatus(ledger, 'repo', 'work', 2), {
+    failures: 2,
+    maxFailures: 2,
+    overCap: true,
+  });
+});
+
+test('verifyRed rejects arbitrary non-zero and infrastructure failures', t => {
+  const root = testRepo(t);
+  const wrongSignal = verifyRed(root, {
+    redMode: 'assertion',
+    redVerify: 'node -e "console.error(\'different failure\'); process.exit(1)"',
+    redExpected: 'expected assertion',
+    testFiles: [],
+  });
+  assert.equal(wrongSignal.status, 'fail');
+  assert.match(wrongSignal.output, /was not reproduced/);
+
+  const infrastructure = verifyRed(root, {
+    redMode: 'runtime',
+    redVerify: 'node -e "console.error(\'Cannot find module expected-signal\'); process.exit(1)"',
+    redExpected: 'expected-signal',
+    testFiles: [],
+  });
+  assert.equal(infrastructure.status, 'fail');
+  assert.match(infrastructure.output, /infrastructure/);
+
+  const declaredLocalCompileFailure = verifyRed(root, {
+    redMode: 'compile',
+    redVerify: 'node -e "console.error(\'Cannot find module ./src/greeting.js\'); process.exit(1)"',
+    redExpected: 'Cannot find module ./src/greeting.js',
+    testFiles: [],
+  });
+  assert.equal(declaredLocalCompileFailure.status, 'pass', 'an exact compile-mode missing local module can be the intended RED signal');
+});
+
+test('recoverActiveAttempt preserves the same attempt and exact phase', t => {
   const root = testRepo(t);
   const pairDir = path.join(root, '.pair');
   fs.mkdirSync(pairDir);
@@ -80,14 +245,16 @@ test('recoverActiveAttempt classifies an interrupted attempt before retry', t =>
     taskId: '1.1',
     routeId: 'codex-default-low',
     profile: { type: 'feature', risk: 'low' },
+    phase: 'reviewing',
   }));
 
   assert.equal(recoverActiveAttempt(paths), true);
-  assert.equal(fs.existsSync(paths.active), false);
+  assert.equal(fs.existsSync(paths.active), true);
   const record = JSON.parse(fs.readFileSync(paths.ledger, 'utf8').trim());
-  assert.equal(record.disposition, 'regenerated');
-  assert.equal(record.action, 'retry-infrastructure');
-  assert.equal(record.valid, false);
+  assert.equal(record.event, 'attempt.recovered');
+  assert.equal(record.attemptId, '1.1-interrupted');
+  assert.equal(record.phase, 'reviewing');
+  assert.equal(record.resume_target, 'reviewing');
 });
 
 test('parseWorkerResult flags shape failures, not just JSON-parse failures', () => {
@@ -111,6 +278,81 @@ test('parseWorkerResult flags shape failures, not just JSON-parse failures', () 
   assert.equal(notJson.parseError, true);
 });
 
+test('runReview uses generic read-only Codex exec so its custom review prompt can coexist with the schema', t => {
+  const root = testRepo(t);
+  const result = runReview({
+    runtime: 'codex',
+    route: { id: 'codex-default-medium', model: 'default' },
+    root,
+    task: { id: '2.1', text: 'review a change', risk: 'medium' },
+    planPath: '.pair/plan.md',
+    scratchDir: root,
+    attemptId: '2.1-review',
+    timeoutMs: 1,
+    dryRun: true,
+    externalSandbox: false,
+  });
+
+  assert.equal(result.command.file, 'codex');
+  assert.equal(result.command.args[0], 'exec');
+  assert.ok(!result.command.args.includes('review'));
+  assert.ok(!result.command.args.includes('--uncommitted'));
+  assert.ok(!result.command.args.includes('--ephemeral'));
+  assert.deepEqual(
+    result.command.args.slice(2, 6),
+    ['--sandbox', 'read-only', '-C', root],
+  );
+  assert.ok(result.command.args.includes('--output-schema'));
+  assert.match(result.command.args.at(-1), /Independently review the immutable complete changed-file patch/);
+  assert.match(result.command.args.at(-1), /complete changed-file patch.*additional files/i);
+  assert.match(result.command.args.at(-1), /origin.*plan/s);
+});
+
+test('runReview uses an external sandbox command for hosted Codex', t => {
+  const root = testRepo(t);
+  const result = runReview({
+    runtime: 'codex',
+    route: { id: 'codex-default-medium', model: 'default' },
+    root,
+    task: { id: '2.2', text: 'review hosted work', risk: 'medium' },
+    planPath: '.pair/plan.md',
+    scratchDir: root,
+    attemptId: '2.2-review',
+    timeoutMs: 1,
+    dryRun: true,
+    externalSandbox: true,
+    priorReview: {
+      findings: [{
+        severity: 'BLOCKER',
+        origin: 'implementation',
+        file: 'src/result.js',
+        line: 7,
+        title: 'Result drops required evidence',
+        detail: 'The returned result omits the evidence field.',
+        failure_scenario: 'A real caller cannot render evidence.',
+        suggestion: 'Preserve evidence in the result.',
+      }],
+    },
+  });
+
+  assert.ok(result.command.args.includes('--dangerously-bypass-approvals-and-sandbox'));
+  assert.ok(result.command.args.includes('--skip-git-repo-check'));
+  assert.equal(result.command.args.includes('--sandbox'), false);
+  assert.ok(result.command.args.includes('model_reasoning_effort="medium"'));
+  assert.match(result.command.args.at(-1), /Result drops required evidence/);
+  assert.match(result.command.args.at(-1), /closure review/i);
+  assert.match(result.command.args.at(-1), /at most 8 shell commands/i);
+});
+
+test('anchor reviews are opt-in instead of silently doubling successful review cost', () => {
+  const review = { verdict: 'approve', recommended_action: 'approve', findings: [] };
+  assert.equal(shouldRunAnchorReview('attempt-ff', { risk: 'high' }, review, {}), false);
+  assert.equal(
+    shouldRunAnchorReview('attempt-00', { risk: 'high' }, review, { PAIR_ANCHOR_REVIEW_RATE: '1' }),
+    true,
+  );
+});
+
 test('chooseRoute escalates after an unparseable result (retry-stronger) but holds after a spawn failure', () => {
   const task = { id: '6.1', type: 'test', complexity: 'S', risk: 'low', scope: 'local', uncertainty: 'low' };
   const priorRecord = action => ([{
@@ -129,6 +371,33 @@ test('chooseRoute escalates after an unparseable result (retry-stronger) but hol
 
   const held = chooseRoute(task, 'claude', priorRecord('retry-infrastructure'), {}, 'repo-A');
   assert.equal(held.id, 'claude-haiku-low', 'a transient spawn failure retries the same route');
+});
+
+test('chooseRoute scopes retry history to the current plan contract and skips interruptions', () => {
+  const task = { id: '6.1', type: 'feature', complexity: 'S', risk: 'low', scope: 'local', uncertainty: 'low' };
+  const ledger = [
+    {
+      event: 'attempt.completed', taskId: '6.1', repositoryId: 'repo-A', workId: 'work-A',
+      planDigest: 'old-plan', routeId: 'claude-opus-high', action: 'retry-stronger',
+      valid: true, status: 'completed',
+    },
+    {
+      event: 'attempt.completed', taskId: '6.1', repositoryId: 'repo-A', workId: 'work-A',
+      planDigest: 'current-plan', routeId: 'claude-sonnet-medium', action: 'retry-review',
+      valid: true, status: 'completed',
+    },
+    {
+      event: 'attempt.completed', taskId: '6.1', repositoryId: 'repo-A', workId: 'work-A',
+      planDigest: 'current-plan', routeId: 'claude-opus-high', action: 'retry-infrastructure',
+      valid: false, status: 'interrupted',
+    },
+  ];
+
+  assert.equal(
+    chooseRoute(task, 'claude', ledger, {}, 'repo-A', 'work-A', 'current-plan').id,
+    'claude-sonnet-medium',
+    'the pending same-route review retry survives an interruption and old plan history is ignored',
+  );
 });
 
 test('reconcileOrphanedAttempts closes stranded starts for this working root only', t => {
@@ -209,30 +478,279 @@ function gitIn(root, args) {
   return require('node:child_process').spawnSync('git', args, { cwd: root, encoding: 'utf8' });
 }
 
+test('verify warns but accepts an ordinary additional repository file outside expected files', t => {
+  const root = testRepo(t);
+  fs.writeFileSync(path.join(root, 'owned.js'), 'base\n');
+  fs.writeFileSync(path.join(root, 'outside.js'), 'base\n');
+  gitIn(root, ['add', 'owned.js', 'outside.js']);
+  gitIn(root, ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'base']);
+  const snapshot = snapshotWorktree(root);
+  fs.writeFileSync(path.join(root, 'outside.js'), 'changed\n');
+
+  const result = verify(root, {
+    files: ['owned.js'],
+    verify: 'node -e "process.exit(0)"',
+    testFiles: [],
+  }, { tests: [] }, snapshot);
+  assert.equal(result.status, 'pass');
+  assert.equal(result.ownership.status, 'warn');
+  assert.deepEqual(result.ownership.additional, ['outside.js']);
+  assert.match(result.ownership.output, /attribution warning.*outside\.js/i);
+});
+
+test('ownership exempts only Pair runtime markers, not worker changes under .pair', t => {
+  const root = testRepo(t);
+  fs.mkdirSync(path.join(root, '.pair'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.pair', 'plan.md'), 'approved plan\n');
+  gitIn(root, ['add', '.pair/plan.md']);
+  gitIn(root, ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'plan']);
+  const snapshot = snapshotWorktree(root);
+
+  fs.writeFileSync(path.join(root, '.pair', 'active-attempt.json'), '{}\n');
+  fs.writeFileSync(path.join(root, '.pair', 'active-loop.json'), '{}\n');
+  fs.writeFileSync(path.join(root, '.pair', 'plan.md'), 'worker-mutated plan\n');
+  const result = verify(root, {
+    files: [],
+    verify: 'node -e "process.exit(0)"',
+    testFiles: [],
+  }, { tests: [] }, snapshot);
+
+  assert.equal(result.status, 'fail');
+  assert.deepEqual(result.ownership.outside, ['.pair/plan.md']);
+});
+
+test('snapshot records whether tracked state required a synthetic commit', t => {
+  const root = testRepo(t);
+  fs.writeFileSync(path.join(root, 'a.txt'), 'base\n');
+  gitIn(root, ['add', 'a.txt']);
+  gitIn(root, ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'base']);
+  fs.writeFileSync(path.join(root, 'a.txt'), 'tracked change\n');
+
+  const snapshot = snapshotWorktree(root);
+
+  assert.deepEqual(snapshot.trackedDirtyPaths, ['a.txt']);
+  assert.match(snapshot.commit, /^[a-f0-9]{40,64}$/);
+});
+
+test('read-only Git metadata still snapshots, compares, and restores a dirty worktree', t => {
+  const root = testRepo(t);
+  const snapshotRoot = `${root}-snapshots`;
+  const gitDirectory = path.join(root, '.git');
+  t.after(() => fs.rmSync(snapshotRoot, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, '.pair'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.pair', 'plan-review.json'), '{"approval":"old"}\n');
+  fs.writeFileSync(path.join(root, 'src', 'owned.js'), 'base\n');
+  gitIn(root, ['add', '.pair/plan-review.json', 'src/owned.js']);
+  gitIn(root, ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'base']);
+  fs.writeFileSync(path.join(root, '.pair', 'plan-review.json'), '{"approval":"human-override"}\n');
+  const indexBefore = crypto.createHash('sha256')
+    .update(fs.readFileSync(path.join(gitDirectory, 'index')))
+    .digest('hex');
+
+  fs.chmodSync(gitDirectory, 0o555);
+  try {
+    const prohibited = gitIn(root, ['stash', 'create', 'permission-probe']);
+    assert.notEqual(prohibited.status, 0, 'the test must exercise a real Git metadata-write denial');
+    assert.match(prohibited.stderr, /index\.lock|operation not permitted|permission denied/i);
+
+    const snapshot = snapshotWorktree(root, snapshotRoot);
+    assert.equal(snapshot.strategy, 'worktree-copy');
+    assert.equal(snapshot.commit, null);
+
+    fs.writeFileSync(path.join(root, 'src', 'owned.js'), 'attempt change\n');
+    assert.deepEqual(changedPathsSinceSnapshot(root, snapshot), ['src/owned.js']);
+    const reviewPatch = path.join(snapshotRoot, 'review-slice.patch');
+    writeReviewSlicePatch(root, {
+      id: '1.1',
+      files: ['src/owned.js'],
+      acceptanceCriteria: ['AC-1'],
+    }, snapshot, reviewPatch);
+    assert.match(fs.readFileSync(reviewPatch, 'utf8'), /attempt change/);
+    assert.doesNotMatch(fs.readFileSync(reviewPatch, 'utf8'), /human-override/);
+
+    fs.writeFileSync(path.join(root, '.pair', 'plan-review.json'), '{"approval":"worker-mutated"}\n');
+    assert.deepEqual(changedPathsSinceSnapshot(root, snapshot), [
+      '.pair/plan-review.json',
+      'src/owned.js',
+    ]);
+
+    revertToSnapshot(root, snapshot, path.join(snapshotRoot, 'rejected.patch'));
+    assert.equal(
+      fs.readFileSync(path.join(root, '.pair', 'plan-review.json'), 'utf8'),
+      '{"approval":"human-override"}\n',
+    );
+    assert.equal(fs.readFileSync(path.join(root, 'src', 'owned.js'), 'utf8'), 'base\n');
+    assert.deepEqual(changedPathsSinceSnapshot(root, snapshot), []);
+    const indexAfter = crypto.createHash('sha256')
+      .update(fs.readFileSync(path.join(gitDirectory, 'index')))
+      .digest('hex');
+    assert.equal(indexAfter, indexBefore, 'snapshot and restore must not mutate the Git index');
+
+    fs.chmodSync(gitDirectory, 0o755);
+    fs.writeFileSync(path.join(root, 'src', 'owned.js'), 'staged outside Pair\n');
+    assert.equal(gitIn(root, ['add', 'src/owned.js']).status, 0);
+    assert.throws(
+      () => changedPathsSinceSnapshot(root, snapshot),
+      /Git index changed.*refusing/i,
+      'the metadata-free baseline must fail closed if another process changes the index',
+    );
+  } finally {
+    fs.chmodSync(gitDirectory, 0o755);
+  }
+});
+
+test('untracked-only dirty snapshot restores a rejected tracked deletion exactly', t => {
+  const root = testRepo(t);
+  const snapshotRoot = `${root}-snapshots`;
+  t.after(() => fs.rmSync(snapshotRoot, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, 'a.txt'), 'base\n');
+  gitIn(root, ['add', 'a.txt']);
+  gitIn(root, ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'base']);
+  fs.writeFileSync(path.join(root, 'preexisting.txt'), 'before\n');
+  const snapshot = snapshotWorktree(root, snapshotRoot);
+  assert.equal(snapshot.commit, null, 'untracked-only dirtiness needs no tracked snapshot commit');
+  assert.deepEqual(snapshot.trackedDirtyPaths, []);
+
+  fs.rmSync(path.join(root, 'a.txt'));
+  fs.writeFileSync(path.join(root, 'preexisting.txt'), 'damaged\n');
+  fs.writeFileSync(path.join(root, 'attempt-only.txt'), 'junk\n');
+  revertToSnapshot(root, snapshot, path.join(snapshotRoot, 'rejected.patch'));
+
+  assert.equal(fs.readFileSync(path.join(root, 'a.txt'), 'utf8'), 'base\n');
+  assert.equal(fs.readFileSync(path.join(root, 'preexisting.txt'), 'utf8'), 'before\n');
+  assert.equal(fs.existsSync(path.join(root, 'attempt-only.txt')), false);
+  assert.deepEqual(
+    changedPathsSinceSnapshot(root, snapshot).filter(file => !file.startsWith('.pair/')),
+    [],
+    'post-restore worktree must equal the captured pre-attempt state',
+  );
+});
+
+test('cumulative review patch includes accepted additional files beyond the plan forecast', t => {
+  const root = testRepo(t);
+  fs.writeFileSync(path.join(root, 'expected.js'), 'before expected\n');
+  fs.writeFileSync(path.join(root, 'additional.js'), 'before additional\n');
+  gitIn(root, ['add', 'expected.js', 'additional.js']);
+  gitIn(root, ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'base']);
+  const base = gitIn(root, ['rev-parse', 'HEAD']).stdout.trim();
+  fs.writeFileSync(path.join(root, 'expected.js'), 'after expected\n');
+  fs.writeFileSync(path.join(root, 'additional.js'), 'after additional\n');
+  const output = path.join(root, 'cumulative.patch');
+  const plan = [
+    '## Streams',
+    '### Stream 1: cumulative - complexity: S',
+    '**Depends on:** none',
+    '- [x] Task 1.1 - finish behavior [type:feature] [risk:high] [scope:contract] [uncertainty:low] [ac:AC-1] - files: `expected.js` - verify: `node --test` - **S**',
+    '',
+  ].join('\n');
+  const ledger = [
+    { event: 'attempt.started', repositoryId: 'repo', workId: 'work', snapshotCommit: base },
+    {
+      event: 'attempt.completed', repositoryId: 'repo', workId: 'work', disposition: 'accepted',
+      verification: { ownership: { changed: ['expected.js', 'additional.js'] } },
+    },
+  ];
+
+  const result = writeCumulativeReviewPatch(
+    root,
+    plan,
+    ledger,
+    { workId: 'work', planDigest: 'digest' },
+    'repo',
+    output,
+  );
+
+  const patch = fs.readFileSync(output, 'utf8');
+  assert.deepEqual(result.files, ['additional.js', 'expected.js']);
+  assert.deepEqual(result.additional, ['additional.js']);
+  assert.match(patch, /after expected/);
+  assert.match(patch, /after additional/);
+  assert.match(patch, /Additional changed files \(advisory attribution\): additional\.js/);
+});
+
+test('revert fails closed when Git cannot restore the tracked snapshot', t => {
+  const root = testRepo(t);
+  fs.writeFileSync(path.join(root, 'a.txt'), 'attempt change\n');
+
+  assert.throws(
+    () => revertToSnapshot(root, {
+      commit: '0000000000000000000000000000000000000000',
+      dirty: true,
+      trackedDirtyPaths: ['a.txt'],
+      untracked: [],
+      untrackedHashes: {},
+      untrackedCopies: {},
+    }, path.join(root, 'rejected.patch')),
+    /restoration invariant|could not restore/i,
+  );
+});
+
+test('verify preserves phase separation by rejecting test changes during GREEN', t => {
+  const root = testRepo(t);
+  fs.writeFileSync(path.join(root, 'behavior.test.js'), 'base test\n');
+  fs.writeFileSync(path.join(root, 'behavior.js'), 'base implementation\n');
+  gitIn(root, ['add', 'behavior.test.js', 'behavior.js']);
+  gitIn(root, ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'base']);
+  const sliceSnapshot = snapshotWorktree(root);
+  fs.writeFileSync(path.join(root, 'behavior.test.js'), 'verified RED test\n');
+  const greenSnapshot = snapshotWorktree(root);
+  fs.writeFileSync(path.join(root, 'behavior.test.js'), 'weakened during GREEN\n');
+  fs.writeFileSync(path.join(root, 'behavior.js'), 'implementation\n');
+
+  const result = verify(root, {
+    files: ['behavior.test.js', 'behavior.js'],
+    testFiles: ['behavior.test.js'],
+    verify: 'node -e "process.exit(0)"',
+  }, { tests: [] }, sliceSnapshot, greenSnapshot);
+  assert.equal(result.status, 'fail');
+  assert.match(result.output, /GREEN phase modified RED-verified tests/);
+});
+
 test('revert-to-snapshot drops the failed attempt but preserves earlier uncommitted work and .pair', t => {
   const root = testRepo(t);
+  const snapshotRoot = `${root}-snapshots`;
+  t.after(() => fs.rmSync(snapshotRoot, { recursive: true, force: true }));
   fs.writeFileSync(path.join(root, 'a.txt'), 'v1\n');
   gitIn(root, ['add', 'a.txt']);
   gitIn(root, ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'base']);
   // Earlier accepted-but-uncommitted work from previous tasks (the loop never commits).
   fs.writeFileSync(path.join(root, 'a.txt'), 'accepted work\n');
   fs.writeFileSync(path.join(root, 'earlier.txt'), 'earlier accepted new file\n');
+  fs.mkdirSync(path.join(root, '.pair'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.pair', 'plan.md'), 'approved plan\n');
 
-  const snapshot = snapshotWorktree(root);
+  const snapshot = snapshotWorktree(root, snapshotRoot);
 
   // The failed attempt mangles tracked work and adds a file; the loop writes review evidence.
   fs.writeFileSync(path.join(root, 'a.txt'), 'bad rewrite\n');
+  fs.writeFileSync(path.join(root, 'earlier.txt'), 'bad untracked rewrite\n');
   fs.writeFileSync(path.join(root, 'bad.txt'), 'junk\n');
-  fs.mkdirSync(path.join(root, '.pair'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.pair', 'plan.md'), 'worker-mutated plan\n');
+  fs.writeFileSync(path.join(root, '.pair', 'worker-junk.txt'), 'worker junk\n');
   fs.writeFileSync(path.join(root, '.pair', 'review.json'), '{"verdict":"fix-needed"}\n');
+
+  const reviewPatch = path.join(snapshotRoot, 'review-slice.patch');
+  writeReviewSlicePatch(root, {
+    id: '1.2',
+    files: ['earlier.txt'],
+    acceptanceCriteria: ['AC-1'],
+  }, snapshot, reviewPatch);
+  const reviewPatchText = fs.readFileSync(reviewPatch, 'utf8');
+  assert.match(reviewPatchText, /bad untracked rewrite/, 'review patch includes modified pre-existing untracked files');
+  assert.match(reviewPatchText, /bad rewrite/, 'review patch includes ordinary changes outside the expected-file forecast');
+  assert.match(reviewPatchText, /junk/, 'review patch includes newly-created additional files');
+  assert.match(reviewPatchText, /Additional changed files \(advisory attribution\): .*a\.txt.*bad\.txt/);
 
   const patch = path.join(root, 'rejected.patch');
   revertToSnapshot(root, snapshot, patch);
 
   assert.equal(fs.readFileSync(path.join(root, 'a.txt'), 'utf8'), 'accepted work\n', 'earlier uncommitted work survives');
-  assert.equal(fs.existsSync(path.join(root, 'earlier.txt')), true, 'pre-attempt untracked file survives');
+  assert.equal(fs.readFileSync(path.join(root, 'earlier.txt'), 'utf8'), 'earlier accepted new file\n', 'pre-attempt untracked bytes are restored');
   assert.equal(fs.existsSync(path.join(root, 'bad.txt')), false, 'attempt-introduced file is removed');
   assert.equal(fs.existsSync(path.join(root, '.pair', 'review.json')), true, 'review evidence survives the revert');
+  assert.equal(fs.readFileSync(path.join(root, '.pair', 'plan.md'), 'utf8'), 'approved plan\n', 'worker plan edits are restored');
+  assert.equal(fs.existsSync(path.join(root, '.pair', 'worker-junk.txt')), false, 'worker-created .pair files are removed');
   assert.match(fs.readFileSync(patch, 'utf8'), /bad rewrite/, 'rejected work is preserved as a patch');
 });
 
@@ -301,7 +819,7 @@ test('readWorkLinkage resolves the canonical Work envelope and rejects mirror ta
     path: '.pair/plan.md',
     sha256: approvedPlanDigest,
     status: 'validated',
-    independent_review: 'no-blockers',
+    independent_review: `no-blockers:${approvedPlanDigest}:codex/default`,
   };
   fs.writeFileSync(workFile, `${JSON.stringify(work, null, 2)}\n`);
 
@@ -312,6 +830,19 @@ test('readWorkLinkage resolves the canonical Work envelope and rejects mirror ta
     planStateDigest: crypto.createHash('sha256').update(plan).digest('hex'),
     decisionRecordIds: ['DR-001-pair-linkage'],
   });
+
+  work.plan.independent_review = `human-override:${approvedPlanDigest}:user:${'a'.repeat(12)}`;
+  fs.writeFileSync(workFile, `${JSON.stringify(work, null, 2)}\n`);
+  assert.doesNotThrow(() => readWorkLinkage(root, plan));
+
+  work.plan.independent_review = `human-override:${approvedPlanDigest}:unverified`;
+  fs.writeFileSync(workFile, `${JSON.stringify(work, null, 2)}\n`);
+  assert.throws(
+    () => readWorkLinkage(root, plan),
+    /independent challenge|explicit human override/i,
+  );
+  work.plan.independent_review = `no-blockers:${approvedPlanDigest}:codex/default`;
+  fs.writeFileSync(workFile, `${JSON.stringify(work, null, 2)}\n`);
 
   assert.throws(
     () => readWorkLinkage(root, `${plan}mapping changed\n`),

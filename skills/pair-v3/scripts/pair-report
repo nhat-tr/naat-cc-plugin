@@ -1,37 +1,58 @@
 #!/usr/bin/env node
 
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
+const childProcess = require('node:child_process');
+const { pairStatePaths } = require('./lib/pair-state');
 
-const dataDir = process.env.PAIR_DATA_DIR || path.join(os.homedir(), '.local', 'share', 'pair-v3');
+function repositoryRoot() {
+  const result = childProcess.spawnSync('git', ['rev-parse', '--show-toplevel'], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+  });
+  return result.status === 0 ? result.stdout.trim() : process.cwd();
+}
+
+const reportRoot = repositoryRoot();
+const defaultLedger = pairStatePaths(reportRoot).events;
 const args = process.argv.slice(2);
 if (args.includes('--help') || args.includes('-h')) {
   console.log([
     'Usage: pair-report [LEDGER_PATH] [--json]',
     '',
-    'Summarize the pair-v3 attempt ledger by route/type/risk.',
-    `Default ledger: ${path.join(dataDir, 'attempts.jsonl')} (override with PAIR_DATA_DIR or a LEDGER_PATH argument).`,
-    'Columns: attempts, quality (accepted/valid), dispositions, findings (BLOCKER/MAJOR), tokens, cost.',
+    'Summarize the Pair v4 repository event history by route/type/risk.',
+    `Default event store: ${defaultLedger} (pass a LEDGER_PATH only to inspect legacy history).`,
+    'Columns: attempts, quality, findings, all model-role tokens (input/cached/output/reasoning), elapsed time, cost.',
     'Interrupted attempts (crashes/kills reconciled on the next run) are reported separately from real tries.',
   ].join('\n'));
   process.exit(0);
 }
 // A flag must never be mistaken for the ledger path; only a non-flag argument selects it.
 const asJson = args.includes('--json');
-const ledger = args.find(arg => !arg.startsWith('-')) || path.join(dataDir, 'attempts.jsonl');
+const ledger = args.find(arg => !arg.startsWith('-')) || defaultLedger;
 if (!fs.existsSync(ledger)) {
   console.log('pair-report: no attempts recorded');
   process.exit(0);
 }
 
-const attempts = fs.readFileSync(ledger, 'utf8')
+const records = fs.readFileSync(ledger, 'utf8')
   .split(/\r?\n/)
   .filter(Boolean)
   .map(line => {
     try { return JSON.parse(line); } catch { return null; }
   })
-  .filter(record => record?.event === 'attempt.completed');
+  .filter(Boolean);
+
+const terminalByAttempt = new Map();
+for (const record of records) {
+  if (!['attempt.completed', 'attempt.outcome'].includes(record.event)) continue;
+  if (!record.attemptId || record.terminal === false) continue;
+  terminalByAttempt.set(record.attemptId, {
+    ...record,
+    event: 'attempt.completed',
+  });
+}
+const attempts = [...terminalByAttempt.values()];
 
 const groups = new Map();
 for (const attempt of attempts) {
@@ -55,7 +76,10 @@ for (const attempt of attempts) {
     blockers: 0,
     majors: 0,
     inputTokens: 0,
+    cachedInputTokens: 0,
     outputTokens: 0,
+    reasoningTokens: 0,
+    elapsedMs: 0,
     costUsd: 0,
     measuredCosts: 0,
   };
@@ -73,14 +97,123 @@ for (const attempt of attempts) {
   group.reviewerMisses += attempt.reviewCalibration?.missedFindings || 0;
   group.blockers += (attempt.review?.findings || []).filter(finding => finding.severity === 'BLOCKER').length;
   group.majors += (attempt.review?.findings || []).filter(finding => finding.severity === 'MAJOR').length;
-  for (const usage of [attempt.usage?.worker, attempt.usage?.reviewer]) {
+  for (const usage of [
+    attempt.usage?.worker,
+    attempt.usage?.redWorker,
+    attempt.usage?.reviewer,
+    attempt.usage?.anchorReviewer,
+  ]) {
     group.inputTokens += usage?.inputTokens || 0;
+    group.cachedInputTokens += usage?.cachedInputTokens || 0;
     group.outputTokens += usage?.outputTokens || 0;
+    group.reasoningTokens += usage?.reasoningTokens || 0;
   }
+  group.elapsedMs += attempt.elapsedMs || 0;
   if (Number.isFinite(attempt.totalCost)) {
     group.costUsd += attempt.totalCost;
     group.measuredCosts++;
   }
+  groups.set(key, group);
+}
+
+const standaloneModelEvents = records.flatMap(record => {
+  if (record.event === 'plan-review.completed') {
+    return [{ record, role: 'plan-review', identity: record.reviewer || 'unknown', type: 'plan', risk: 'plan' }];
+  }
+  if (record.event === 'final-review.completed') {
+    return [{ record, role: 'final-review', identity: record.reviewer || 'unknown', type: 'final', risk: 'work' }];
+  }
+  if (record.event === 'test-proposal.generated') {
+    return [{ record, role: 'test-proposal', identity: record.routeId || 'unknown', type: 'proposal', risk: 'task' }];
+  }
+  return [];
+});
+
+for (const event of standaloneModelEvents) {
+  const review = event.record;
+  const key = `${event.role}:${event.identity}`;
+  const group = groups.get(key) || {
+    route: key,
+    type: event.type,
+    risk: event.risk,
+    attempts: 0,
+    interrupted: 0,
+    valid: 0,
+    accepted: 0,
+    localFix: 0,
+    escalated: 0,
+    rewrites: 0,
+    redesigns: 0,
+    regenerations: 0,
+    humanTakeovers: 0,
+    anchorSamples: 0,
+    reviewerMisses: 0,
+    blockers: 0,
+    majors: 0,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    elapsedMs: 0,
+    costUsd: 0,
+    measuredCosts: 0,
+  };
+  group.attempts++;
+  if (review.classification === 'approved' || event.role === 'test-proposal') {
+    group.valid++;
+    group.accepted++;
+  }
+  group.inputTokens += review.usage?.inputTokens || 0;
+  group.cachedInputTokens += review.usage?.cachedInputTokens || 0;
+  group.outputTokens += review.usage?.outputTokens || 0;
+  group.reasoningTokens += review.usage?.reasoningTokens || 0;
+  group.elapsedMs += review.elapsedMs || 0;
+  groups.set(key, group);
+}
+
+for (const usage of records.filter(record => record.event === 'usage.recorded' && record.resumed === true)) {
+  const key = `resume:${usage.runtime || 'unknown'}/${usage.role || 'unknown'}/${usage.phase || 'unknown'}`;
+  const group = groups.get(key) || {
+    route: key,
+    type: 'resume',
+    risk: 'nonblocking',
+    attempts: 0,
+    interrupted: 0,
+    valid: 0,
+    accepted: 0,
+    localFix: 0,
+    escalated: 0,
+    rewrites: 0,
+    redesigns: 0,
+    regenerations: 0,
+    humanTakeovers: 0,
+    anchorSamples: 0,
+    reviewerMisses: 0,
+    blockers: 0,
+    majors: 0,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    uncachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    checkpointBytes: 0,
+    cacheHitRatio: null,
+    efficiencyWarnings: 0,
+    elapsedMs: 0,
+    costUsd: 0,
+    measuredCosts: 0,
+  };
+  group.attempts++;
+  group.inputTokens += usage.input_tokens || 0;
+  group.cachedInputTokens += usage.cached_input_tokens || 0;
+  group.uncachedInputTokens += usage.uncached_input_tokens || 0;
+  group.outputTokens += usage.output_tokens || 0;
+  group.reasoningTokens += usage.reasoning_tokens || 0;
+  group.checkpointBytes += usage.checkpoint_bytes || 0;
+  group.efficiencyWarnings += usage.efficiency_warning ? 1 : 0;
+  group.cacheHitRatio = group.inputTokens > 0
+    ? group.cachedInputTokens / group.inputTokens
+    : null;
   groups.set(key, group);
 }
 
@@ -89,7 +222,14 @@ if (asJson) {
   process.exit(0);
 }
 
-console.log('route                         type       risk      tries quality clean local rewrite findings(B/M) anchor(miss/sample) tokens(in/out) cost');
+function elapsed(value) {
+  if (!(value > 0)) return '-';
+  if (value < 1000) return `${value}ms`;
+  if (value < 60_000) return `${(value / 1000).toFixed(1)}s`;
+  return `${(value / 60_000).toFixed(1)}m`;
+}
+
+console.log('route                         type       risk      tries quality clean local rewrite findings(B/M) tokens(in/cache/out/reason) elapsed cost');
 for (const group of [...groups.values()].sort((a, b) => a.route.localeCompare(b.route))) {
   const cost = group.measuredCosts > 0 ? `$${group.costUsd.toFixed(3)}` : '-';
   const quality = group.valid > 0 ? `${Math.round((group.accepted / group.valid) * 100)}%` : '-';
@@ -103,8 +243,8 @@ for (const group of [...groups.values()].sort((a, b) => a.route.localeCompare(b.
     String(group.localFix).padStart(5),
     String(group.rewrites).padStart(7),
     `${group.blockers}/${group.majors}`.padStart(13),
-    `${group.reviewerMisses}/${group.anchorSamples}`.padStart(19),
-    `${group.inputTokens}/${group.outputTokens}`.padStart(14),
+    `${group.inputTokens}/${group.cachedInputTokens}/${group.outputTokens}/${group.reasoningTokens}`.padStart(27),
+    elapsed(group.elapsedMs).padStart(8),
     cost.padStart(7),
   ].join(' '));
 }

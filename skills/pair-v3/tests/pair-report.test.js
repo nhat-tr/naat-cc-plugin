@@ -14,8 +14,12 @@ function scratchDir(t) {
   return dir;
 }
 
-function run(args, env = {}) {
-  return spawnSync(process.execPath, [REPORT, ...args], { encoding: 'utf8', env: { ...process.env, ...env } });
+function run(args, env = {}, cwd = undefined) {
+  return spawnSync(process.execPath, [REPORT, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: { ...process.env, ...env },
+  });
 }
 
 function writeLedger(dir) {
@@ -36,10 +40,13 @@ test('pair-report --help prints usage instead of reading a file named --help', t
   assert.doesNotMatch(result.stdout, /no attempts recorded/);
 });
 
-test('pair-report --json reports the ledger and never mistakes the flag for a path', t => {
-  const dir = scratchDir(t);
-  writeLedger(dir);
-  const result = run(['--json'], { PAIR_DATA_DIR: dir });
+test('pair-report defaults to the repository-local Pair v4 event store', t => {
+  const root = scratchDir(t);
+  const pairDirectory = path.join(root, '.pair');
+  fs.mkdirSync(pairDirectory);
+  const legacy = writeLedger(pairDirectory);
+  fs.renameSync(legacy, path.join(pairDirectory, 'events.jsonl'));
+  const result = run(['--json'], { PAIR_DATA_DIR: path.join(root, 'ignored-external-data') }, root);
   assert.equal(result.status, 0);
   assert.doesNotMatch(result.stdout, /no attempts recorded/);
   const groups = JSON.parse(result.stdout);
@@ -56,4 +63,74 @@ test('pair-report accepts an explicit ledger path positional argument', t => {
   assert.equal(result.status, 0);
   const groups = JSON.parse(result.stdout);
   assert.equal(groups[0].attempts, 2);
+});
+
+test('pair-report accounts for every model role and plan-review usage', t => {
+  const dir = scratchDir(t);
+  const ledger = path.join(dir, 'all-usage.jsonl');
+  const usage = (inputTokens, cachedInputTokens, outputTokens, reasoningTokens) => ({
+    inputTokens, cachedInputTokens, outputTokens, reasoningTokens, costUsd: null,
+  });
+  fs.writeFileSync(ledger, [
+    {
+      event: 'attempt.completed', attemptId: 'all', taskId: '1.1', routeId: 'codex-default',
+      profile: { type: 'feature', risk: 'high' }, disposition: 'accepted', valid: true,
+      status: 'completed', usage: {
+        worker: usage(10, 2, 3, 4),
+        redWorker: usage(20, 5, 6, 7),
+        reviewer: usage(30, 8, 9, 10),
+        anchorReviewer: usage(40, 11, 12, 13),
+      },
+    },
+    {
+      event: 'plan-review.completed', reviewer: 'codex/default', classification: 'approved',
+      usage: usage(50, 14, 15, 16), elapsedMs: 1234,
+    },
+    {
+      event: 'final-review.completed', reviewer: 'codex/default', classification: 'approved',
+      usage: usage(60, 17, 18, 19), elapsedMs: 2345,
+    },
+    {
+      event: 'test-proposal.generated', routeId: 'codex-default', taskId: '1.1',
+      usage: usage(70, 20, 21, 22), elapsedMs: 3456,
+    },
+  ].map(row => JSON.stringify(row)).join('\n'));
+
+  const result = run([ledger, '--json']);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const groups = JSON.parse(result.stdout);
+  const task = groups.find(group => group.route === 'codex-default');
+  assert.equal(task.inputTokens, 100);
+  assert.equal(task.cachedInputTokens, 26);
+  assert.equal(task.outputTokens, 30);
+  assert.equal(task.reasoningTokens, 34);
+  const plan = groups.find(group => group.route === 'plan-review:codex/default');
+  assert.equal(plan.inputTokens, 50);
+  assert.equal(plan.elapsedMs, 1234);
+  const final = groups.find(group => group.route === 'final-review:codex/default');
+  assert.equal(final.reasoningTokens, 19);
+  assert.equal(final.elapsedMs, 2345);
+  const proposal = groups.find(group => group.route === 'test-proposal:codex-default');
+  assert.equal(proposal.cachedInputTokens, 20);
+  assert.equal(proposal.elapsedMs, 3456);
+});
+
+test('pair-report shows resumed-turn cache telemetry without treating it as a quality gate', t => {
+  const dir = scratchDir(t);
+  const ledger = path.join(dir, 'resume-usage.jsonl');
+  fs.writeFileSync(ledger, `${JSON.stringify({
+    event: 'usage.recorded', runtime: 'codex', role: 'reviewer', phase: 'reviewing', resumed: true,
+    checkpoint_bytes: 700, input_tokens: 400, cached_input_tokens: 250,
+    uncached_input_tokens: 150, cache_hit_ratio: 0.625, output_tokens: 30,
+    reasoning_tokens: 10, telemetry: 'observed', efficiency_warning: true,
+  })}\n`);
+
+  const result = run([ledger, '--json']);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const resume = JSON.parse(result.stdout).find(group => group.route === 'resume:codex/reviewer/reviewing');
+  assert.equal(resume.checkpointBytes, 700);
+  assert.equal(resume.uncachedInputTokens, 150);
+  assert.equal(resume.cacheHitRatio, 0.625);
+  assert.equal(resume.efficiencyWarnings, 1);
+  assert.equal(resume.accepted, 0, 'token efficiency is not a correctness verdict');
 });

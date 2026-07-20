@@ -6,6 +6,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { parsePlan, planContractDigest, validatePlan } = require('./lib/pair-core');
+const {
+  appendPairEvent,
+  pairStatePaths,
+  readPairEvents,
+} = require('./lib/pair-state');
 
 const WORK_ID_PATTERN = /^work-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ACCEPTANCE_CRITERION_PATTERN = /^AC-[1-9][0-9]*$/;
@@ -916,13 +921,6 @@ function reconcilePatchSetManifest(patchSet, manifest) {
   }
 }
 
-function ledgerRecords(file) {
-  if (!fs.existsSync(file)) return [];
-  return fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).map((line, index) => {
-    try { return JSON.parse(line); } catch { throw new TypeError(`ledger line ${index + 1} is invalid JSON`); }
-  });
-}
-
 function persistAttemptReviewEvidence(input) {
   assertObject(input, 'persistence input');
   rejectUnknown(input, [
@@ -932,8 +930,14 @@ function persistAttemptReviewEvidence(input) {
   const repositoryRoot = realDirectory(input.repositoryRoot, 'repositoryRoot');
   assertObject(input.attempt, 'attempt');
   const attemptId = patternedText(input.attempt.attemptId, 'attempt.attemptId', STABLE_ID_PATTERN);
-  const evidenceParent = resolveInside(repositoryRoot, '.pair', 'review-evidence');
-  const evidenceDirectory = resolveInside(evidenceParent, attemptId);
+  const attemptWorkId = patternedText(input.attempt.workId, 'attempt.workId', WORK_ID_PATTERN);
+  const statePaths = pairStatePaths(repositoryRoot, attemptWorkId);
+  const evidenceParent = resolveInside(
+    repositoryRoot,
+    path.relative(repositoryRoot, statePaths.attempts),
+  );
+  const attemptDirectory = resolveInside(evidenceParent, attemptId);
+  const evidenceDirectory = resolveInside(attemptDirectory, 'review-evidence');
   const existingEvidence = lstatIfPresent(evidenceDirectory);
 
   let patchSet;
@@ -1016,7 +1020,7 @@ function persistAttemptReviewEvidence(input) {
   }
 
   fs.mkdirSync(evidenceParent, { recursive: true, mode: 0o700 });
-  resolveInside(repositoryRoot, '.pair', 'review-evidence');
+  fs.mkdirSync(attemptDirectory, { recursive: true, mode: 0o700 });
   if (!existingEvidence) fs.mkdirSync(evidenceDirectory, { mode: 0o700 });
   else if (!existingEvidence.isDirectory() || existingEvidence.isSymbolicLink()) {
     throw new Error(`immutable review evidence already exists for ${attemptId}`);
@@ -1028,8 +1032,7 @@ function persistAttemptReviewEvidence(input) {
   writeImmutable(manifestPath, `${JSON.stringify({ digest: manifest.digest, manifest: manifest.manifest }, null, 2)}\n`);
   writeImmutable(reviewPath, `${JSON.stringify(review, null, 2)}\n`);
 
-  const dataDirectory = realDirectory(input.dataDirectory, 'dataDirectory', true);
-  const ledgerPath = resolveInside(dataDirectory, 'attempts.jsonl');
+  const ledgerPath = statePaths.events;
   const ledgerRecord = {
     event: 'attempt.review-evidence.persisted',
     attemptId,
@@ -1039,15 +1042,24 @@ function persistAttemptReviewEvidence(input) {
     disposition: requiredText(input.disposition, 'disposition', 100),
     cause: requiredText(input.cause, 'cause', 200),
   };
-  const prior = ledgerRecords(ledgerPath).filter(record => (
+  const prior = readPairEvents(repositoryRoot, patchSet.work_id).filter(record => (
     record.event === ledgerRecord.event && record.attemptId === attemptId
   ));
+  const eventContract = record => ({
+    event: record.event,
+    attemptId: record.attemptId,
+    workId: record.workId,
+    patchSetId: record.patchSetId,
+    manifestDigest: record.manifestDigest,
+    disposition: record.disposition,
+    cause: record.cause,
+  });
   if (prior.length > 0) {
-    if (prior.length !== 1 || canonicalBytes(prior[0]) !== canonicalBytes(ledgerRecord)) {
+    if (prior.length !== 1 || canonicalBytes(eventContract(prior[0])) !== canonicalBytes(ledgerRecord)) {
       throw new Error(`immutable review evidence ledger entry already exists for ${attemptId}`);
     }
   } else {
-    fs.appendFileSync(ledgerPath, `${JSON.stringify(ledgerRecord)}\n`, { mode: 0o600 });
+    appendPairEvent(repositoryRoot, ledgerRecord);
   }
 
   return deepFreeze({

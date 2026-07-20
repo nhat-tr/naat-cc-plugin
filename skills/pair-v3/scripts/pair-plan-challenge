@@ -1,0 +1,1057 @@
+#!/usr/bin/env node
+
+const childProcess = require("node:child_process");
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+const {
+  parsePlan,
+  parseRuntimeUsage,
+  planContractDigest,
+  validatePlan,
+} = require("./lib/pair-core");
+const {
+  createReviewSnapshot,
+  repositoryDigest,
+  treeDigest,
+} = require("./lib/review-snapshot");
+const { bindAttemptLedger, runtimeEnv } = require("./pair-task");
+const {
+  isNestedCodexSandbox,
+  resolveRuntimeCandidates,
+} = require("./lib/runtime-selection");
+const {
+  appendPairEvent,
+  readPairEvents,
+  redactString,
+  sanitizeText,
+  sanitizeValue,
+} = require("./lib/pair-state");
+const {
+  buildReviewRuntimeCommand,
+  readReviewSession,
+  saveReviewSession,
+} = require("./lib/review-session");
+const {
+  createResumeCheckpoint,
+  recordResumedTurn,
+  serializeResumeCheckpoint,
+} = require("./lib/resume-checkpoint");
+const { runObservableCommandSync } = require("./lib/observable-command");
+const {
+  validateWorkDirectory,
+} = require("../../brainstorming/scripts/work-lineage.cjs");
+
+const SCHEMA_PATH = path.join(
+  __dirname,
+  "..",
+  "schemas",
+  "plan-review-result.json",
+);
+
+function fail(message) {
+  throw new Error(message);
+}
+
+function parseArgs(argv) {
+  const options = {
+    runtime: process.env.PAIR_RUNTIME || "auto",
+    model: null,
+    effort: "medium",
+    dryRun: false,
+    allowCrossRuntimeFallback:
+      process.env.PAIR_ALLOW_CROSS_RUNTIME_FALLBACK === "1",
+    approvePlan: null,
+    reason: null,
+    maxPlanReviews: process.env.PAIR_MAX_PLAN_REVIEWS
+      ? Number(process.env.PAIR_MAX_PLAN_REVIEWS)
+      : null,
+  };
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (arg === "--runtime") options.runtime = argv[++index];
+    else if (arg === "--model") options.model = argv[++index];
+    else if (arg === "--effort") options.effort = argv[++index];
+    else if (arg === "--allow-cross-runtime-fallback")
+      options.allowCrossRuntimeFallback = true;
+    else if (arg === "--dry-run") options.dryRun = true;
+    else if (arg === "--approve-plan") options.approvePlan = argv[++index];
+    else if (arg === "--reason") options.reason = argv[++index];
+    else if (arg === "--max-plan-reviews")
+      options.maxPlanReviews = Number(argv[++index]);
+    else if (arg === "--help") options.help = true;
+    else fail(`unknown option ${arg}`);
+  }
+  return options;
+}
+
+function gitRoot() {
+  const result = childProcess.spawnSync(
+    "git",
+    ["rev-parse", "--show-toplevel"],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) fail("not in a git repository");
+  return result.stdout.trim();
+}
+
+function readJson(file) {
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+function readJsonFromString(raw) {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function readJsonIfPresent(file) {
+  try {
+    return readJson(file);
+  } catch {
+    return null;
+  }
+}
+
+function resolveCanonicalWork(root) {
+  const mirrorFile = path.join(root, ".pair", "spec.md");
+  if (!fs.existsSync(mirrorFile)) {
+    fail(".pair/spec.md is missing; promote from a canonical Work specification");
+  }
+  const mirror = fs.readFileSync(mirrorFile, "utf8");
+  const canonicalPath = mirror.match(/^Canonical: (.+)$/m)?.[1];
+  if (!canonicalPath) fail(".pair/spec.md is not a canonical Work mirror");
+  const canonicalFile = path.resolve(root, canonicalPath);
+  if (!canonicalFile.startsWith(`${path.resolve(root)}${path.sep}`)) {
+    fail("canonical spec path escapes the repository root");
+  }
+  const workDirectory = path.dirname(canonicalFile);
+  const work = validateWorkDirectory(workDirectory);
+  if (canonicalPath !== work.spec.path) {
+    fail("active Pair mirror does not identify the canonical Work spec");
+  }
+  return {
+    work,
+    workDirectory,
+    workFile: path.join(workDirectory, "work.json"),
+  };
+}
+
+function planReviewPrompt({ planPath, specPath, digest, priorReview = null }) {
+  const priorFindings = Array.isArray(priorReview?.findings)
+    ? priorReview.findings.filter((finding) => finding?.origin === "plan")
+    : [];
+  const sameDigest = priorReview?.plan_digest === digest;
+  const reviewMode = priorFindings.length > 0
+    ? sameDigest
+      ? `This is a closure review of the unchanged plan digest after the reviewer contract or environment was corrected. The independent prior reviewer reported these material findings for digest ${digest}:\n${JSON.stringify(priorFindings, null, 2)}\n\nVerify every prior finding against the parent-provided contract evidence first. Then inspect only the directly affected contracts needed to decide whether any genuine plan defect remains. Do not restart an open-ended repository audit or reopen unrelated areas.`
+      : `This is a closure review of a revised plan. The independent prior reviewer rejected digest ${priorReview.plan_digest || "unknown"} with these material findings:\n${JSON.stringify(priorFindings, null, 2)}\n\nVerify every prior finding against the new digest first. Then inspect only the changed or directly affected contracts needed to catch regressions introduced by those fixes. Do not restart an open-ended repository audit or reopen unchanged, previously reviewed areas without concrete new evidence.`
+    : "This is the first review of this plan lineage. Perform one complete evidence sweep across every review ground below.";
+  return `You are the independent challenge gate for a Pair implementation plan. You did not write the plan. Read-only review; never edit files.
+
+Plan: ${planPath}
+Canonical specification: ${specPath}
+Plan contract SHA-256: ${digest}
+
+This value is Pair's progress-stable contract digest, not the raw file SHA-256. Pair computes it from ".pair/plan.md" after normalizing executable Task/Acceptance-Criteria checkbox state to unchecked and removing Pair-v3 recovery-context lines. The parent process verifies this contract digest before and after review and rejects source or snapshot mutation. A disposable snapshot also contains parent-generated ".pair/plan-contract.json" with both the contract digest and raw plan SHA-256. Never report a digest mismatch from a raw "sha256sum"/"shasum" comparison, and never treat stale ".pair/plan-review.*" runtime evidence as approval for the current digest.
+
+${reviewMode}
+
+Read the plan and spec first, then the applicable AGENTS.md and only the repository files, callers, tests, manifests, and pinned APIs needed to verify its claims. Challenge the exact current digest on these grounds:
+
+- Intent: every slice serves mapped Acceptance Criteria, respects the canonical specification's constraints, and adds no speculative scope.
+- Scope: one cohesive repository deliverable; every owned path is repository-relative; independent subsystems or repositories are separate Work plans.
+- Grounding: the Intent Contract's repository evidence and every named file, symbol, caller, dependency, and framework capability actually exist and support the work. For a legacy strict plan, also validate its Capability Evidence and interface contracts.
+- Slice size and sequence: each task is the smallest useful behavior slice within its S/M/L budget; setup and wiring are folded into the behavior that needs them; no hidden or forward dependency exists.
+- Tests: Pair v4 keeps one tests-first visible coordinator session per slice. Its declared test files and exact verification must prove the behavior without a separate RED/GREEN mini-epic, and at least one integration or e2e boundary must prove the Acceptance Criteria. For a legacy strict plan, validate its explicit RED contract instead.
+- Simplicity: repository evidence supports the direct framework-native solution; no pass-through wrapper, one-adapter seam, speculative factory/registry, or structure-mirroring test is planned.
+
+Budget the investigation to at most 8 shell commands, at most 250 output lines per command, and at most 1,500 evidence lines overall. Batch targeted searches and exact file ranges instead of issuing one command per file or dumping whole files. Stop gathering once every review ground and every prior finding has a concrete disposition. Report all material findings in this verdict, not merely the first one or two.
+
+Report only material plan defects with a concrete failure scenario. BLOCKER means the plan cannot be executed faithfully or cannot prove an acceptance criterion. MAJOR means the written plan will predictably cause substantial rework. Every actual plan finding must set origin to plan. If repository evidence cannot be read or the reviewer tool/runtime fails, set origin to environment; that is a reviewer environment failure, never a plan defect. Do not report style or optional improvements. Approve only with an empty findings array. Return only the requested structured result.`;
+}
+
+function buildReviewCommand({
+  runtime,
+  root,
+  prompt,
+  outputPath,
+  model = null,
+  effort = "medium",
+  externalSandbox = false,
+  reviewerSessionId = null,
+}) {
+  return buildReviewRuntimeCommand({
+    runtime,
+    root,
+    prompt,
+    schemaPath: SCHEMA_PATH,
+    schema: readJson(SCHEMA_PATH),
+    outputPath,
+    model,
+    effort,
+    externalSandbox,
+    reviewerSessionId,
+  });
+}
+
+function parseReview(runtime, stdout, outputPath) {
+  if (runtime === "codex") return readJsonIfPresent(outputPath);
+  const envelope = readJsonFromString(stdout);
+  const candidate = envelope?.structured_output || envelope?.result || envelope;
+  return typeof candidate === "string"
+    ? readJsonFromString(candidate)
+    : candidate;
+}
+
+const PLAN_FINDING_CATEGORIES = new Set([
+  "intent",
+  "evidence",
+  "scope",
+  "interfaces",
+  "tdd",
+  "verification",
+  "sequencing",
+  "simplicity",
+]);
+
+function nonEmptyText(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function reviewIsSchemaShaped(review) {
+  return Boolean(review)
+    && ["approve", "fix-needed"].includes(review.verdict)
+    && nonEmptyText(review.summary)
+    && Array.isArray(review.findings)
+    && review.findings.every((finding) => Boolean(finding)
+      && ["BLOCKER", "MAJOR"].includes(finding.severity)
+      && ["plan", "environment"].includes(finding.origin)
+      && PLAN_FINDING_CATEGORIES.has(finding.category)
+      && (finding.task_id === null || nonEmptyText(finding.task_id))
+      && Number.isInteger(finding.line)
+      && finding.line >= 1
+      && nonEmptyText(finding.title)
+      && nonEmptyText(finding.detail)
+      && nonEmptyText(finding.failure_scenario)
+      && nonEmptyText(finding.suggestion));
+}
+
+function reviewIsClean(review) {
+  return review?.verdict === "approve"
+    && Array.isArray(review.findings)
+    && review.findings.length === 0
+    && typeof review.summary === "string";
+}
+
+function shortDiagnostic(value, fallback) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  return (normalized || fallback).slice(0, 300);
+}
+
+function attemptDiagnostic(run, review) {
+  if (run?.termination === "interrupted") {
+    return `challenge interrupted by ${run.interruptSignal || "signal"}`;
+  }
+  if (run?.termination === "stall-timeout") {
+    return `reviewer stalled with no output for ${run.stallTimeoutMs}ms`;
+  }
+  if (run?.termination === "hard-timeout") {
+    return `reviewer exceeded the ${run.hardTimeoutMs}ms hard timeout`;
+  }
+  if (run?.error?.message) return shortDiagnostic(run.error.message, "reviewer spawn failed");
+  if (run?.status !== 0 && run?.stderr) {
+    return shortDiagnostic(run.stderr, `reviewer exited ${run.status ?? "without status"}`);
+  }
+  const environmentFinding = review?.findings?.find(
+    (finding) => finding?.origin === "environment",
+  );
+  if (environmentFinding) return shortDiagnostic(environmentFinding.detail, "review evidence was unavailable");
+  const reviewText = [
+    review?.summary,
+    ...(review?.findings || []).flatMap((finding) => [finding?.title, finding?.detail]),
+  ].filter(Boolean).join(" ");
+  if (/sandbox_apply|sandbox-exec:.*operation not permitted/i.test(reviewText)) {
+    return shortDiagnostic(reviewText, "nested reviewer sandbox failed");
+  }
+  if (!reviewIsSchemaShaped(review)) return "reviewer result was not schema-shaped";
+  return `reviewer exited ${run?.status ?? "without status"}`;
+}
+
+function classifyChallengeAttempt({ run, review }) {
+  if (run?.error || (run?.status ?? 1) !== 0) {
+    return { kind: "environment-failure", reason: attemptDiagnostic(run, review) };
+  }
+  if (!reviewIsSchemaShaped(review)) {
+    return { kind: "environment-failure", reason: attemptDiagnostic(run, review) };
+  }
+  if (review.findings.some((finding) => finding.origin === "environment")) {
+    return { kind: "environment-failure", reason: attemptDiagnostic(run, review) };
+  }
+  if (reviewIsClean(review)) return { kind: "approved", reason: null };
+  if (review.verdict !== "fix-needed" || review.findings.length === 0) {
+    return {
+      kind: "environment-failure",
+      reason: "reviewer verdict and findings were contradictory",
+    };
+  }
+  return { kind: "plan-findings", reason: null };
+}
+
+function assertPlanDigest(planPath, expectedDigest) {
+  const currentDigest = planContractDigest(fs.readFileSync(planPath, "utf8"));
+  if (currentDigest !== expectedDigest) {
+    fail(`plan contract changed during challenge (${expectedDigest} -> ${currentDigest}); challenge the new digest`);
+  }
+}
+
+function writePlanContractEvidence(snapshotRoot, expectedDigest) {
+  const planFile = path.join(snapshotRoot, ".pair", "plan.md");
+  const plan = fs.readFileSync(planFile, "utf8");
+  const computedDigest = planContractDigest(plan);
+  if (computedDigest !== expectedDigest) {
+    throw new Error(
+      `review snapshot plan contract differs from the challenged digest (${expectedDigest} -> ${computedDigest})`,
+    );
+  }
+  const evidence = {
+    schema: 1,
+    plan_path: ".pair/plan.md",
+    plan_digest: computedDigest,
+    raw_plan_sha256: crypto.createHash("sha256").update(plan).digest("hex"),
+    normalization: [
+      "Task and Acceptance Criteria checkbox progress is normalized to unchecked",
+      "Pair-v3 recovery-context lines are excluded",
+    ],
+    authority: "parent-generated; verified before and after reviewer execution",
+  };
+  const evidenceFile = path.join(snapshotRoot, ".pair", "plan-contract.json");
+  fs.mkdirSync(path.dirname(evidenceFile), { recursive: true });
+  fs.writeFileSync(evidenceFile, `${JSON.stringify(evidence, null, 2)}\n`, {
+    mode: 0o600,
+  });
+  return evidence;
+}
+
+function createChallengeRunDirectory(scratch, digest) {
+  const runId = `${new Date().toISOString().replace(/[^0-9TZ]/g, "")}-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
+  const directory = path.join(scratch, digest, runId);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  return directory;
+}
+
+function attemptPrefix(index, runtime) {
+  return `attempt-${index + 1}-${runtime}`;
+}
+
+function writeAttemptArtifacts({
+  directory,
+  prefix,
+  digest,
+  reviewer,
+  run,
+  review,
+  classification,
+  outputPath,
+  usage,
+}) {
+  const stdoutPath = path.join(directory, `${prefix}.stdout`);
+  const stderrPath = path.join(directory, `${prefix}.stderr`);
+  fs.writeFileSync(stdoutPath, sanitizeText(run.stdout || ""), { mode: 0o600 });
+  fs.writeFileSync(stderrPath, sanitizeText(run.stderr || ""), { mode: 0o600 });
+  if (review && !fs.existsSync(outputPath)) {
+    fs.writeFileSync(outputPath, `${JSON.stringify(sanitizeValue(review), null, 2)}\n`, { mode: 0o600 });
+  } else if (fs.existsSync(outputPath)) {
+    const raw = fs.readFileSync(outputPath, "utf8");
+    let safe = redactString(raw);
+    try { safe = `${JSON.stringify(sanitizeValue(JSON.parse(raw)), null, 2)}\n`; } catch {}
+    fs.writeFileSync(outputPath, safe, { mode: 0o600 });
+  }
+  if (fs.existsSync(outputPath)) fs.chmodSync(outputPath, 0o600);
+  const metadata = {
+    schema: 1,
+    plan_digest: digest,
+    reviewer,
+    classification: classification.kind,
+    reason: redactString(classification.reason || ""),
+    exit_status: run.status ?? null,
+    signal: run.signal ?? null,
+    termination: run.termination || null,
+    interrupt_signal: run.interruptSignal || null,
+    elapsed_ms: run.elapsedMs ?? null,
+    stdout_bytes: run.stdoutBytes ?? Buffer.byteLength(run.stdout || ""),
+    stderr_bytes: run.stderrBytes ?? Buffer.byteLength(run.stderr || ""),
+    started_at: run.startedAt || null,
+    finished_at: run.finishedAt || null,
+    usage,
+    files: {
+      stdout: path.basename(stdoutPath),
+      stderr: path.basename(stderrPath),
+      review: fs.existsSync(outputPath) ? path.basename(outputPath) : null,
+    },
+  };
+  fs.writeFileSync(
+    path.join(directory, `${prefix}.metadata.json`),
+    `${JSON.stringify(metadata, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+}
+
+function runObservableCommand({
+  command,
+  reviewer,
+  directory,
+  prefix,
+  hardTimeoutMs,
+  stallTimeoutMs,
+  heartbeatMs,
+}) {
+  return new Promise((resolve) => {
+    const stdoutPath = path.join(directory, `${prefix}.stdout`);
+    const stderrPath = path.join(directory, `${prefix}.stderr`);
+    fs.writeFileSync(stdoutPath, "", { mode: 0o600 });
+    fs.writeFileSync(stderrPath, "", { mode: 0o600 });
+
+    const startedAtDate = new Date();
+    const startedAt = startedAtDate.toISOString();
+    const startedMs = startedAtDate.getTime();
+    let stdout = "";
+    let stderr = "";
+    let termination = null;
+    let spawnError = null;
+    let settled = false;
+    let forceKillTimer = null;
+
+    console.error(
+      `pair-plan-challenge: started ${reviewer}; hard timeout ${hardTimeoutMs}ms, no-output stall ${stallTimeoutMs}ms (attempts: ${directory})`,
+    );
+
+    let child;
+    try {
+      child = childProcess.spawn(command.file, command.args, {
+        cwd: command.cwd,
+        env: runtimeEnv(),
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      resolve({
+        status: null,
+        signal: null,
+        error,
+        stdout,
+        stderr,
+        termination: null,
+        elapsedMs: Date.now() - startedMs,
+        stdoutBytes: 0,
+        stderrBytes: 0,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        hardTimeoutMs,
+        stallTimeoutMs,
+      });
+      return;
+    }
+
+    const terminate = (kind, signal = "SIGTERM") => {
+      if (settled || termination) return;
+      termination = kind;
+      const elapsed = Date.now() - startedMs;
+      const detail = kind === "stall-timeout"
+        ? `stalled after ${stallTimeoutMs}ms with no reviewer output`
+        : kind === "interrupted"
+          ? `challenge interrupted by ${signal}`
+        : `reached the ${hardTimeoutMs}ms hard timeout`;
+      console.error(
+        `pair-plan-challenge: ${reviewer} ${detail} after ${elapsed}ms; terminating`,
+      );
+      child.kill(signal);
+      const graceMs = Number(process.env.PAIR_PLAN_REVIEW_TERMINATE_GRACE_MS || 1000);
+      forceKillTimer = setTimeout(() => child.kill("SIGKILL"), graceMs);
+      forceKillTimer.unref?.();
+    };
+
+    let stallTimer;
+    const armStallTimer = () => {
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => terminate("stall-timeout"), stallTimeoutMs);
+    };
+    armStallTimer();
+    const hardTimer = setTimeout(() => terminate("hard-timeout"), hardTimeoutMs);
+    let interruptSignal = null;
+    const onInterrupt = (signal) => {
+      interruptSignal = signal;
+      terminate("interrupted", signal);
+    };
+    const onSigint = () => onInterrupt("SIGINT");
+    const onSigterm = () => onInterrupt("SIGTERM");
+    process.once("SIGINT", onSigint);
+    process.once("SIGTERM", onSigterm);
+    const heartbeatTimer = setInterval(() => {
+      const elapsed = Date.now() - startedMs;
+      const bytes = Buffer.byteLength(stdout) + Buffer.byteLength(stderr);
+      console.error(
+        `pair-plan-challenge: still waiting for ${reviewer} after ${elapsed}ms; reviewer output ${bytes} bytes`,
+      );
+    }, heartbeatMs);
+
+    const append = (kind, chunk) => {
+      const value = sanitizeText(chunk.toString());
+      if (kind === "stdout") stdout += value;
+      else stderr += value;
+      fs.appendFileSync(kind === "stdout" ? stdoutPath : stderrPath, value);
+      armStallTimer();
+    };
+    child.stdout.on("data", (chunk) => append("stdout", chunk));
+    child.stderr.on("data", (chunk) => append("stderr", chunk));
+    child.on("error", (error) => {
+      spawnError = error;
+    });
+    child.on("close", (status, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(stallTimer);
+      clearTimeout(hardTimer);
+      clearInterval(heartbeatTimer);
+      clearTimeout(forceKillTimer);
+      process.removeListener("SIGINT", onSigint);
+      process.removeListener("SIGTERM", onSigterm);
+      const finishedAt = new Date().toISOString();
+      const error = spawnError || (termination
+        ? Object.assign(
+            new Error(
+              termination === "stall-timeout"
+                ? `reviewer stalled with no output for ${stallTimeoutMs}ms`
+                : termination === "interrupted"
+                  ? `challenge interrupted by ${interruptSignal || signal || "signal"}`
+                : `reviewer exceeded the ${hardTimeoutMs}ms hard timeout`,
+            ),
+            { code: termination === "interrupted" ? "EINTR" : "ETIMEDOUT" },
+          )
+        : null);
+      resolve({
+        status,
+        signal,
+        error,
+        stdout,
+        stderr,
+        termination,
+        interruptSignal,
+        elapsedMs: Date.now() - startedMs,
+        stdoutBytes: Buffer.byteLength(stdout),
+        stderrBytes: Buffer.byteLength(stderr),
+        startedAt,
+        finishedAt,
+        hardTimeoutMs,
+        stallTimeoutMs,
+      });
+    });
+  });
+}
+
+async function runChallengeAttempt({
+  runtime,
+  root,
+  prompt,
+  model,
+  effort,
+  timeout,
+  stallTimeout,
+  heartbeat,
+  digest,
+  index,
+  directory,
+  externalSandbox = false,
+  workId = null,
+}) {
+  const prefix = attemptPrefix(index, runtime);
+  const outputPath = path.join(directory, `${prefix}.review.json`);
+  const snapshot = externalSandbox ? createReviewSnapshot(root, directory) : null;
+  if (snapshot) {
+    writePlanContractEvidence(snapshot.directory, digest);
+    snapshot.digest = treeDigest(snapshot.directory);
+  }
+  const reviewRoot = snapshot?.directory || root;
+  const reviewSession = readReviewSession(root, runtime);
+  let resumeCheckpoint = null;
+  let effectivePrompt = prompt;
+  if (reviewSession?.session_id && workId) {
+    const planFile = path.join(root, ".pair", "plan.md");
+    const parsed = parsePlan(fs.readFileSync(planFile, "utf8"));
+    resumeCheckpoint = createResumeCheckpoint({
+      workId,
+      runtime,
+      role: "reviewer",
+      phase: "plan-review",
+      sessionId: reviewSession.session_id,
+      attemptId: null,
+      taskId: null,
+      plan: { path: ".pair/plan.md", sha256: digest },
+      patch: null,
+      resumeTarget: "plan-review",
+      nextAction: `Read .pair/plan.md and its canonical Work specification, challenge exact semantic digest ${digest}, close prior findings from .pair/plan-reviews/summary.md, and return one structured verdict.`,
+      acceptanceCriteria: parsed.acceptanceCriteria.map((criterion) => criterion.id),
+      findingIds: [],
+    });
+    effectivePrompt = `Pair v4 Resume Checkpoint (no cache-warming turn):\n${serializeResumeCheckpoint(resumeCheckpoint)}\nExecute next_action now and return only the requested structured result.`;
+  }
+  const command = buildReviewCommand({
+    runtime,
+    root: reviewRoot,
+    prompt: effectivePrompt,
+    outputPath,
+    model,
+    effort,
+    externalSandbox,
+    reviewerSessionId: reviewSession?.session_id || null,
+  });
+  const reviewer = `${runtime}/${model}`;
+  const run = process.env.PAIR_REVIEW_TRANSPORT === "direct"
+    ? await runObservableCommand({
+        command,
+        reviewer,
+        directory,
+        prefix,
+        hardTimeoutMs: timeout,
+        stallTimeoutMs: stallTimeout,
+        heartbeatMs: heartbeat,
+      })
+    : runObservableCommandSync({
+        command,
+        label: `plan review ${reviewer}`,
+        outputFile: path.join(directory, `${prefix}.stdout`),
+        hardTimeoutMs: timeout,
+        stallTimeoutMs: stallTimeout,
+        heartbeatMs: heartbeat,
+        environmentMode: "pair-runtime",
+        visible: { root, role: "reviewer" },
+        stateContext: {
+          root,
+          workId,
+          attemptId: null,
+          phase: "plan-review",
+          requestKind: "plan-review",
+        },
+      });
+  saveReviewSession(root, {
+    runtime,
+    stdout: run.stdout || "",
+    plannedSessionId: command.reviewerSessionId || null,
+    model,
+    effort,
+    phase: "plan-review",
+  });
+  if (snapshot && treeDigest(snapshot.directory) !== snapshot.digest) {
+    run.status = run.status === 0 ? 74 : run.status;
+    run.error = new Error("review snapshot mutated; refusing to use the reviewer verdict");
+  }
+  if (snapshot && repositoryDigest(root, directory) !== snapshot.sourceDigest) {
+    run.status = run.status === 0 ? 74 : run.status;
+    run.error = new Error("source repository mutated during review; refusing to use the reviewer verdict");
+  }
+  const review = parseReview(runtime, run.stdout || "", outputPath);
+  const classification = classifyChallengeAttempt({ run, review });
+  const usage = parseRuntimeUsage(runtime, run.stdout || "");
+  if (resumeCheckpoint) {
+    recordResumedTurn(root, {
+      checkpoint: resumeCheckpoint,
+      usage,
+      runtime,
+      role: "reviewer",
+      phase: "plan-review",
+    });
+  }
+  writeAttemptArtifacts({
+    directory,
+    prefix,
+    digest,
+    reviewer,
+    run,
+    review,
+    classification,
+    outputPath,
+    usage,
+  });
+  if (snapshot) fs.rmSync(snapshot.directory, { recursive: true, force: true });
+  return { classification, command, review, reviewer, run, usage };
+}
+
+function writeReviewEvidence(root, digest, reviewer, review) {
+  const safeReview = sanitizeValue(review) || {};
+  const pairDirectory = path.join(root, ".pair");
+  fs.mkdirSync(pairDirectory, { recursive: true, mode: 0o700 });
+  const evidence = {
+    schema: 1,
+    plan_digest: digest,
+    reviewer,
+    ...safeReview,
+  };
+  fs.writeFileSync(
+    path.join(pairDirectory, "plan-review.json"),
+    `${JSON.stringify(evidence, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  const findings = safeReview.findings.length === 0
+    ? "- None."
+    : safeReview.findings.map((finding) => (
+      `- **${finding.severity} ${finding.category} (${finding.origin})** — ${finding.title} (Task ${finding.task_id || "plan"}, line ${finding.line}): ${finding.detail}\n  - Failure: ${finding.failure_scenario}\n  - Fix: ${finding.suggestion}`
+    )).join("\n");
+  fs.writeFileSync(
+    path.join(pairDirectory, "plan-review.md"),
+    redactString(`# Pair v4 Plan Challenge\n\nDigest: \`${digest}\`\n\nReviewer: \`${reviewer}\`\n\n## Summary\n\n${safeReview.summary}\n\n## Findings\n\n${findings}\n`),
+    { mode: 0o600 },
+  );
+}
+
+function writePlanReviewSummary(root, workId) {
+  const reviews = readPairEvents(root)
+    .filter((event) => event.event === "plan-review.completed" && event.workId === workId);
+  const lines = [
+    "# Pair v4 Plan Review Summary",
+    "",
+    `Work: \`${workId}\``,
+    "",
+  ];
+  for (let index = 0; index < reviews.length; index++) {
+    const review = reviews[index];
+    const laterApproval = reviews.slice(index + 1).find((candidate) =>
+      ["approved", "human-override"].includes(candidate.classification));
+    const usage = review.usage || {};
+    lines.push(
+      `## Review ${index + 1}: ${review.classification || "unknown"}`,
+      "",
+      `- **Digest:** \`${review.planDigest || "unknown"}\``,
+      `- **Reviewer:** \`${review.reviewer || "unknown"}\``,
+      `- **Model / effort:** \`${review.model || "default"}\` / \`${review.effort || "unknown"}\``,
+      `- **Review Session:** \`${review.reviewerSessionId || "unknown"}\``,
+      `- **Tokens:** input ${usage.inputTokens ?? "unknown"}, cached ${usage.cachedInputTokens ?? "unknown"}, output ${usage.outputTokens ?? "unknown"}, reasoning ${usage.reasoningTokens ?? "unknown"}`,
+      `- **Resolution patch:** ${review.resolution_patch || `.pair/plan.md at \`${review.planDigest || "unknown"}\``}`,
+      `- **Final reason:** ${review.reason || review.summary || "not recorded"}`,
+      "",
+      "### Findings and resolutions",
+      "",
+    );
+    const findings = Array.isArray(review.findings) ? review.findings : [];
+    if (findings.length === 0) {
+      lines.push("- None.", "");
+    } else {
+      for (const [findingIndex, finding] of findings.entries()) {
+        const findingId = finding.id || `${finding.severity || "finding"}-${findingIndex + 1}`;
+        const resolution = laterApproval
+          ? `closed by Review ${reviews.indexOf(laterApproval) + 1} on digest \`${laterApproval.planDigest}\``
+          : "open; revise the plan and run closure review";
+        lines.push(
+          `- **${findingId}: ${finding.title || "Untitled finding"}** — ${finding.detail || "No detail recorded"}`,
+          `  - Resolution: ${resolution}.`,
+        );
+      }
+      lines.push("");
+    }
+  }
+  if (reviews.length === 0) lines.push("No plan reviews recorded.", "");
+  const directory = path.join(root, ".pair", "plan-reviews");
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const file = path.join(directory, "summary.md");
+  const temporary = path.join(directory, `.summary.${process.pid}.${crypto.randomUUID()}.tmp`);
+  fs.writeFileSync(temporary, `${lines.join("\n")}\n`, { mode: 0o600 });
+  fs.renameSync(temporary, file);
+  try { fs.chmodSync(file, 0o600); } catch {}
+  return file;
+}
+
+function recordPlanApproval(workFile, digest, reviewer) {
+  const independentReview = `no-blockers:${digest}:${reviewer}`;
+  if (independentReview.length > 100) {
+    fail("reviewer identity is too long for Work.plan.independent_review");
+  }
+  const work = readJson(workFile);
+  work.plan = {
+    path: ".pair/plan.md",
+    sha256: digest,
+    status: "validated",
+    independent_review: independentReview,
+  };
+  fs.writeFileSync(workFile, `${JSON.stringify(work, null, 2)}\n`);
+  return work.plan;
+}
+
+function recordManualPlanApproval(root, workFile, digest, reason) {
+  const rawReason = String(reason || "").trim();
+  const normalizedReason = redactString(rawReason);
+  if (normalizedReason.length < 10) {
+    fail("manual plan approval requires a concrete --reason (at least 10 characters)");
+  }
+  const reasonDigest = crypto
+    .createHash("sha256")
+    .update(rawReason)
+    .digest("hex")
+    .slice(0, 12);
+  const independentReview = `human-override:${digest}:user:${reasonDigest}`;
+  const work = readJson(workFile);
+  work.plan = {
+    path: ".pair/plan.md",
+    sha256: digest,
+    status: "validated",
+    independent_review: independentReview,
+  };
+  fs.writeFileSync(workFile, `${JSON.stringify(work, null, 2)}\n`);
+
+  const pairDirectory = path.join(root, ".pair");
+  fs.mkdirSync(pairDirectory, { recursive: true });
+  const evidence = {
+    schema: 1,
+    approval_kind: "human-override",
+    plan_digest: digest,
+    reviewer: "human/user",
+    reason: normalizedReason,
+    verdict: "approve",
+    summary: "The user manually approved this exact plan digest and accepted the stated residual risk.",
+    findings: [],
+  };
+  fs.writeFileSync(
+    path.join(pairDirectory, "plan-review.json"),
+    `${JSON.stringify(evidence, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  fs.writeFileSync(
+    path.join(pairDirectory, "plan-review.md"),
+    redactString(`# Pair v4 Plan Approval\n\nDigest: \`${digest}\`\n\nApproval: \`human-override\`\n\nReviewer: \`human/user\`\n\nReason: ${normalizedReason}\n`),
+    { mode: 0o600 },
+  );
+  return work.plan;
+}
+
+async function main() {
+  const options = parseArgs(process.argv.slice(2));
+  if (options.help) {
+    console.log("Usage: pair-plan-challenge [--runtime auto|codex|claude] [--allow-cross-runtime-fallback] [--model MODEL] [--effort LEVEL] [--max-plan-reviews N] [--dry-run]\n       pair-plan-challenge --approve-plan DIGEST --reason TEXT");
+    return;
+  }
+  const root = gitRoot();
+  const planPath = path.join(root, ".pair", "plan.md");
+  if (!fs.existsSync(planPath)) fail(".pair/plan.md is missing");
+  const plan = fs.readFileSync(planPath, "utf8");
+  const validation = validatePlan(plan);
+  if (!validation.valid) {
+    fail(`plan validation failed:\n- ${validation.errors.join("\n- ")}`);
+  }
+  const { work, workDirectory, workFile } = resolveCanonicalWork(root);
+  const digest = planContractDigest(plan);
+  if (options.approvePlan !== null) {
+    if (!/^[a-f0-9]{64}$/.test(options.approvePlan || "")) {
+      fail("--approve-plan requires the full 64-character plan contract digest");
+    }
+    if (options.approvePlan !== digest) {
+      fail(
+        `manual approval digest ${options.approvePlan} does not match current plan digest ${digest}`,
+      );
+    }
+    recordManualPlanApproval(root, workFile, digest, options.reason);
+    appendPairEvent(root, {
+      event: "plan-review.completed",
+      workId: work.work_id,
+      planDigest: digest,
+      reviewer: "human/user",
+      model: "human",
+      effort: "manual",
+      classification: "human-override",
+      reason: options.reason,
+      summary: "The user approved the exact plan digest and accepted the recorded residual risk.",
+      findings: [],
+      usage: null,
+      resolution_patch: `.pair/plan.md at ${digest}`,
+    });
+    writePlanReviewSummary(root, work.work_id);
+    validateWorkDirectory(workDirectory);
+    console.log(
+      `pair-plan-challenge: human override approved ${digest} for Work ${work.work_id}`,
+    );
+    return;
+  }
+  const existingBinding = readJsonIfPresent(
+    path.join(root, ".pair", "ledger-bindings.json"),
+  )?.bindings?.[`work:${work.work_id}`];
+  const legacyLedger = process.env.PAIR_DATA_DIR
+    ? path.join(process.env.PAIR_DATA_DIR, "attempts.jsonl")
+    : existingBinding?.legacy_ledger ||
+      (existingBinding?.ledger && !String(existingBinding.ledger).startsWith(".pair/")
+        ? existingBinding.ledger
+        : path.join(os.homedir(), ".local", "share", "pair-v3", "attempts.jsonl"));
+  if (!options.dryRun) {
+    bindAttemptLedger(root, legacyLedger, work.work_id, planPath);
+  }
+  const priorReviewFile = path.join(root, ".pair", "plan-review.json");
+  const priorReviewCandidate = readJsonIfPresent(priorReviewFile);
+  if (
+    work.plan?.sha256 === digest &&
+    String(work.plan.independent_review || "").startsWith(
+      `no-blockers:${digest}:`,
+    ) &&
+    priorReviewCandidate?.plan_digest === digest &&
+    reviewIsClean(priorReviewCandidate)
+  ) {
+    console.log(
+      `pair-plan-challenge: current digest ${digest} is already independently approved; no reviewer started`,
+    );
+    return;
+  }
+  const planReviewCount = () => readPairEvents(root).filter((record) =>
+    record.event === "plan-review.completed" &&
+    record.workId === work.work_id,
+  ).length;
+  if (options.maxPlanReviews !== null && (!Number.isInteger(options.maxPlanReviews) || options.maxPlanReviews < 1)) {
+    fail("--max-plan-reviews must be a positive integer");
+  }
+  if (options.maxPlanReviews !== null && planReviewCount() >= options.maxPlanReviews) {
+    fail(
+      `Work ${work.work_id} reached its ${options.maxPlanReviews}-verdict plan-review budget across plan digests; use an exact-digest human override or explicitly raise --max-plan-reviews`,
+    );
+  }
+  const runtimes = resolveRuntimeCandidates(options.runtime, {
+    allowCrossRuntimeFallback: options.allowCrossRuntimeFallback,
+  });
+  const scratchRoot = process.env.CLAUDE_SCRATCH_DIR
+    || path.join(os.homedir(), ".claude-scratch");
+  const scratch = path.join(scratchRoot, path.basename(root), "pair-plan-challenge");
+  fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
+  const runDirectory = createChallengeRunDirectory(scratch, digest);
+  const priorReview = priorReviewCandidate?.findings
+    ?.some((finding) => finding?.origin === "plan")
+    ? priorReviewCandidate
+    : null;
+  const prompt = planReviewPrompt({
+    planPath: path.relative(root, planPath),
+    specPath: path.relative(root, path.join(workDirectory, "spec.md")),
+    digest,
+    priorReview,
+  });
+  if (options.dryRun) {
+    const commands = runtimes.map((runtime, index) => {
+      const model = index === 0 && options.model ? options.model : "default";
+      const prefix = attemptPrefix(index, runtime);
+      return {
+        reviewer: `${runtime}/${model}`,
+        command: buildReviewCommand({
+          runtime,
+          root,
+          prompt,
+          outputPath: path.join(runDirectory, `${prefix}.review.json`),
+          model,
+          effort: options.effort,
+          externalSandbox: runtime === "codex" && isNestedCodexSandbox(process.env),
+        }),
+      };
+    });
+    console.log(JSON.stringify({ digest, commands }, null, 2));
+    return;
+  }
+  const timeout = Number(process.env.PAIR_PLAN_REVIEW_TIMEOUT_MS || 10 * 60 * 1000);
+  const stallTimeout = Number(
+    process.env.PAIR_PLAN_REVIEW_STALL_TIMEOUT_MS || 5 * 60 * 1000,
+  );
+  const heartbeat = Number(
+    process.env.PAIR_PLAN_REVIEW_HEARTBEAT_MS || 15 * 1000,
+  );
+  for (let index = 0; index < runtimes.length; index++) {
+    if (options.maxPlanReviews !== null && planReviewCount() >= options.maxPlanReviews) {
+      fail(
+        `Work ${work.work_id} reached its ${options.maxPlanReviews}-verdict plan-review budget across plan digests; no additional reviewer was started`,
+      );
+    }
+    assertPlanDigest(planPath, digest);
+    const runtime = runtimes[index];
+    const externalSandbox = runtime === "codex" && isNestedCodexSandbox(process.env);
+    const model = index === 0 && options.model ? options.model : "default";
+    const attempt = await runChallengeAttempt({
+      runtime,
+      root,
+      prompt,
+      model,
+      effort: options.effort,
+      timeout,
+      stallTimeout,
+      heartbeat,
+      digest,
+      index,
+      directory: runDirectory,
+      externalSandbox,
+      workId: work.work_id,
+    });
+    appendPairEvent(root, {
+      event: "plan-review.completed",
+      workId: work.work_id,
+      planDigest: digest,
+      reviewer: attempt.reviewer,
+      reviewerSessionId: readReviewSession(root, runtime)?.session_id || null,
+      model,
+      effort: options.effort,
+      classification: attempt.classification.kind,
+      reason: attempt.classification.reason,
+      summary: attempt.review?.summary || null,
+      findings: attempt.review?.findings || [],
+      usage: attempt.usage,
+      elapsedMs: attempt.run.elapsedMs ?? null,
+      resolution_patch: `.pair/plan.md at ${digest}`,
+      at: new Date().toISOString(),
+    });
+    writePlanReviewSummary(root, work.work_id);
+    assertPlanDigest(planPath, digest);
+
+    if (attempt.run.termination === "interrupted") {
+      fail(
+        `challenge interrupted; digest ${digest} unchanged; attempts preserved at ${runDirectory}`,
+      );
+    }
+
+    if (attempt.classification.kind === "environment-failure") {
+      const nextRuntime = runtimes[index + 1];
+      if (nextRuntime) {
+        const nextModel = "default";
+        console.error(
+          `pair-plan-challenge: ${attempt.reviewer} environment failure (${attempt.classification.reason}); digest ${digest} unchanged; trying ${nextRuntime}/${nextModel} (attempts: ${runDirectory})`,
+        );
+        continue;
+      }
+      fail(
+        `all reviewer runtimes failed for unchanged digest ${digest} (${attempt.classification.reason}); attempts preserved at ${runDirectory}`,
+      );
+    }
+
+    writeReviewEvidence(root, digest, attempt.reviewer, attempt.review);
+    if (attempt.classification.kind === "plan-findings") {
+      process.exitCode = 2;
+      console.error(
+        `pair-plan-challenge: ${attempt.review.findings.length} material plan finding(s); revise and challenge the new digest (attempts: ${runDirectory})`,
+      );
+      return;
+    }
+    recordPlanApproval(workFile, digest, attempt.reviewer);
+    validateWorkDirectory(workDirectory);
+    console.log(
+      `pair-plan-challenge: approved ${digest} for Work ${work.work_id} by ${attempt.reviewer}`,
+    );
+    return;
+  }
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`pair-plan-challenge: ${error.message}`);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  buildReviewCommand,
+  classifyChallengeAttempt,
+  planReviewPrompt,
+  recordPlanApproval,
+  recordManualPlanApproval,
+  resolveRuntimeCandidates,
+  reviewIsClean,
+  reviewIsSchemaShaped,
+  writePlanReviewSummary,
+};

@@ -109,7 +109,7 @@ Consult applicable language or framework skills read-only during design. This do
 
 ## Specification Contract
 
-Use this structure, scaled to the work:
+Use this structure, scaled to the work. Write for a human reviewer first: start every section with the decision or outcome, keep each bullet to one claim, and use short labeled sub-bullets for proof, constraints, and consequences. Never encode a section as one metadata-dense paragraph. A spec remains the canonical semantic record, so preserve stable IDs and exact verification commands.
 
 ```markdown
 # Spec: <title>
@@ -117,21 +117,28 @@ Use this structure, scaled to the work:
 - **Work ID:** `<work-id>`
 
 ## Purpose
+<2–3 short paragraphs: current state, desired state, and why it matters>
 ## Rejection Criteria
+<one independently scannable bullet per condition>
 ## Contrasts
 ## Constraints
 ## Decisions
+### D-1: <short decision name>
+- **Decision:** <chosen approach>
+- **Why:** <decisive evidence or tradeoff>
+- **Consequences:** <important resulting constraint>
 ## Engineering Quality Contract
 - **Always-on obligations:** <intent fit, maintainable scope, traceable verification, independent review, repository security baseline>
 - **Fact-activated obligations:** <observed change facts, required response/evidence, owner, exclusion authority>
 ## Acceptance Criteria
 - [ ] AC-1: <observable outcome>
 ## Verification
-- AC-1: <test, command, endpoint, or UI action proving the outcome>
+### AC-1
+- **Proof:** `<test, command, endpoint, or UI action proving the outcome>`
 ## Out of Scope
 ```
 
-Every acceptance criterion must have a stable ID and a matching verification entry. Do not leave TODO/TBD placeholders.
+Every acceptance criterion must have a stable ID and a matching verification entry. Keep the acceptance criterion itself outcome-only; put the proof under its matching `### AC-<n>` verification heading. Do not leave TODO/TBD placeholders.
 For pair-v3 Work, replace the Work ID and both Engineering Quality Contract entries with approved concrete content before publishing. Generic designs may omit the Work-only metadata when it is not applicable.
 
 ### Destination

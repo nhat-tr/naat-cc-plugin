@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "work_id": "work-20260719-pair-loop-observable-control",
+  "title": "Pair Loop — Visible, Resumable, Repository-Centered Control",
+  "status": "design-approved",
+  "spec": {
+    "path": "docs/work/work-20260719-pair-loop-observable-control/spec.md",
+    "sha256": "b90c673c1c46c974870c565649cc40b7fd190bac90b26c0ee4b4df56197a89dc"
+  },
+  "active_pair_mirror": ".pair/spec.md",
+  "engineering_quality_contract": {
+    "path": "docs/work/work-20260719-pair-loop-observable-control/spec.md",
+    "section": "Engineering Quality Contract",
+    "status": "approved"
+  },
+  "decision_records": [
+    "docs/work/work-20260719-pair-loop-observable-control/decisions/DR-001-visible-runtime-host.md",
+    "docs/work/work-20260719-pair-loop-observable-control/decisions/DR-002-pause-and-human-edit-control.md",
+    "docs/work/work-20260719-pair-loop-observable-control/decisions/DR-003-bounded-resume-token-strategy.md",
+    "docs/work/work-20260719-pair-loop-observable-control/decisions/DR-004-derived-progress-and-review-audit.md"
+  ],
+  "decision_supersessions": [],
+  "changes": [],
+  "outcomes": [],
+  "evidence_records": [],
+  "plan": {
+    "path": ".pair/plan.md",
+    "sha256": "e71022b163f740f6e223cfa578e3ef01555941bfc99ff6d9f5cb116bf7513fae",
+    "status": "validated",
+    "independent_review": "no-blockers:e71022b163f740f6e223cfa578e3ef01555941bfc99ff6d9f5cb116bf7513fae:codex/default"
+  }
+}

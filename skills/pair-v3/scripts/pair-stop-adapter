@@ -1,0 +1,71 @@
+#!/usr/bin/env node
+
+const childProcess = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const { loadPairState } = require('./lib/pair-state');
+
+function readInput() {
+  try {
+    return JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
+  } catch {
+    return null;
+  }
+}
+
+function repositoryRoot(cwd) {
+  const result = childProcess.spawnSync('git', ['rev-parse', '--show-toplevel'], {
+    cwd,
+    encoding: 'utf8',
+  });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function runtimeFor(input) {
+  const configured = String(process.env.PAIR_HOOK_RUNTIME || input?.runtime || '').toLowerCase();
+  if (configured === 'codex' || configured === 'claude') return configured;
+  if (process.env.CLAUDE_PROJECT_DIR || process.env.CLAUDECODE) return 'claude';
+  return 'codex';
+}
+
+function continuationReason(state) {
+  const active = state.active;
+  if (active) {
+    return `Pair v4 continuation owns this chat: resume attempt ${active.attempt_id} for task ${active.task_id} at ${active.phase}. Evidence sequence ${state.sequence}. Run pair-loop --status, preserve the current patch, and continue the exact saved phase.`;
+  }
+  return `Pair v4 continuation owns this chat: Work ${state.work_id} remains ${state.lifecycle}. Evidence sequence ${state.sequence}. Run pair-loop --status and advance the next actionable phase.`;
+}
+
+function response(runtime, reason) {
+  return runtime === 'claude'
+    ? { decision: 'block', reason }
+    : { continue: false, stopReason: reason };
+}
+
+function main() {
+  if (process.env.PAIR_STOP_GATE === 'off' || process.env.CLAUDE_STOP_GATE === 'off') return;
+  const input = readInput();
+  if (!input || input.hook_event_name && !['Stop', 'SubagentStop'].includes(input.hook_event_name)) return;
+  const cwd = input.cwd || input.project_dir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const root = repositoryRoot(cwd);
+  if (!root) return;
+  let state;
+  try {
+    state = loadPairState(root);
+  } catch {
+    return;
+  }
+  const owner = state.continuation?.owner_session_id;
+  if (!owner || !input.session_id || owner !== input.session_id) return;
+  if (
+    state.continuation.paused ||
+    state.continuation.human_edit ||
+    ['idle', 'paused', 'blocked', 'complete'].includes(state.lifecycle)
+  ) return;
+  process.stdout.write(`${JSON.stringify(response(runtimeFor(input), continuationReason(state)))}\n`);
+}
+
+if (require.main === module) main();
+
+module.exports = { continuationReason, response, runtimeFor };

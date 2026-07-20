@@ -142,9 +142,9 @@ _Domain glossary for the brainstorming skill's Visual Companion (`skills/brainst
 - Aliases to avoid: "quality checklist", "NFR list".
 - Relations: belongs to one **Work ID**; activates from observed change facts; governs whole-feature review and may cite Decision Records.
 
-**Active Pair Loop marker** — the process-owned `.pair/active-loop.json` record proving that one live Pair Loop currently owns `.pair/plan.md`; its run identity scopes Stop-gate exhaustion state and its PID makes crashed markers inert.
-- Aliases to avoid: "active plan" — a stored plan is not evidence that a Pair Loop is running.
-- Relations: created and removed by the Pair Loop; activates the Stop gate for `.pair/plan.md`; distinct from an active implementation attempt.
+**Active Pair Loop marker** — the compatibility `.pair/active-loop.json` process marker used only to prevent two live CLI processes from dispatching the same repository Work concurrently; a crashed PID makes the marker inert.
+- Aliases to avoid: "Work state", "active plan" — the repository event journal and reducer, not this marker, own lifecycle truth.
+- Relations: created and removed by the Pair CLI; distinct from an active implementation attempt and never used by Pair v4 continuation or retry decisions.
 
 ## Session & Lifecycle
 

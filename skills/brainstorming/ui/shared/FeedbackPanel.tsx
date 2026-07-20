@@ -176,69 +176,74 @@ export function FeedbackPanel({
           </div>
         </div>
 
-        <AnnotationComposer
-          annotationComponentId={annotationComponentId}
-          components={components}
-          draft={draft}
-          onAnnotationComponentSelect={onAnnotationComponentSelect}
-          onDraftChange={onDraftChange}
-          readOnly={readOnly}
-        />
+        <div className="feedback-compose-scroll">
+          <AnnotationComposer
+            annotationComponentId={annotationComponentId}
+            components={components}
+            draft={draft}
+            onAnnotationComponentSelect={onAnnotationComponentSelect}
+            onDraftChange={onDraftChange}
+            readOnly={readOnly}
+          />
 
-        <div
-          aria-label="Pending feedback"
-          aria-live="polite"
-          aria-relevant="additions text"
-          className="pending"
-          role="group"
-        >
-          {draft.annotations.map(annotation => (
-            <span className="chip chip-note" data-primitive="chip" key={annotation.id}>
-              <span><strong>Note</strong> {annotation.target.label}</span>
-              <button
-                aria-label={`Remove note: ${annotation.target.label}`}
-                disabled={readOnly}
-                onClick={() => removeAnnotation(annotation.id)}
-                type="button"
-              >
-                <Trash2 aria-hidden="true" size={14} />
-              </button>
-            </span>
-          ))}
-          {draft.choices.map(choice => (
-            <span className="chip chip-choice" data-primitive="chip" key={choice.componentId}>
-              <span><strong>Choice</strong> {choice.label}</span>
-              <button
-                aria-label={`Remove choice: ${choice.label}`}
-                disabled={readOnly}
-                onClick={() => removeChoice(choice)}
-                type="button"
-              >
-                <Trash2 aria-hidden="true" size={14} />
-              </button>
-            </span>
-          ))}
+          <div
+            aria-label="Pending feedback"
+            aria-live="polite"
+            aria-relevant="additions text"
+            className="pending"
+            role="group"
+          >
+            {draft.annotations.map(annotation => (
+              <span className="chip chip-note" data-primitive="chip" key={annotation.id}>
+                <span><strong>Note</strong> {annotation.target.label}</span>
+                <button
+                  aria-label={`Remove note: ${annotation.target.label}`}
+                  disabled={readOnly}
+                  onClick={() => removeAnnotation(annotation.id)}
+                  type="button"
+                >
+                  <Trash2 aria-hidden="true" size={14} />
+                </button>
+              </span>
+            ))}
+            {draft.choices.map(choice => (
+              <span className="chip chip-choice" data-primitive="chip" key={choice.componentId}>
+                <span><strong>Choice</strong> {choice.label}</span>
+                <button
+                  aria-label={`Remove choice: ${choice.label}`}
+                  disabled={readOnly}
+                  onClick={() => removeChoice(choice)}
+                  type="button"
+                >
+                  <Trash2 aria-hidden="true" size={14} />
+                </button>
+              </span>
+            ))}
+          </div>
+
+          <label className="sr-only" htmlFor="summary-note">Summary Note</label>
+          <textarea
+            disabled={readOnly}
+            id="summary-note"
+            maxLength={10_000}
+            onChange={event => onDraftChange({ ...draft, message: event.target.value })}
+            placeholder="Add one summary note…"
+            value={draft.message}
+          />
         </div>
 
-        <label className="sr-only" htmlFor="summary-note">Summary Note</label>
-        <textarea
-          disabled={readOnly}
-          id="summary-note"
-          maxLength={10_000}
-          onChange={event => onDraftChange({ ...draft, message: event.target.value })}
-          placeholder="Add one summary note…"
-          value={draft.message}
-        />
-        <p className="handoff">
-          {readOnly
-            ? "Read-only export. Feedback is disabled in this standalone copy."
-            : "Submit once after reviewing the full visual."}
-        </p>
-        {error ? <p className="screen-error" role="alert">{error}</p> : null}
-        <button className="primary-button" disabled={!canSubmit} onClick={onSubmit} type="button">
-          <Send aria-hidden="true" size={16} />
-          {submitting ? "Saving feedback…" : "Save feedback batch"}
-        </button>
+        <div className="feedback-compose-actions">
+          <p className="handoff">
+            {readOnly
+              ? "Read-only export. Feedback is disabled in this standalone copy."
+              : "Submit once after reviewing the full visual."}
+          </p>
+          {error ? <p className="screen-error" role="alert">{error}</p> : null}
+          <button className="primary-button" disabled={!canSubmit} onClick={onSubmit} type="button">
+            <Send aria-hidden="true" size={16} />
+            {submitting ? "Saving feedback…" : "Save feedback batch"}
+          </button>
+        </div>
       </section>
 
       <SessionHistory events={events} />

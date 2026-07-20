@@ -1,0 +1,39 @@
+#!/usr/bin/env node
+
+const childProcess = require('node:child_process');
+const fs = require('node:fs');
+
+const { loadPairState } = require('./lib/pair-state');
+
+function main() {
+  let input = {};
+  try { input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch {}
+  const cwd = input.cwd || input.project_dir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const git = childProcess.spawnSync('git', ['rev-parse', '--show-toplevel'], {
+    cwd,
+    encoding: 'utf8',
+  });
+  if (git.status !== 0) return;
+  let state;
+  try { state = loadPairState(git.stdout.trim()); } catch { return; }
+  if (!state.work_id || ['idle', 'complete'].includes(state.lifecycle)) return;
+  const active = state.active;
+  process.stdout.write([
+    `Pair v4 Work ${state.work_id} is ${state.lifecycle}.`,
+    state.lifecycle === 'blocked'
+      ? `Blocked reason: ${state.blocked_reason || 'inspect repository-local evidence for the material decision'}.`
+      : active
+      ? `Resume attempt ${active.attempt_id}, task ${active.task_id}, exact phase ${active.phase}.`
+      : `Resume target: ${state.continuation.resume_target || 'open the next Review Slice'}.`,
+    `Evidence sequence ${state.sequence}; inspect with pair-loop --status.`,
+    state.lifecycle === 'blocked'
+      ? 'Do not dispatch automatically; preserve the files and wait for the named material decision or an explicit takeover.'
+      : state.continuation.human_edit
+        ? `Human ${state.continuation.human_edit.kind} edit has exclusive control.`
+        : state.continuation.paused
+          ? 'Work is explicitly paused; do not dispatch until pair-loop --resume.'
+        : 'Preserve the current patch and advance only the saved phase.',
+  ].join('\n') + '\n');
+}
+
+if (require.main === module) main();

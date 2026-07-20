@@ -1,149 +1,130 @@
 ---
 name: pair-promote
-description: Promote an approved specification into an evidence-grounded, capability-first `.pair/plan.md` for pair-v3. Use for pair planning, plan promotion, preparing pair-loop, code-grounded task decomposition, or turning acceptance criteria into delegated TDD tasks without speculative architecture.
+description: Promote an approved specification into an evidence-grounded, compact `.pair/plan.md` for Pair v4. Use for pair planning, plan promotion, preparing pair-loop, code-grounded task decomposition, or turning acceptance criteria into bounded tests-first Review Slices without speculative architecture.
 ---
 
-# Promote an Approved Spec Into a Pair-v3 Plan
+# Promote an Approved Spec Into a Compact Pair Plan
 
-Produce an implementable plan for an agent that will not have the planning conversation. Do not implement during promotion.
+Produce the smallest executable plan the visible Pair v4 coordinator can follow. Do not implement during promotion, and do not copy the repository investigation into the plan.
 
-## Resolve Input
+## Resolve Canonical Work
 
 Use, in order:
 
-1. A user-provided canonical spec/design path.
-2. The canonical spec path named by the `Canonical:` header in `.pair/spec.md` when its `Canonical SHA-256:` digest matches the exact canonical bytes.
-3. An approved design from the current conversation, after publishing it as a canonical Work through the brainstorming skill.
+1. A user-provided canonical specification.
+2. The `Canonical:` path in `.pair/spec.md` when its `Canonical SHA-256:` matches the exact canonical bytes.
+3. An approved design from the current conversation, after the brainstorming skill publishes it as canonical Work.
 
-For pair-v3 Work, the canonical spec path is `docs/work/<work-id>/spec.md`; `.pair/spec.md` is only its generated active mirror. Read `work.json`, confirm its Work ID, canonical path, and digest, then run `work-lineage.cjs validate --work docs/work/<work-id>`. The runtime installer puts this portable helper on `PATH`; in an uninstalled toolkit checkout, invoke it from `skills/brainstorming/scripts/work-lineage.cjs`. Stop on a missing Work root, raw legacy mirror, path mismatch, digest mismatch, or validation failure. Do not repair these by planning from chat or by treating `.pair/` as canonical.
+For Pair Work, the canonical path is `docs/work/<work-id>/spec.md`; `.pair/spec.md` is only its generated active mirror. Read `work.json`, confirm the Work ID, path, and digest, then run `work-lineage.cjs validate --work docs/work/<work-id>`. Stop on a missing Work root, legacy raw mirror, path escape, digest mismatch, or validation failure. Keep `.pair/`, prompts, transcripts, and model telemetry uncommitted.
 
-Keep `.pair/`, review transcripts, attempts, prompts, and other raw workflow state uncommitted. Plans and implementation envelopes may reference the Work ID, canonical spec path, canonical digest, and Decision Record IDs; they must not copy private conversation or model telemetry into the Work root.
+If no approved design exists, stop. Purpose, constraints, stable Acceptance Criteria IDs, and verification must be approved before promotion. If the input already passes the canonical `validate-plan`, report that it is already executable and do not rewrite it.
 
-If no approved design exists, stop. If Purpose, Rejection Criteria, Contrasts, stable acceptance-criterion IDs, or verification entries are missing, propose the missing content and obtain approval before writing the plan. Mark evidence-derived proposals so the user can veto them.
+## Ground the Plan, Keep the Evidence Compact
 
-If the input already passes pair-v3's canonical `validate-plan`, report that it is already an implementable plan and do not rewrite it.
+Read applicable `AGENTS.md`, the relevant `UBIQUITOUS_LANGUAGE.md` cluster, manifests/lockfiles, exact callers, existing implementations, and tests before naming a path or contract. Load applicable language skills read-only.
 
-## Reconstruct Repository and Capability Evidence
-
-Read applicable `AGENTS.md`, relevant `UBIQUITOUS_LANGUAGE.md` clusters, project manifests, lockfiles, callers, tests, and existing implementations before naming files or architecture. Load applicable language skills read-only.
-
-For every dependency or framework that affects the design, establish capability evidence in this order:
+For a dependency or framework capability, check in this order:
 
 1. Existing repository usage and tests.
-2. The pinned dependency's source, API metadata, or bundled documentation.
-3. Official documentation matching the pinned version.
-4. Official samples.
-5. A minimal compile/runtime probe under `$CLAUDE_SCRATCH_DIR`.
+2. Pinned package source, API metadata, or bundled docs.
+3. Official version-matched documentation or samples.
+4. A minimal probe under `$CLAUDE_SCRATCH_DIR`.
 
-Model memory is not evidence for a fast-moving or unfamiliar dependency. Record an unknown load-bearing capability as blocking. Do not compensate with a custom abstraction.
+- **Dependency:** `<name>@<pinned-version>` means an external package or runtime.
+- **Repository capability:** means application-owned code or an existing composition pattern.
 
-Use `**Dependency:** name@version` only for an external package, SDK, framework, or runtime, and always record the pinned version. Use `**Repository capability:**` for an existing symbol, composition pattern, or application-owned gap. Do not label repository-owned behavior as a dependency.
+Do not label repository behavior as a dependency, use model memory as evidence, or invent an abstraction to cover an unknown. Start with the framework-native baseline; custom code must implement confirmed application behavior.
 
-Start from the **framework-native baseline**: the smallest vertical solution that directly composes existing repository and dependency capabilities. Use `reuse` when the baseline satisfies the need. Use `extend` or `build` only for a confirmed gap and state the application-owned behavior the custom module will hide.
+Record only the decisive paths/symbols in the plan's single `Repository evidence` field. The investigation remains in tool evidence or canonical Work, not in repeated Capability Evidence, Simplicity Contract, Change Map, Consumes/Produces, and Review-boundary prose.
 
-High uncertainty is not implementable plan state. Resolve it through reconnaissance or a scratch probe, update the evidence, and then promote with `uncertainty:low|medium`.
+## Design Finite Behavior Slices
 
-## Decompose Vertically
+One plan owns one cohesive repository deliverable. Split independent subsystems, separately releasable deliverables, and other repositories into separate Work.
 
-Create streams around observable acceptance behavior, not layers such as abstractions, infrastructure, factories, registries, services, frontend, or backend. A cross-stack behavior may still have ordered tasks in separate streams when ownership and file sets are genuinely independent.
+Each task is one complete behavior-sized Review Slice handled by the visible coordinator in one tests-first pass:
 
-Topologically order streams because pair-v3 executes the first open task. Declare only dependencies on earlier streams.
+1. Read the named evidence and existing tests.
+2. Write the smallest failing test first.
+3. Confirm it fails for the missing behavior, not a tooling/environment failure.
+4. Implement the minimum behavior without weakening the test.
+5. Run the exact `verify:` command.
 
-Apply behavior-gated TDD — every scheduled test must earn its attempt cost:
+Do not create separate RED, GREEN, unit-test, integration-test, wiring, or review tasks. Fold setup and wiring into the behavior that needs them. Every non-doc slice owns its test files and declares `[test:unit|integration|e2e]`. At least one integration/e2e slice must cross a real acceptance boundary. Integration tests covering the Acceptance Criteria are mandatory.
 
-- Write failing tests only for observable behavior. Each test task's text must name the behavior it pins and the defect it would catch; a test that cannot state its defect class is not scheduled.
-- Never schedule structure-mirroring tests: DTO/record shape, mapping plumbing, configuration wiring, or framework-guaranteed behavior. They pin structure rather than behavior, fail on refactors instead of defects, and burn a full worker+review attempt each. Cover that work through the consuming behavior's failing integration test and tag each such implementation task `[tdd:covered-by <red-test-task-id>]`.
-- Begin every behavior stream with `[type:test] [phase:red]`. A purely structural stream may omit its own red test only when every task in it carries `[tdd:covered-by ...]` referencing a red test that exists in the plan.
-- Schedule all failing tests that define a behavior before its implementation.
-- Include at least one failing integration test that exercises the acceptance criteria through the real boundary; do not mock the boundary under test.
-- Give every task a stable ID, AC mapping, exact files, exact verification command, complexity, and validated profile.
+Only these task facts belong in the executable plan:
+
+- Stable task ID and observable outcome.
+- Explicit `risk`, mapped `[ac:...]`, and `[test:...]` boundary.
+- Exact owned `files`, test-owned `tests`, exact `verify` command, and S/M/L size.
+
+Human readability is part of the contract. Put the observable outcome on the checkbox line, then put each machine-read fact on its own indented, labeled row. Do not collapse profile, files, tests, RED evidence, and verification into one scrolling sentence. The validator accepts this readable form and the legacy one-line form.
+
+Budgets remain hard limits:
+
+| Size | Owned files | ACs | Description |
+|---|---:|---:|---:|
+| S | 3 | 1 | 240 characters |
+| M | 6 | 2 | 420 characters |
+| L | 10 | 3 | 650 characters |
+
+Cross-module work is at least medium risk; contract/architecture work is at least high risk; credentials, authorization, payments, destructive data changes, and production security are critical. Resolve uncertainty before promotion. Pair v4 plans are limited to 12 Review Slices and 24 KiB.
 
 ## Write `.pair/plan.md`
 
-Use this contract exactly:
+Use this default contract:
 
 ```markdown
 # Task: <title>
 
-## Context
-<why, approved spec path, and relevant decisions>
+**Pair mode:** lite
 
 ## Intent Contract
-- **Work ID:** `<work-id>`
 - **Spec:** `docs/work/<work-id>/spec.md` (`sha256:<Canonical SHA-256>`)
-- **Active Mirror:** `.pair/spec.md` (generated; not canonical)
-- **Purpose:** <approved wording>
-- **Rejection Criteria:** <approved wording or none beyond ACs>
-- **Contrasts:** <approved wording or none>
-
-## Implementation Context
-- **Language / Framework:** <pinned versions>
-- **Existing patterns:** <real paths and symbols>
-- **Constraints:** <compatibility, runtime, security, migration>
-- **Verification:** `<fast command>`; `<full command>`
-
-## Capability Evidence
-- **Dependency:** `<name>@<pinned-version>` | evidence: `<repo path, official source, or probe>` | decision: reuse | gap: none
-- **Dependency:** `<name>@<pinned-version>` | evidence: `<source>` | decision: extend | gap: <confirmed missing capability>
-- **Repository capability:** `<path#symbol or named behavior>` | evidence: `<repo path and observed contract>` | decision: reuse | gap: none
-- **Repository capability:** `<path#symbol or named behavior>` | evidence: `<repo path and observed contract>` | decision: extend | gap: <application-owned behavior still required>
-
-## Simplicity Contract
-- **Native baseline:** <smallest direct composition>
-- **Custom modules justified:** <module -> application-owned behavior, or none>
-- **Real seams:** <interface -> adapters/external boundary, or none>
-- **Rejected abstractions:** <pass-through wrappers/factories/registries/ports not to add>
+- **Purpose:** <approved observable outcome>
+- **Repository evidence:** `<existing-path#symbol>`, `<test/path>`, and `<manifest/lockfile>`
+- **Constraints:** <approved compatibility, security, rejection, and simplicity boundaries>
+- **Verification:** `<full Work command>`
 
 ## Streams
-### Stream 1: <observable behavior> - complexity: S|M|L
-**Depends on:** none
-- [ ] Task 1.1 - write failing tests for <behavior> [type:test] [phase:red] [risk:low] [scope:local] [uncertainty:low] [ac:AC-1] - files: `tests/...` - verify: `<focused failing command>` - **S**
-- [ ] Task 1.2 - write failing integration test for <acceptance scenario> [type:test] [phase:red] [risk:medium] [scope:cross-module] [uncertainty:low] [ac:AC-1] - files: `tests/...` - verify: `<integration command>` - **M**
-- [ ] Task 1.3 - implement <smallest behavior> [type:feature] [risk:medium] [scope:local] [uncertainty:low] [ac:AC-1] - files: `src/...` - verify: `<focused and integration commands>` - **M**
+### Stream 1: <observable capability>
+- [ ] Task 1.1 — <complete observable slice>
+  - **Profile:** [risk:medium] [ac:AC-1] [test:integration] · **M**
+  - **Files:** `tests/<behavior>.integration.*`, `src/<behavior>.*`
+  - **Tests:** `tests/<behavior>.integration.*`
+  - **Verify:** `<exact focused command>`
 
 ## Acceptance Criteria
-- [ ] AC-1: <criterion copied from the spec>
+- [ ] AC-1: <criterion copied verbatim from the canonical spec>
 
 ## Open Questions
 - None.
 ```
 
-Use `- [blocking] <question> - impact: Task X` only while drafting. The canonical validator rejects blocking questions. Non-blocking assumptions must state their evidence and affected tasks.
+Use additional Streams only to make real ordering visible. The runner executes tasks in written order, so do not add dependency ceremony for a simple linear plan. Add a short nested `Consumes`/`Produces` contract only when an otherwise invisible cross-task interface truly needs it; it is optional in the compact Pair v4 contract. For the full Pair contract, put every required profile tag on `**Profile:**` and use separate `**Red:**`, `**Red expect:**`, `**Consumes:**`, `**Produces:**`, `**Defect:**`, `**Review boundary:**`, and `**Test boundary:**` rows.
 
-Allowed task profiles:
+Never add progress logs, recovery notes, reviewer findings, or implementation history to the plan. Acceptance Criteria are completion state, not model tasks; the runner closes them automatically when all mapped tasks pass.
 
-- `type`: `bugfix|feature|refactor|test|docs|migration`
-- `risk`: `low|medium|high|critical`
-- `scope`: `local|cross-module|contract|architecture`
-- `uncertainty`: `low|medium` in an implementable plan; resolve `high` first
+## Verification Script
 
-Security boundaries, credentials, payments, destructive data changes, and production authorization are critical. Public contracts, schemas, database changes, and migrations are at least high risk.
+If `.pair/verify.sh` is absent, create a fast pre-existing-tree gate using repository-native commands and make it executable. It must pass before implementation and target under two minutes. Do not substitute Docker for an existing container workflow or add an e2e suite to a fast gate. The final Pair v4 gate runs every distinct task verification plus `.pair/verify.sh` once.
 
-## Enforce Simplicity
+## Validate, Then Challenge the Exact Digest
 
-Apply the deletion test to every proposed custom module. Reject pass-through wrappers, one-adapter interfaces, speculative factories/registries, duplicated framework capability, and tests that exist only to justify a wrapper. A seam is real only when it has two adapters or crosses a true external ownership boundary.
-
-Every task must serve at least one AC. Every AC must be covered. Do not add cleanup, extensibility, or infrastructure that the approved intent does not require.
-
-## Generate `.pair/verify.sh`
-
-If `.pair/verify.sh` is absent, generate it — the stop-gate's execution check depends on it; without it the gate is checkbox-trust only. Detect the repo and write a FAST script (unit-level only, NO e2e, target < 2 minutes, exit non-zero on failure), then `chmod +x` it:
-
-- `*.csproj`/`*.sln` -> `dotnet build` (or the repo's `dobq`) + `dotnet test --filter "TestCategory=UnitTest"` (match the repo's actual category convention; omit the filter only if the repo has none).
-- `package.json` + tsconfig -> `npx tsc --noEmit` + the repo's unit-test script (never the e2e/playwright script).
-
-Verify it runs and passes on the CURRENT (pre-implementation) tree — a verify script that fails before work starts would deadlock the gate.
-
-## Validate and Challenge
-
-Run until clean:
+Run:
 
 ```bash
-~/.local/share/my-claude-code/skills/pair-v3/scripts/validate-plan
+skills/pair-v3/scripts/validate-plan .pair/plan.md
+pair-loop --challenge-plan --runtime auto
 ```
 
-The validator prints the progress-stable `plan contract sha256`. After the final independent challenge, record that digest in `docs/work/<work-id>/work.json` as `plan.sha256` with `path: ".pair/plan.md"`, `status: "validated"`, and the observed independent-review result. Do not use a raw file SHA: Task and Acceptance Criteria checkbox progress is mutable, while any semantic plan change must produce a new contract digest before implementation continues.
+The first challenge performs one bounded sweep and reports all material findings together. After a semantic revision, run a focused closure verdict that carries prior findings forward. Every CLI invocation is finite, exact already-approved digests are cached, and unchanged material findings require plan revision rather than blind redispatch. Pair v4 has no default lifetime counter across plan digests; `PAIR_MAX_PLAN_REVIEWS` or `--max-plan-reviews` remains an optional operator ceiling.
 
-For high/critical-risk, cross-stack, migration, or newly verified framework work, run the independent plan challenge when available. It must check Intent Contract alignment, capability evidence, file grounding, AC coverage, TDD order, dependency order, and the Simplicity Contract.
+A clean independent verdict records `no-blockers:<digest>:<runtime>/<model>`. If the human deliberately accepts the risk or the reviewer environment is unusable, the user may approve the exact current digest honestly:
 
-Report stream/task counts, evidence sources, custom modules justified, open questions, and any derived acceptance criteria. Do not begin implementation.
+```bash
+pair-loop --approve-plan <64-character-digest> --reason "<concrete reason>"
+```
+
+This records `human-override:<digest>:user:<reason-hash>` plus the full reason in `.pair/plan-review.json`; it never claims an independent review occurred. Cross-provider fallback remains opt-in via `--allow-cross-runtime-fallback`.
+
+Report the Work ID, plan digest, task/AC counts, decisive repository evidence, full verification command, complete plan-review summary path, and whether approval was independent or a human override. Do not begin implementation.

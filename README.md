@@ -111,7 +111,8 @@ Notes:
 | `mermaid-validate` | Validate Mermaid diagram blocks right after they're written or edited |
 | `module-deepening` | Tactical refactoring heuristics — deletion test, depth-as-leverage, two-adapter rule |
 | `pair-v2` | Headless doer/reviewer pair-programming workflow; `.pair/` state, stop-gate enforced |
-| `pair-v3` | Automatic Codex/Claude task routing with verification, review, escalation, and quality/cost evidence |
+| `pair-v4` | Visible Codex/Claude coordinator, durable per-Work state, reusable Review Session, verification, review, and recovery controls |
+| `pair-v3` | Compatibility entry point; `--legacy-v3` explicitly restores the old split headless lifecycle |
 | `session-replay-note` | Turn a coding-agent session into a teaching-oriented Obsidian demo (notes + Canvas) |
 | `typescript` | TypeScript implementation guidance — React/Next.js, Node, type safety, testing |
 | `ubiquitous-language` | Extract a domain-term glossary from the conversation into `UBIQUITOUS_LANGUAGE.md` |
@@ -125,16 +126,38 @@ and compile a minimal Draft directly into a render-preflighted v2 session.
 
 #### Pair workflows
 
-Pair v3 is the runtime-neutral execution path for an implementable pair plan.
-Run `pair-loop --runtime auto`; it selects the next unchecked task, routes it to
-Codex or Claude, verifies and independently reviews the result, records the
-attempt in `~/.local/share/pair-v3/attempts.jsonl`, and completes, retries, or
-escalates the task automatically. `pair-report` summarizes quality, rework,
-findings, tokens, and measured cost by route and task profile.
+Pair v4 is the runtime-neutral execution path for an implementable Pair plan.
+Ordinary tests-first implementation stays in the visible Codex or Claude
+coordinator, while one independent read-only Review Session is reused for plan,
+slice, and cumulative review. Authoritative events, atomic status, and attempt
+evidence live under `.pair/runs/<work-id>/`; home-directory history is optional
+legacy import only.
 
-Pair v2 remains available as an archived workflow and compatibility surface.
-Pair-v3 owns canonical plan validation and implementation review for both Codex
-and Claude.
+Start the three-pane host with `pair-loop --host`, inspect it with
+`pair-loop --status`, then run bare `pair-loop --runtime auto`. Attempts survive
+process exits at their exact phase. Additional repository files are advisory,
+evidence-infrastructure failures preserve work, and visible work is discarded
+only through the previewed `--discard-attempt ... --confirm-discard` operation.
+`pair-report` summarizes repository-local quality, findings, tokens, resumptions,
+and cost evidence.
+
+Pair v3 and Pair v2 remain compatibility surfaces. `pair-loop --legacy-v3` is
+the explicit route to the old split headless lifecycle; existing `pair-loop`,
+`--once`, `--inline`, and `--complete` entry points still work against v4 state.
+
+##### Pair v4 quick start
+
+1. **Spec and promote** — use `brainstorming`, then `pair-promote`, to publish
+   canonical Work and `.pair/plan.md` with tests-first Review Slices.
+2. **Host and diagnose** — run `pair-loop --host`, `pair-loop --attach` when
+   needed, then `pair-loop --doctor`.
+3. **Implement** — run bare `pair-loop --runtime auto`; complete the printed
+   Review Slice in the visible coordinator and let the owning Stop adapter keep
+   ordinary phase continuation in that chat.
+4. **Control** — use `--pause`, same-invocation `--resume`, `--cancel-now`,
+   `--takeover`, or the exclusive human-edit commands without losing state.
+5. **Complete** — Pair replays verification, reviews complete patches, advances
+   Review Slices, then runs cumulative verification/review and records completion.
 
 ##### Pair v2 legacy details
 
@@ -161,38 +184,6 @@ scripts under `skills/pair-v2/scripts/`:
   permission-mode auto so an unattended run can never stall on an approval
   prompt. Run it in a cmux/tmux pane and leave the pane open.
 
-##### How to run it (end to end)
-
-1. **Spec** — let `brainstorming` write `.pair/spec.md` with approved Purpose,
-   Rejection Criteria, Contrasts, stable acceptance-criterion IDs, and matching
-   verification. Promotion—not brainstorming—owns implementation streams.
-2. **Promote** — in the Claude Code session for that repo (terminal, not nvim),
-   type `/pair-promote` (optionally `/pair-promote path/to/spec.md`, or right
-   after plan mode to promote that plan). It reads the spec and repository,
-   verifies pinned dependency capabilities, starts from the framework-native
-   baseline, and writes `.pair/plan.md` with Intent, Capability Evidence, and
-   Simplicity contracts. Failing focused and integration tests precede the
-   implementation they verify. Pair-v3's `validate-plan` is canonical; the old
-   `validate-plan.sh` path delegates to it. (`<leader>pc` re-runs it any time.)
-3. **Challenge when risk warrants** — `<leader>pC` runs the reviewer in `--plan`
-   mode. Use it for high/critical risk, cross-stack work, migrations, and newly
-   verified dependencies. It checks intent, evidence, AC coverage, TDD,
-   dependency order, grounding, and speculative abstractions. A BLOCKER keeps
-   the plan invalid until it is revised or explicitly rebutted.
-4. **Implement** — run `pair-loop --runtime auto` (`--once` for one task).
-   Pair-v3 revalidates the plan before delegation, verifies independently, and
-   reviews each task. The Stop-hook gate blocks premature completion.
-5. **Review** — `<leader>pv` in nvim (or run `pair-review` in a terminal).
-   The reviewer runs in a fresh context, BLOCKERs land in `.pair/plan.md`
-   (the gate holds the doer until they're fixed), and findings auto-import
-   into the nvim notes list as `[rv]` entries. `<leader>pV` = eco mode
-   (diff-only, cheaper model — S-complexity changes only).
-   Mid-session alternative: delegate to the `pair-reviewer` agent.
-6. **Triage** — reply to a finding note with `@cc ...` and hit `A` (or
-   `<leader>nA` for all) to dispatch questions back to the doer session.
-7. **Done** — all boxes checked, verify passes, verdict `approve`.
-   `<leader>pD` archives `.pair/` → `.pair-archive/<timestamp>` for the next feature.
-
 ##### Nvim keymaps (dotfiles `nhat/pair.lua` — v2 driver)
 
 | Key | Action |
@@ -215,11 +206,11 @@ of rules that instructions alone under-deliver:
 
 | Hook | Event | Does |
 |------|-------|------|
-| `stop-gate.sh` | Stop | Blocks "done" while a plan has unchecked tasks or `.pair/verify.sh` fails. A `.pair/plan.md` gates only while a live Pair Loop owns `.pair/active-loop.json`; a dormant or crashed plan never blocks ordinary sessions. `.claude-loop.md` retains file-based activation. After the no-progress cap is exhausted, that Pair Loop run stays allowed to stop until task progress or a new run resets the gate. Opt-out `PAIR_STOP_GATE=off` (legacy `CLAUDE_STOP_GATE=off`); no-progress cap `PAIR_STOP_GATE_MAX` (legacy `CLAUDE_STOP_GATE_MAX`, default 5) |
+| `stop-gate.sh` | Stop | Delegates to the Pair v4 reducer and emits the native Codex or Claude continuation response only for the owning session. Unrelated, paused, blocked, and complete sessions stop normally; there is no checkbox or fixed no-progress counter. Opt-out `PAIR_STOP_GATE=off` (legacy `CLAUDE_STOP_GATE=off`) |
 | `delegation-nudge.sh` | PostToolUse (edits) | Once per session at the 8th main-session edit, reminds the model to batch mechanical remainders into a subagent (mech/haiku, general-purpose/sonnet). Opt-out `CLAUDE_DELEGATION_NUDGE=off`; threshold `CLAUDE_DELEGATION_NUDGE_AT` |
 | `commit-guard.sh` | PreToolUse (git commit) | Blocks commits containing attribution trailers (Co-Authored-By / Generated with Claude) before they run |
 | `scratch-guard.sh` | PreToolUse (Write) | Blocks writes to raw `/tmp` and throwaway `tmp-*.spec/test.*` files in repo trees; points to `$CLAUDE_SCRATCH_DIR` |
-| `gate-orient.sh` | SessionStart (incl. post-compaction) | In gated repos, injects the plan status (done/open counts, next task, unresolved BLOCKERs) into every fresh context — silent elsewhere |
+| `gate-orient.sh` | SessionStart (incl. post-compaction) | Reads the Pair v4 reducer and injects the exact Work, attempt, phase, Resume target, and evidence sequence into fresh contexts — silent elsewhere |
 | `await-notify.sh` | Notification | macOS notification when Claude needs attention (permission prompt, waiting for input). Opt-out `CLAUDE_AWAIT_NOTIFY=off` |
 
 ### Codex-Compatible Skills

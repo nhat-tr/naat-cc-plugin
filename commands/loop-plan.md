@@ -35,7 +35,7 @@ not the conversation).
    <!-- one line per wakeup: what was done, what is next -->
    ```
 
-3. Add pair-v3 routing tags (`type`, `risk`, `scope`, `uncertainty`) and S/M/L
+3. Add Pair v4 profile tags (`type`, `risk`, `scope`, `uncertainty`) and S/M/L
    complexity to every task so model selection does not have to infer them.
 4. Keep state files out of version control: if `.git/info/exclude` does not
    already list it, append `.claude-loop.md` to `.git/info/exclude`.

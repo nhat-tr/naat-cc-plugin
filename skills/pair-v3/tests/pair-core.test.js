@@ -16,12 +16,13 @@ const {
   selectRoute,
   validatePlan,
 } = require('../scripts/lib/pair-core');
-const { validPairPlan } = require('./support/pair-plan-fixture');
+const { validPairLitePlan, validPairPlan } = require('./support/pair-plan-fixture');
 
-test('planContractDigest ignores only executable progress and Pair-v3 recovery context', () => {
+test('planContractDigest ignores queued, active, and accepted progress plus Pair recovery context', () => {
   const plan = validPairPlan();
   const progressed = plan
-    .replace('- [ ] Task 1.1', '- [x] Task 1.1')
+    .replace('- [ ] Task 1.1', '- [-] Task 1.1')
+    .replace('- [ ] Task 1.2', '- [x] Task 1.2')
     .replace('- [ ] AC-1:', '- [X] AC-1:')
     .replace(
       /^(- \[ \] Task 1\.2 .+)$/m,
@@ -83,19 +84,91 @@ test('parsePlan keeps verification commands out of owned files and preserves con
   const parsed = parsePlan(validPairPlan());
   const task = parsed.tasks[0];
 
-  assert.deepEqual(task.files, ['tests/greeting.test.js']);
-  assert.equal(task.verify, 'node --test tests/greeting.test.js');
+  assert.deepEqual(task.files, [
+    'tests/greeting.test.js',
+    'tests/greeting.integration.test.js',
+    'src/greeting.js',
+  ]);
+  assert.deepEqual(task.testFiles, ['tests/greeting.test.js', 'tests/greeting.integration.test.js']);
+  assert.equal(task.tddMode, 'cycle');
+  assert.equal(task.redMode, 'assertion');
+  assert.match(task.redExpected, /greeting command/);
+  assert.deepEqual(task.consumes, [{ source: 'repository', contract: 'src/commands/help.js#registerHelp' }]);
+  assert.deepEqual(task.produces, ['src/greeting.js#greet(name): string']);
+  assert.equal(task.verify, 'node --test tests/greeting.test.js tests/greeting.integration.test.js');
   assert.deepEqual(task.acceptanceCriteria, ['AC-1']);
-  assert.equal(task.phase, 'red');
+  assert.equal(task.phase, null);
   assert.equal(parsed.streams[0].dependsOn.length, 0);
+});
+
+test('validatePlan accepts readable multi-line task metadata without changing the task contract', () => {
+  const plan = [
+    '# Task: Add greeting command',
+    '',
+    '**Pair mode:** lite',
+    '',
+    '## Intent Contract',
+    '- **Spec:** `.pair/spec.md`',
+    '- **Purpose:** Let a user request and receive a greeting.',
+    '- **Repository evidence:** `src/commands/help.js#registerHelp` and `package.json`.',
+    '- **Constraints:** Preserve the current command API; no new command framework.',
+    '- **Verification:** `node --test tests/greeting.integration.test.js`',
+    '',
+    '## Streams',
+    '### Stream 1: Greeting behavior',
+    '- [ ] Task 1.1 — deliver the requested greeting through the real command boundary',
+    '  - **Profile:** [risk:medium] [ac:AC-1] [test:integration] · **M**',
+    '  - **Files:** `tests/greeting.integration.test.js`, `src/greeting.js`, `src/commands/greeting.js`',
+    '  - **Tests:** `tests/greeting.integration.test.js`',
+    '  - **Verify:** `node --test tests/greeting.integration.test.js`',
+    '',
+    '## Acceptance Criteria',
+    '- [ ] AC-1: the command prints the requested greeting.',
+    '',
+    '## Open Questions',
+    '- None.',
+  ].join('\n');
+
+  const result = validatePlan(plan);
+
+  assert.equal(result.valid, true, result.errors.join('\n'));
+  assert.equal(result.parsed.tasks[0].text, 'deliver the requested greeting through the real command boundary');
+  assert.deepEqual(result.parsed.tasks[0].files, [
+    'tests/greeting.integration.test.js',
+    'src/greeting.js',
+    'src/commands/greeting.js',
+  ]);
+  assert.equal(result.parsed.tasks[0].verify, 'node --test tests/greeting.integration.test.js');
+});
+
+test('validatePlan keeps full Pair contracts readable as indented task rows', () => {
+  const plan = validPairPlan().replace(
+    '- [ ] Task 1.1 - deliver the requested greeting through the real command boundary [type:feature] [tdd:cycle] [red:assertion] [risk:medium] [scope:cross-module] [uncertainty:low] [ac:AC-1] - files: `tests/greeting.test.js`, `tests/greeting.integration.test.js`, `src/greeting.js` - tests: `tests/greeting.test.js`, `tests/greeting.integration.test.js` - red: `node --test tests/greeting.test.js tests/greeting.integration.test.js` - red-expect: `greeting command prints requested greeting` - verify: `node --test tests/greeting.test.js tests/greeting.integration.test.js` - **M**',
+    [
+      '- [ ] Task 1.1 — deliver the requested greeting through the real command boundary',
+      '  - **Profile:** [type:feature] [tdd:cycle] [red:assertion] [risk:medium] [scope:cross-module] [uncertainty:low] [ac:AC-1] · **M**',
+      '  - **Files:** `tests/greeting.test.js`, `tests/greeting.integration.test.js`, `src/greeting.js`',
+      '  - **Tests:** `tests/greeting.test.js`, `tests/greeting.integration.test.js`',
+      '  - **Red:** `node --test tests/greeting.test.js tests/greeting.integration.test.js`',
+      '  - **Red expect:** `greeting command prints requested greeting`',
+      '  - **Verify:** `node --test tests/greeting.test.js tests/greeting.integration.test.js`',
+    ].join('\n'),
+  );
+
+  const result = validatePlan(plan);
+
+  assert.equal(result.valid, true, result.errors.join('\n'));
+  assert.equal(result.parsed.tasks[0].tddMode, 'cycle');
+  assert.equal(result.parsed.tasks[0].redMode, 'assertion');
+  assert.deepEqual(result.parsed.tasks[0].testBoundaries, ['unit', 'integration']);
 });
 
 test('validatePlan accepts a grounded capability-first pair plan', () => {
   const result = validatePlan(validPairPlan());
 
   assert.equal(result.valid, true, result.errors.join('\n'));
-  assert.equal(result.tasksTotal, 3);
-  assert.equal(result.tasksOpen, 3);
+  assert.equal(result.tasksTotal, 2);
+  assert.equal(result.tasksOpen, 2);
 });
 
 test('validatePlan accepts structured repository capability evidence without a package version', () => {
@@ -123,22 +196,22 @@ test('validatePlan rejects the weak plan previously accepted by substring checks
 
 test('validatePlan rejects duplicate IDs, invalid profiles, and missing owned files', () => {
   const invalid = validPairPlan()
-    .replace('Task 1.2 - write failing integration test', 'Task 1.1 - write failing integration test')
+    .replace('Task 1.2 - register', 'Task 1.1 - register')
     .replace('[risk:medium]', '[risk:banana]')
-    .replace(' - files: `src/greeting.js`', '');
+    .replace(' - files: `src/commands/greeting.js`', '');
   const result = validatePlan(invalid);
   const errors = result.errors.join('\n');
 
   assert.equal(result.valid, false);
   assert.match(errors, /duplicate task ID 1\.1/);
   assert.match(errors, /invalid risk "banana"/);
-  assert.match(errors, /Task 1\.3.*owned file/);
+  assert.match(errors, /Task 1\.1.*owned file/);
 });
 
 test('validatePlan rejects forward stream dependencies and high-uncertainty implementation', () => {
   const invalid = validPairPlan()
     .replace('**Depends on:** none', '**Depends on:** Stream 2')
-    .replace('[uncertainty:low] [ac:AC-1] - files: `src/greeting.js`', '[uncertainty:high] [ac:AC-1] - files: `src/greeting.js`')
+    .replace('[uncertainty:low]', '[uncertainty:high]')
     .replace('## Acceptance Criteria', [
       '### Stream 2: Later work - complexity: S',
       '**Depends on:** none',
@@ -151,7 +224,7 @@ test('validatePlan rejects forward stream dependencies and high-uncertainty impl
 
   assert.equal(result.valid, false);
   assert.match(errors, /depends on Stream 2.*later/);
-  assert.match(errors, /Task 1\.3.*high uncertainty/);
+  assert.match(errors, /Task 1\.1.*high uncertainty/);
 });
 
 test('validatePlan rejects unresolved blocking questions and custom capability work without a gap', () => {
@@ -193,9 +266,9 @@ test('validatePlan rejects empty contract values and vague unpinned capability e
   assert.match(errors, /model memory.*not capability evidence/);
 });
 
-test('validatePlan rejects duplicate acceptance IDs and test tasks without a red phase', () => {
+test('validatePlan rejects duplicate acceptance IDs and malformed TDD modes', () => {
   const invalid = validPairPlan()
-    .replace('[type:test] [phase:red] [risk:medium]', '[type:test] [risk:medium]')
+    .replace('[tdd:cycle]', '[tdd:whenever]')
     .replace('- [ ] AC-1: the command prints the requested greeting.', [
       '- [ ] AC-1: the command prints the requested greeting.',
       '- [ ] AC-1: duplicate criterion.',
@@ -205,7 +278,7 @@ test('validatePlan rejects duplicate acceptance IDs and test tasks without a red
 
   assert.equal(result.valid, false);
   assert.match(errors, /duplicate acceptance criterion ID AC-1/);
-  assert.match(errors, /Task 1\.2.*test task.*phase:red/);
+  assert.match(errors, /Task 1\.1.*malformed tdd tag/);
 });
 
 test('validatePlan finds blocking questions even when they are not list items', () => {
@@ -215,6 +288,30 @@ test('validatePlan finds blocking questions even when they are not list items', 
 
   assert.equal(result.valid, false);
   assert.match(result.errors.join('\n'), /blocking open question/);
+});
+
+test('validatePlan accepts the compact Pair-lite contract without legacy ceremony', () => {
+  const plan = validPairLitePlan();
+  const result = validatePlan(plan);
+
+  assert.deepEqual(result.errors, []);
+  assert.ok(Buffer.byteLength(plan) < 2000, 'the executable plan stays compact');
+  assert.equal(result.parsed.tasks[0].testBoundaries[0], 'integration');
+});
+
+test('compact Pair-lite plans still require test ownership and an integration boundary', () => {
+  const withoutTests = validatePlan(validPairLitePlan()
+    .replace(' - tests: `tests/greeting.integration.test.js`', ''));
+  assert.match(withoutTests.errors.join('\n'), /must identify its test-owned files/i);
+
+  const unitOnly = validatePlan(validPairLitePlan().replace('[test:integration]', '[test:unit]'));
+  assert.match(unitOnly.errors.join('\n'), /integration or e2e/i);
+
+  const unboundFullGate = validatePlan(validPairLitePlan().replace(
+    '`node --test tests/greeting.integration.test.js`',
+    'node --test tests/greeting.integration.test.js',
+  ));
+  assert.match(unboundFullGate.errors.join('\n'), /Verification.*backticked command/i);
 });
 
 test('validatePlan rejects executable checkboxes outside Streams and Acceptance Criteria', () => {
@@ -273,31 +370,61 @@ test('nextOpenTask does not run named acceptance criteria before plan tasks', ()
   assert.equal(nextOpenTask(plan).id, '1.1');
 });
 
+test('nextOpenTask never turns acceptance criteria into model work for a canonical Stream plan', () => {
+  const plan = [
+    '## Streams',
+    '### Stream 1: docs - complexity: S',
+    '**Depends on:** none',
+    '- [x] Task 1.1 - implement docs [type:docs] [risk:low] [scope:local] [uncertainty:low] [ac:AC-1] - files: `README.md` - verify: `node -e "process.exit(0)"` - **S**',
+    '## Acceptance Criteria',
+    '- [ ] AC-1: docs render',
+  ].join('\n');
+
+  assert.equal(nextOpenTask(plan), null);
+});
+
 test('validatePlan allows a structural stream whose tasks are covered by a red test elsewhere', () => {
-  const plan = validPairPlan().replace(
-    '\n## Acceptance Criteria',
-    [
-      '',
-      '### Stream 2: Greeting wiring - complexity: S',
-      '**Depends on:** 1',
-      '- [ ] Task 2.1 - wire greeting DTO into the command registry [type:feature] [risk:low] [scope:local] [uncertainty:low] [ac:AC-1] [tdd:covered-by 1.2] - files: `src/wiring.js` - verify: `node --test tests/greeting.integration.test.js` - **S**',
-      '',
-      '## Acceptance Criteria',
-    ].join('\n'),
-  );
+  const plan = validPairPlan();
 
   const result = validatePlan(plan);
   assert.deepEqual(result.errors, [], 'a fully covered structural stream needs no stream-local red test');
 
-  const unknownReference = validatePlan(plan.replace('[tdd:covered-by 1.2]', '[tdd:covered-by 9.9]'));
+  const unknownReference = validatePlan(plan.replace('[tdd:covered-by 1.1]', '[tdd:covered-by 9.9]'));
   assert.ok(unknownReference.errors.some(error => /unknown task 9\.9/.test(error)));
 
-  const nonRedReference = validatePlan(plan.replace('[tdd:covered-by 1.2]', '[tdd:covered-by 1.3]'));
-  assert.ok(nonRedReference.errors.some(error => /must reference a \[type:test\] \[phase:red\] task/.test(error)));
+  const nonCycleReference = validatePlan(plan.replace('[tdd:covered-by 1.1]', '[tdd:covered-by 1.2]'));
+  assert.ok(nonCycleReference.errors.some(error => /prior \[tdd:cycle\].*Review Slice/.test(error)));
 
-  const malformed = validatePlan(plan.replace('[tdd:covered-by 1.2]', '[tdd:whenever]'));
+  const malformed = validatePlan(plan.replace('[tdd:covered-by 1.1]', '[tdd:whenever]'));
   assert.ok(malformed.errors.some(error => /malformed tdd tag/.test(error)));
-  assert.ok(malformed.errors.some(error => /Stream 2 must start with/.test(error)), 'without coverage the stream needs its own red test');
+});
+
+test('validatePlan rejects legacy test-only tasks and oversized Review Slices before execution', () => {
+  const legacy = validPairPlan()
+    .replace('[type:feature] [tdd:cycle] [red:assertion]', '[type:test] [phase:red]')
+    .replace(' - tests: `tests/greeting.test.js`, `tests/greeting.integration.test.js`', '');
+  const legacyErrors = validatePlan(legacy).errors.join('\n');
+  assert.match(legacyErrors, /standalone test contract.*tdd:red-contract/i);
+
+  const oversized = validPairPlan().replace(
+    '`src/greeting.js` - tests:',
+    '`src/greeting.js`, `src/a.js`, `src/b.js`, `src/c.js`, `src/d.js` - tests:',
+  );
+  assert.match(validatePlan(oversized).errors.join('\n'), /owns 7 files.*at most 6/i);
+});
+
+test('validatePlan rejects cross-repository ownership, understated risk, and forward interfaces', () => {
+  const crossRepository = validPairPlan().replaceAll('src/greeting.js', '../Other/src/greeting.js');
+  assert.match(validatePlan(crossRepository).errors.join('\n'), /outside the repository.*separate Work plan/i);
+
+  const understated = validPairPlan().replace('[risk:medium]', '[risk:low]');
+  assert.match(validatePlan(understated).errors.join('\n'), /risk low understates.*minimum risk is medium/i);
+
+  const forward = validPairPlan().replace(
+    'repository:`src/commands/help.js#registerHelp`',
+    '1.2:`src/commands/greeting.js#registerGreeting(registry): void`',
+  );
+  assert.match(validatePlan(forward).errors.join('\n'), /Task 1\.2, which is not earlier in plan order/i);
 });
 
 test('selectRoute routes docs-type low-risk work to the cheapest tier', () => {
@@ -343,12 +470,24 @@ test('selectRoute sends high-uncertainty work to the strongest route', () => {
   assert.equal(selectRoute(profile, routes, []).id, 'strong');
 });
 
+test('selectRoute raises contract and broad Review Slices without trusting a low-risk label', () => {
+  const routes = [
+    { id: 'cheap', strength: 1 },
+    { id: 'mid', strength: 2 },
+    { id: 'high', strength: 3 },
+    { id: 'max', strength: 4 },
+  ];
+  assert.equal(selectRoute({
+    type: 'feature', complexity: 'M', risk: 'low', scope: 'contract',
+    uncertainty: 'low', files: ['a', 'b'], acceptanceCriteria: ['AC-1'],
+  }, routes).id, 'high');
+});
+
 test('classifyOutcome accepts clean verified code', () => {
   assert.deepEqual(classifyOutcome({
     workerStatus: 'completed',
     verification: 'pass',
     findings: [],
-    priorAttempts: 0,
   }), {
     disposition: 'accepted',
     action: 'complete-task',
@@ -356,36 +495,123 @@ test('classifyOutcome accepts clean verified code', () => {
   });
 });
 
-test('classifyOutcome escalates repeated blocker findings', () => {
+test('classifyOutcome stops repeated blocker findings instead of escalating to max', () => {
   assert.deepEqual(classifyOutcome({
     workerStatus: 'completed',
     verification: 'pass',
     findings: [{ severity: 'BLOCKER' }],
-    priorAttempts: 1,
+    priorRetryCounts: { 'retry-review': 1 },
   }), {
-    disposition: 'substantial-rewrite',
-    action: 'escalate',
+    disposition: 'human-takeover',
+    action: 'stop',
     cause: 'model-capability',
   });
 });
 
-test('classifyOutcome allows one local fix for an initial major finding', () => {
+test('classifyOutcome retries one reviewed rejection on the same route', () => {
   assert.equal(classifyOutcome({
     workerStatus: 'completed',
     verification: 'pass',
     findings: [{ severity: 'MAJOR' }],
-    priorAttempts: 0,
-  }).action, 'local-fix');
+    priorRetryCounts: {},
+  }).action, 'retry-review');
 });
 
-test('classifyOutcome does not treat invalid retries as prior model failures', () => {
+test('classifyOutcome does not exhaust one retry class with a different prior failure', () => {
   assert.equal(classifyOutcome({
     workerStatus: 'completed',
     verification: 'pass',
     findings: [{ severity: 'MAJOR' }],
-    priorAttempts: 1,
-    priorModelAttempts: 0,
-  }).action, 'local-fix');
+    priorRetryCounts: { 'retry-infrastructure': 1 },
+  }).action, 'retry-review');
+
+  assert.equal(classifyOutcome({
+    workerStatus: 'completed',
+    verification: 'fail',
+    priorRetryCounts: { 'retry-review': 1 },
+  }).action, 'retry-verification');
+});
+
+test('classifyOutcome gives ownership one bounded retry before returning to promotion', () => {
+  const ownership = { status: 'fail', outside: ['src/Node.cs'] };
+  assert.deepEqual(classifyOutcome({
+    workerStatus: 'completed',
+    verification: 'fail',
+    ownership,
+    priorRetryCounts: {},
+  }), {
+    disposition: 'regenerated',
+    action: 'retry-ownership',
+    cause: 'integration-conflict',
+  });
+  assert.deepEqual(classifyOutcome({
+    workerStatus: 'completed',
+    verification: 'fail',
+    ownership,
+    priorRetryCounts: { 'retry-ownership': 1 },
+  }), {
+    disposition: 'redesign',
+    action: 'return-to-promotion',
+    cause: 'incorrect-plan',
+  });
+});
+
+test('classifyOutcome returns reviewer-identified plan defects to promotion immediately', () => {
+  assert.deepEqual(classifyOutcome({
+    workerStatus: 'completed',
+    verification: 'pass',
+    findings: [{ severity: 'BLOCKER', origin: 'plan' }],
+    recommendedAction: 'rewrite',
+  }), {
+    disposition: 'redesign',
+    action: 'return-to-promotion',
+    cause: 'incorrect-plan',
+  });
+});
+
+test('classifyOutcome treats reviewer environment findings as infrastructure, not implementation defects', () => {
+  const finding = {
+    severity: 'BLOCKER',
+    origin: 'environment',
+    failure_scenario: 'The reviewer could not read the immutable patch.',
+  };
+  assert.deepEqual(
+    classifyOutcome({
+      workerStatus: 'completed',
+      verification: 'pass',
+      findings: [finding],
+      recommendedAction: 'redesign',
+      priorRetryCounts: {},
+    }),
+    { disposition: 'regenerated', action: 'retry-infrastructure', cause: 'environment-failure' },
+  );
+  assert.deepEqual(
+    classifyOutcome({
+      workerStatus: 'completed',
+      verification: 'pass',
+      findings: [finding],
+      recommendedAction: 'redesign',
+      priorRetryCounts: { 'retry-infrastructure': 1 },
+    }),
+    { disposition: 'human-takeover', action: 'stop', cause: 'environment-failure' },
+  );
+});
+
+test('classifyOutcome retries a verification defect on the same route and then stops', () => {
+  assert.equal(classifyOutcome({
+    workerStatus: 'completed',
+    verification: 'fail',
+    priorRetryCounts: {},
+  }).action, 'retry-verification');
+  assert.deepEqual(classifyOutcome({
+    workerStatus: 'completed',
+    verification: 'fail',
+    priorRetryCounts: { 'retry-verification': 1 },
+  }), {
+    disposition: 'human-takeover',
+    action: 'stop',
+    cause: 'verification-defect',
+  });
 });
 
 test('classifyOutcome never accepts an invalid reviewer run', () => {
@@ -424,9 +650,25 @@ test('attemptCapStatus counts substantive attempts and ignores interruptions for
   assert.equal(status.substantive, 2, 'only the two completed attempts count toward the cap');
   assert.equal(status.overCap, false, '2 substantive attempts is under a cap of 3');
   assert.equal(status.trailingInterrupts, 0, 'the most recent record is not an interruption');
+  assert.deepEqual(status.retryCounts, {}, 'ordinary completed attempts do not invent retry state');
 });
 
-test('attemptCapStatus flags an unstable environment when interruptions run consecutively', () => {
+test('attemptCapStatus keeps retry budgets by action and ignores non-executions', () => {
+  const status = attemptCapStatus([
+    { status: 'completed', action: 'retry-infrastructure' },
+    { status: 'interrupted', action: 'retry-infrastructure' },
+    { status: 'completed-out-of-band', action: 'complete-task' },
+    { status: 'completed', action: 'retry-review' },
+  ], 4);
+
+  assert.equal(status.substantive, 2);
+  assert.deepEqual(status.retryCounts, {
+    'retry-infrastructure': 1,
+    'retry-review': 1,
+  });
+});
+
+test('attemptCapStatus reports consecutive interruptions without turning them into a stop condition', () => {
   const history = [
     { status: 'completed', valid: true },
     { status: 'interrupted', valid: false },
@@ -437,12 +679,19 @@ test('attemptCapStatus flags an unstable environment when interruptions run cons
   assert.equal(status.substantive, 1);
   assert.equal(status.overCap, false, 'a lone real attempt must not be blocked by later interrupts');
   assert.equal(status.trailingInterrupts, 3);
-  assert.equal(status.unstable, true, 'three trailing interrupts signals an unstable runtime');
+  assert.equal(status.unstable, false, 'interruptions preserve the actionable phase and never hard-stop by count');
+  assert.equal(status.warning, 'repeated-interruptions');
 });
 
 test('reviewIsWellFormed requires a schema verdict and a findings array', () => {
-  assert.equal(reviewIsWellFormed({ verdict: 'approve', findings: [] }), true);
-  assert.equal(reviewIsWellFormed({ verdict: 'fix-needed', findings: [{ severity: 'MAJOR' }] }), true);
+  const approved = { verdict: 'approve', recommended_action: 'approve', summary: 'clean', findings: [] };
+  const finding = {
+    severity: 'MAJOR', origin: 'implementation', file: 'src/x.js', line: 1,
+    title: 'reachable defect', detail: 'wrong result', failure_scenario: 'real caller sees wrong result', suggestion: 'correct result',
+  };
+  assert.equal(reviewIsWellFormed(approved), true);
+  assert.equal(reviewIsWellFormed({ verdict: 'fix-needed', recommended_action: 'local-fix', summary: 'fix', findings: [finding] }), true);
+  assert.equal(reviewIsWellFormed({ ...approved, findings: [{ severity: 'MAJOR' }] }), false, 'partial finding is not schema-shaped');
   assert.equal(reviewIsWellFormed({ verdict: 'approve' }), false, 'missing findings array');
   assert.equal(reviewIsWellFormed({ findings: [] }), false, 'missing verdict');
   assert.equal(reviewIsWellFormed(null), false);
@@ -505,6 +754,19 @@ test('classifyOutcome ignores a local-fix recommendation with no findings', () =
   });
 });
 
+test('classifyOutcome preserves verified work for one material local correction', () => {
+  assert.deepEqual(classifyOutcome({
+    workerStatus: 'completed',
+    verification: 'pass',
+    findings: [{ severity: 'MAJOR', origin: 'implementation' }],
+    recommendedAction: 'local-fix',
+  }), {
+    disposition: 'local-fix',
+    action: 'local-fix',
+    cause: 'model-capability',
+  });
+});
+
 test('classifyOutcome ignores a redesign recommendation with no material findings', () => {
   assert.deepEqual(classifyOutcome({
     workerStatus: 'completed',
@@ -527,7 +789,7 @@ test('classifyOutcome retries unparseable worker output on a stronger route, not
     verification: 'fail',
     runtimeStatus: 0,
     workerParseError: true,
-    priorAttempts: 0,
+    priorRetryCounts: {},
   }), {
     disposition: 'regenerated',
     action: 'retry-stronger',
@@ -541,7 +803,7 @@ test('classifyOutcome keeps a genuine spawn failure on the same route (retry-inf
     verification: 'fail',
     runtimeStatus: 1,
     workerParseError: true,
-    priorAttempts: 0,
+    priorRetryCounts: {},
   }), {
     disposition: 'regenerated',
     action: 'retry-infrastructure',
@@ -556,7 +818,7 @@ test('classifyOutcome escalates a repeated unparseable worker result to a human'
     verification: 'fail',
     runtimeStatus: 0,
     workerParseError: true,
-    priorAttempts: 1,
+    priorRetryCounts: { 'retry-stronger': 1 },
   }), {
     disposition: 'human-takeover',
     action: 'stop',
@@ -568,7 +830,7 @@ test('classifyOutcome retries initial task ambiguity with stronger context', () 
   assert.deepEqual(classifyOutcome({
     workerStatus: 'blocked',
     verification: 'fail',
-    priorAttempts: 0,
+    priorRetryCounts: {},
   }), {
     disposition: 'regenerated',
     action: 'retry-context',
@@ -584,7 +846,7 @@ test('classifyOutcome sends incorrect plans back for redesign', () => {
     recommendedAction: 'redesign',
   }), {
     disposition: 'redesign',
-    action: 'redesign',
+    action: 'return-to-promotion',
     cause: 'incorrect-plan',
   });
 });
@@ -594,10 +856,10 @@ test('classifyOutcome treats a worker-proven missing API as an incorrect plan', 
     workerStatus: 'blocked',
     workerBlocker: 'incorrect-plan: Pinned package does not expose the planned API',
     verification: 'fail',
-    priorAttempts: 0,
+    priorRetryCounts: {},
   }), {
     disposition: 'redesign',
-    action: 'redesign',
+    action: 'return-to-promotion',
     cause: 'incorrect-plan',
   });
 });
@@ -606,7 +868,7 @@ test('classifyOutcome escalates a repeated ambiguous worker result to a human', 
   assert.deepEqual(classifyOutcome({
     workerStatus: 'blocked',
     verification: 'fail',
-    priorAttempts: 1,
+    priorRetryCounts: { 'retry-context': 1 },
   }), {
     disposition: 'human-takeover',
     action: 'stop',
@@ -631,6 +893,22 @@ test('buildRuntimeCommand creates a writable ephemeral Codex execution', () => {
   ]);
   assert.ok(command.args.includes('--output-schema'));
   assert.ok(!command.args.includes('--model'));
+});
+
+test('buildRuntimeCommand delegates containment to an existing external sandbox', () => {
+  const command = buildRuntimeCommand({
+    runtime: 'codex',
+    root: '/repo',
+    prompt: 'do task',
+    model: 'default',
+    effort: 'high',
+    externalSandbox: true,
+  });
+
+  assert.deepEqual(command.args.slice(0, 5), [
+    'exec', '--json', '--ephemeral', '--dangerously-bypass-approvals-and-sandbox', '-C',
+  ]);
+  assert.equal(command.args.includes('--sandbox'), false);
 });
 
 test('buildRuntimeCommand creates structured Claude execution', () => {

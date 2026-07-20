@@ -49,6 +49,17 @@
     ],
     "PostToolUse": [
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PAIR_HOOK_RUNTIME=claude bash ~/.local/share/my-claude-code/hooks/pair-owner.sh",
+            "if": "Bash(*pair-*)",
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
           {
@@ -65,7 +76,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.local/share/my-claude-code/hooks/stop-gate.sh",
+            "command": "PAIR_HOOK_RUNTIME=claude bash ~/.local/share/my-claude-code/hooks/stop-gate.sh",
             "timeout": 180
           }
         ]

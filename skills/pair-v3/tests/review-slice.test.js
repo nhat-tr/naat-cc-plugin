@@ -13,20 +13,20 @@ const { validPairPlan } = require('./support/pair-plan-fixture');
 const workId = 'work-20260712-visual-companion-vnext';
 
 function reviewPlan() {
-  const lines = validPairPlan().split('\n');
-  const taskIndexes = lines
-    .map((line, index) => (/^- \[ \] Task /.test(line) ? index : -1))
-    .filter(index => index >= 0);
-  const tasks = taskIndexes.map(index => lines[index]);
-  tasks[0] = tasks[0].replace('Task 1.1 -', 'Task 1.2 -');
-  tasks[1] = tasks[1].replace('Task 1.2 -', 'Task 1.1 -');
-  tasks[2] = tasks[2]
-    .replace('[ac:AC-1]', '[ac:AC-2,AC-1]')
-    .replace('`src/greeting.js`', '`src/z-greeting.js`, `src/a-greeting.js`');
-  lines.splice(taskIndexes[0], tasks.length, ...tasks);
-  lines.splice(lines.indexOf('- [ ] AC-1: the command prints the requested greeting.') + 1, 0,
-    '- [ ] AC-2: the public greeting entry point remains covered.');
-  return lines.join('\n');
+  return validPairPlan()
+    .replace(
+      '- `src/commands/greeting.js` — existing command registration.',
+      '- `src/commands/greeting.js` — existing command registration.\n- `src/commands/alias.js` — greeting command alias.',
+    )
+    .replace(
+      'Task 1.2 - register the verified greeting behavior in the existing command table [type:feature] [tdd:covered-by 1.1] [risk:low] [scope:local] [uncertainty:low] [ac:AC-1] - files: `src/commands/greeting.js`',
+      'Task 1.2 - register the verified greeting behavior in the existing command table [type:feature] [tdd:covered-by 1.1] [risk:medium] [scope:local] [uncertainty:low] [ac:AC-1,AC-2] - files: `src/commands/greeting.js`, `src/commands/alias.js`',
+    )
+    .replace(' - **S**\n  - **Consumes:** 1.1:', ' - **M**\n  - **Consumes:** 1.1:')
+    .replace(
+      '- [ ] AC-1: the command prints the requested greeting.',
+      '- [ ] AC-1: the command prints the requested greeting.\n- [ ] AC-2: the public greeting entry point remains covered.',
+    );
 }
 
 function git(root, ...args) {
@@ -52,8 +52,9 @@ function manifestInput(t, changedFiles = {}, plan = reviewPlan()) {
   git(repositoryRoot, 'config', 'user.name', 'Review Slice Test');
   for (const relativePath of [
     'README.md',
-    'src/a-greeting.js',
-    'src/z-greeting.js',
+    'src/greeting.js',
+    'src/commands/greeting.js',
+    'src/commands/alias.js',
     'tests/greeting.test.js',
     'tests/greeting.integration.test.js',
   ]) write(repositoryRoot, relativePath, `base ${relativePath}\n`);
@@ -92,22 +93,15 @@ test('review slice manifest derives stable identity and contract fields from val
       task_id: '1.1',
       stream_id: '1',
       acceptance_criteria: ['AC-1'],
-      expected_files: ['tests/greeting.integration.test.js'],
-      verification_command: 'node --test tests/greeting.integration.test.js',
+      expected_files: ['src/greeting.js', 'tests/greeting.integration.test.js', 'tests/greeting.test.js'],
+      verification_command: 'node --test tests/greeting.test.js tests/greeting.integration.test.js',
     },
     {
       task_id: '1.2',
       stream_id: '1',
-      acceptance_criteria: ['AC-1'],
-      expected_files: ['tests/greeting.test.js'],
-      verification_command: 'node --test tests/greeting.test.js',
-    },
-    {
-      task_id: '1.3',
-      stream_id: '1',
       acceptance_criteria: ['AC-1', 'AC-2'],
-      expected_files: ['src/a-greeting.js', 'src/z-greeting.js'],
-      verification_command: 'node --test tests/greeting.test.js tests/greeting.integration.test.js',
+      expected_files: ['src/commands/alias.js', 'src/commands/greeting.js'],
+      verification_command: 'node --test tests/greeting.integration.test.js',
     },
   ]);
 
@@ -116,10 +110,15 @@ test('review slice manifest derives stable identity and contract fields from val
     () => buildReviewSliceManifest({ ...input, plan: invalidPlan }),
     /duplicate task ID 1\.1|validated Pair plan/i,
   );
-  const remappedPlan = reviewPlan().replace(
-    'files: `tests/greeting.test.js`',
-    'files: `tests/greeting.test.js`, `README.md`',
-  );
+  const remappedPlan = reviewPlan()
+    .replace(
+      'files: `src/commands/greeting.js`, `src/commands/alias.js`',
+      'files: `src/commands/greeting.js`, `src/commands/alias.js`, `README.md`',
+    )
+    .replace(
+      '- `src/commands/alias.js` — greeting command alias.',
+      '- `src/commands/alias.js` — greeting command alias.\n- `README.md` — greeting usage.',
+    );
   assert.throws(
     () => buildReviewSliceManifest({ ...input, plan: remappedPlan }),
     /plan.*digest|digest.*plan/i,
@@ -129,7 +128,7 @@ test('review slice manifest derives stable identity and contract fields from val
 test('review slice manifest canonicalizes equal tree and indexer inputs to equal bytes and digests', t => {
   const input = manifestInput(t, {
     'README.md': 'changed README\n',
-    'src/z-greeting.js': 'changed implementation\n',
+    'src/greeting.js': 'changed implementation\n',
     'tests/greeting.test.js': 'changed test\n',
   });
   const first = buildReviewSliceManifest(input);
@@ -140,7 +139,7 @@ test('review slice manifest canonicalizes equal tree and indexer inputs to equal
   assert.equal(first.bytes, second.bytes);
   assert.equal(first.digest, second.digest);
   assert.equal(first.digest, crypto.createHash('sha256').update(first.bytes).digest('hex'));
-  assert.deepEqual(first.manifest.review_slices.map(slice => slice.task_id), ['1.1', '1.2', '1.3']);
+  assert.deepEqual(first.manifest.review_slices.map(slice => slice.task_id), ['1.1', '1.2']);
   assert.throws(
     () => buildReviewSliceManifest({
       ...input,
@@ -152,22 +151,22 @@ test('review slice manifest canonicalizes equal tree and indexer inputs to equal
 
 test('review slice manifest keeps overlapping and unclaimed changes explicit without inferred clustering', t => {
   const lines = reviewPlan().split('\n');
-  const taskIndex = lines.findIndex(line => /^- \[ \] Task 1\.2 /.test(line));
+  const taskIndex = lines.findIndex(line => /^- \[ \] Task 1\.1 /.test(line));
   lines[taskIndex] = lines[taskIndex].replace(
-    'files: `tests/greeting.test.js`',
-    'files: `tests/greeting.test.js`, `src/a-greeting.js`',
+    'files: `tests/greeting.test.js`, `tests/greeting.integration.test.js`, `src/greeting.js`',
+    'files: `tests/greeting.test.js`, `tests/greeting.integration.test.js`, `src/greeting.js`, `src/commands/greeting.js`',
   );
   const result = buildReviewSliceManifest(manifestInput(t, {
     'README.md': 'changed unexpected file\n',
-    'src/a-greeting.js': 'changed shared implementation\n',
+    'src/commands/greeting.js': 'changed shared implementation\n',
   }, lines.join('\n')));
 
   assert.deepEqual(result.manifest.cross_slice_changes.map(change => ({
     path: change.path,
     claimed_by: change.claimed_by,
   })), [{
-    path: 'src/a-greeting.js',
-    claimed_by: ['1.2', '1.3'],
+    path: 'src/commands/greeting.js',
+    claimed_by: ['1.1', '1.2'],
   }]);
   assert.deepEqual(result.manifest.unmapped_changes.map(change => change.path), ['README.md']);
 });

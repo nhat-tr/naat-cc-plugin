@@ -19,7 +19,13 @@ interface StandaloneBuilder {
 
 interface LiveSessionStore {
   publishAgentReply(input: { replyTo: number; message: string }): unknown;
-  snapshot(): { events: Array<{ seq?: number; type?: string }> };
+  snapshot(): {
+    events: Array<{
+      seq?: number;
+      type?: string;
+      annotations?: Array<{ comment?: string }>;
+    }>;
+  };
 }
 
 interface BrainstormServer {
@@ -652,6 +658,63 @@ test("dense desktop history scrolls without overlapping or hiding feedback compo
 
   await history.evaluate(element => { element.scrollTop = element.scrollHeight; });
   await expect(history.getByText("Reply 30:", { exact: false })).toBeVisible();
+});
+
+test("dense desktop draft keeps the save action visible and persists every targeted note", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1_280, height: 800 });
+  const app = createBrainstormServer({
+    sessionDir: testInfo.outputPath("dense-feedback-draft-session"),
+    host: "127.0.0.1",
+    port: 0,
+    token: "dense-feedback-draft-capability",
+    sessionId: `dense-feedback-draft-${testInfo.workerIndex}-${testInfo.repeatEachIndex}`,
+    idleTimeoutMs: 60_000,
+  });
+  fs.writeFileSync(app.screenPath, `${JSON.stringify({
+    version: 1,
+    profile: "technical",
+    audience: "Software developers",
+    title: "Dense feedback draft",
+    sections: [{
+      kind: "callout",
+      id: "feedback-target",
+      title: "Feedback target",
+      body: "Collect a large targeted feedback batch without hiding its save action.",
+      tone: "accent",
+    }],
+  })}\n`, { mode: 0o600 });
+
+  try {
+    const address = await app.listen();
+    await page.goto(address.connection_url);
+    await expect(page.getByRole("heading", { name: "Dense feedback draft" })).toBeVisible();
+
+    const targetedNote = page.getByLabel("Targeted note");
+    const addTargetedNote = page.getByRole("button", { name: "Add targeted note" });
+    for (let index = 1; index <= 20; index += 1) {
+      await targetedNote.fill(`Targeted feedback ${index}`);
+      await addTargetedNote.click();
+    }
+    await expect(page.getByLabel("Pending feedback").locator(".chip-note")).toHaveCount(20);
+
+    const panel = page.getByRole("complementary", { name: "Feedback batch" });
+    const save = page.getByRole("button", { name: "Save feedback batch" });
+    const [panelBox, saveBox] = await Promise.all([panel.boundingBox(), save.boundingBox()]);
+    expect(panelBox).not.toBeNull();
+    expect(saveBox).not.toBeNull();
+    expect(saveBox!.y).toBeGreaterThanOrEqual(panelBox!.y - 1);
+    expect(saveBox!.y + saveBox!.height).toBeLessThanOrEqual(panelBox!.y + panelBox!.height + 1);
+
+    const feedbackResponse = page.waitForResponse(response => (
+      response.request().method() === "POST" && response.url().endsWith("/api/feedback")
+    ));
+    await save.click();
+    expect((await feedbackResponse).status()).toBe(201);
+    await expect.poll(() => app.store.snapshot().events
+      .find(event => event.type === "user.turn")?.annotations?.length ?? 0).toBe(20);
+  } finally {
+    await app.close("dense feedback draft test complete");
+  }
 });
 
 test("v1 import keeps a timeline Point in the full content column without overlap or horizontal overflow", async ({ page }, testInfo) => {

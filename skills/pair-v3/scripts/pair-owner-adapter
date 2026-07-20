@@ -1,0 +1,79 @@
+#!/usr/bin/env node
+
+const childProcess = require('node:child_process');
+const fs = require('node:fs');
+
+const { appendPairEvent, loadPairState } = require('./lib/pair-state');
+
+function readInput() {
+  try {
+    return JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
+  } catch {
+    return null;
+  }
+}
+
+function repositoryRoot(cwd) {
+  const result = childProcess.spawnSync('git', ['rev-parse', '--show-toplevel'], {
+    cwd,
+    encoding: 'utf8',
+  });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function isPairInvocation(command) {
+  return String(command || '')
+    .split(/(?:&&|\|\||;|\n)/u)
+    .map(segment => segment.trim())
+    .some(segment => {
+      let candidate = segment.replace(/^env\s+/u, '');
+      while (/^[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\S+)\s+/u.test(candidate)) {
+        candidate = candidate.replace(/^[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\S+)\s+/u, '');
+      }
+      return /^(?:(?:command|exec)\s+)?(?:(?:bash|node)\s+)?(?:\S*\/)?(?:pair-loop|pair-v4|pair-task)(?=\s|$)/u.test(candidate);
+    });
+}
+
+function runtimeFor(input) {
+  const configured = String(process.env.PAIR_HOOK_RUNTIME || input?.runtime || '').toLowerCase();
+  if (configured === 'codex' || configured === 'claude') return configured;
+  return process.env.CLAUDE_PROJECT_DIR || process.env.CLAUDECODE ? 'claude' : 'codex';
+}
+
+function main() {
+  const input = readInput();
+  if (
+    !input ||
+    input.hook_event_name !== 'PostToolUse' ||
+    input.tool_name !== 'Bash' ||
+    !input.session_id ||
+    !isPairInvocation(input.tool_input?.command)
+  ) return;
+  const cwd = input.cwd || input.project_dir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const root = repositoryRoot(cwd);
+  if (!root) return;
+  let state;
+  try {
+    state = loadPairState(root);
+  } catch {
+    return;
+  }
+  if (
+    state.continuation?.owner_session_id ||
+    state.continuation?.paused ||
+    state.continuation?.human_edit ||
+    ['idle', 'paused', 'blocked', 'complete'].includes(state.lifecycle)
+  ) return;
+  appendPairEvent(root, {
+    event: 'continuation.claimed',
+    workId: state.work_id,
+    attemptId: state.active?.attempt_id || null,
+    session_id: input.session_id,
+    runtime: runtimeFor(input),
+    source: 'native-post-tool-owner-capture',
+  });
+}
+
+if (require.main === module) main();
+
+module.exports = { isPairInvocation, runtimeFor };
