@@ -4,6 +4,45 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROLES = ['editor', 'coordinator', 'reviewer'];
+const SHELLS = new Set(['bash', 'dash', 'fish', 'ksh', 'sh', 'tcsh', 'zsh']);
+
+function sleepSync(ms) {
+  // Synchronous pause without spawning a process — the tmux host runs entirely on
+  // spawnSync, so this keeps the polling loop in the same execution model.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.max(0, ms));
+}
+
+function paneIsReady(pane) {
+  // A pane is ready to receive a request when its foreground process is the shell
+  // itself (or tmux reports no command yet). Any other command means a real program
+  // is running in it.
+  return Boolean(pane) && !pane.dead
+    && (!pane.command || SHELLS.has(path.basename(pane.command)));
+}
+
+function waitForPaneReady(session, paneId, role, execute, options = {}) {
+  // A freshly created pane transiently reports its shell's own startup command
+  // (observed in the wild as "mkdir") as pane_current_command, which would otherwise
+  // trip the busy check the instant ensureHost creates the panes. Poll for the shell
+  // to settle before deciding. A pane still running a real command past the window is
+  // genuinely busy and is refused rather than clobbered.
+  const timeoutMs = Number(options.timeoutMs ?? process.env.PAIR_PANE_SETTLE_TIMEOUT_MS ?? 3000);
+  const intervalMs = Number(options.intervalMs ?? 100);
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const pane = listPanes(session, execute)?.find(candidate => candidate.id === paneId);
+    if (!pane || pane.dead) {
+      throw new Error(`Pair v4 ${role} pane ${paneId} is unavailable`);
+    }
+    if (paneIsReady(pane)) return pane;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Pair v4 ${role} pane ${paneId} is busy with ${pane.command}; cancel or wait before dispatching another request`,
+      );
+    }
+    sleepSync(intervalMs);
+  }
+}
 
 function sessionNameForRoot(root) {
   const base = path.basename(path.resolve(root))
@@ -164,16 +203,10 @@ function runInPaneSync(root, role, argv, timeoutMs, options = {}) {
   const execute = options.execute || defaultExecute;
   const state = ensureHost(root, options);
   const paneId = state.panes[role];
-  const pane = listPanes(state.session, execute)?.find(candidate => candidate.id === paneId);
-  if (!pane || pane.dead) {
-    throw new Error(`Pair v4 ${role} pane ${paneId} is unavailable`);
-  }
-  const shells = new Set(['bash', 'dash', 'fish', 'ksh', 'sh', 'tcsh', 'zsh']);
-  if (pane.command && !shells.has(path.basename(pane.command))) {
-    throw new Error(
-      `Pair v4 ${role} pane ${paneId} is busy with ${pane.command}; cancel or wait before dispatching another request`,
-    );
-  }
+  waitForPaneReady(state.session, paneId, role, execute, {
+    timeoutMs: options.paneSettleTimeoutMs,
+    intervalMs: options.paneSettleIntervalMs,
+  });
 
   const channel = `pair-v4-${crypto.randomUUID()}`;
   const command = [
@@ -205,7 +238,9 @@ module.exports = {
   ensureHost,
   hostStatus,
   listPanes,
+  paneIsReady,
   runInPaneSync,
   sendKeys,
   sessionNameForRoot,
+  waitForPaneReady,
 };

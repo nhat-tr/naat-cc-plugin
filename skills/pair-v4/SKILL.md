@@ -73,6 +73,7 @@ Legacy home-directory history is optional import evidence, never authority. Miss
 - Expected files are advisory ownership evidence. Additional in-repository files stay in the patch, receive expected/cross-slice/unmapped attribution, and are reviewed on substance.
 - Hard boundaries are narrow: Pair mutable control state, the canonical active Work contract, credential or policy-forbidden paths, and paths outside the repository. A hard result names the exact path and governing rule.
 - Verification or reviewer infrastructure failure preserves code and resumes only the failed evidence phase. Green verification remains cached when review infrastructure fails.
+- The reusable Review Session self-heals. A reviewer run that never completes never persists a resumable session, and a stored session the provider can no longer resume is invalidated so the next invocation starts a fresh reviewer session instead of resuming a dead one. An unresumable session is a reviewer-environment event, never a plan or code defect.
 - A material implementation finding returns the same attempt to implementation and waits for the patch digest to change before re-verifying.
 - Pair v4 never silently restores visible coordinator work. `pair-loop --discard-attempt` previews affected paths; only the exact follow-up command with the attempt ID and `--confirm-discard` restores the pre-attempt snapshot. The discarded complete patch remains in attempt evidence.
 

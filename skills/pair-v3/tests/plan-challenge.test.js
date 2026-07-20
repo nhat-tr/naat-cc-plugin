@@ -404,6 +404,80 @@ setInterval(() => {}, 1000);
   assert.equal(metadata.stderr_bytes, 0);
 });
 
+function findReviewSessions(root) {
+  const results = [];
+  const walk = dir => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name === 'review-session.json') results.push(full);
+    }
+  };
+  const pairDir = path.join(root, '.pair');
+  if (fs.existsSync(pairDir)) walk(pairDir);
+  return results;
+}
+
+test('a reviewer run that never established a session does not persist one', async t => {
+  const fixture = challengeFixture(t, 'no-poison-on-failure');
+  // A reviewer that crashes before the provider establishes its conversation.
+  writeExecutable(path.join(fixture.fakeBin, 'claude'), `#!/usr/bin/env node
+process.stderr.write('reviewer crashed before establishing a session');
+process.exit(1);
+`);
+  const result = await spawnChallenge(fixture.root, fixture.fakeBin, fixture.scratchRoot, {
+    PAIR_PLAN_REVIEW_HEARTBEAT_MS: '60',
+    PAIR_PLAN_REVIEW_STALL_TIMEOUT_MS: '4000',
+    PAIR_PLAN_REVIEW_TIMEOUT_MS: '6000',
+  }).completed;
+  assert.notEqual(result.status, 0, 'a crashed reviewer is an environment failure');
+  assert.deepEqual(
+    findReviewSessions(fixture.root),
+    [],
+    'a merely planned session id from a failed run must not be persisted as resumable',
+  );
+});
+
+test('a challenge that cannot resume its stored reviewer session clears it and recovers', async t => {
+  const fixture = challengeFixture(t, 'stale-session-self-heal');
+  // A stored session the provider no longer knows about ("No conversation found").
+  const sessionFile = path.join(
+    pairStatePaths(fixture.root, fixture.workId).directory,
+    'review-session.json',
+  );
+  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+  fs.writeFileSync(sessionFile, `${JSON.stringify({
+    schema: 1, product: 'pair-v4', runtime: 'claude', session_id: 'stale-dead-session',
+  })}\n`);
+  // Refuses to resume the dead session but succeeds with a fresh one.
+  writeExecutable(path.join(fixture.fakeBin, 'claude'), `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.includes('--resume')) {
+  process.stderr.write('No conversation found with session ID ' + args[args.indexOf('--resume') + 1]);
+  process.exit(1);
+}
+process.stdout.write(JSON.stringify({ structured_output: { verdict: 'approve', summary: 'Fresh reviewer approved the exact digest.', findings: [] } }));
+`);
+  const first = await spawnChallenge(fixture.root, fixture.fakeBin, fixture.scratchRoot).completed;
+  assert.notEqual(first.status, 0, 'resuming a dead session fails this invocation');
+  assert.match(first.stderr, /stored reviewer session was unusable/i);
+  assert.deepEqual(
+    findReviewSessions(fixture.root),
+    [],
+    'the dead session is invalidated so the next invocation starts fresh',
+  );
+
+  const second = await spawnChallenge(fixture.root, fixture.fakeBin, fixture.scratchRoot).completed;
+  assert.equal(second.status, 0, second.stdout + second.stderr);
+  const healed = findReviewSessions(fixture.root);
+  assert.equal(healed.length, 1, 'a fresh reviewer session is recorded after recovery');
+  assert.notEqual(
+    JSON.parse(fs.readFileSync(healed[0], 'utf8')).session_id,
+    'stale-dead-session',
+    'a fresh reviewer session replaces the dead one',
+  );
+});
+
 test('interrupting a challenge terminates the reviewer and never falls back', async t => {
   const fixture = challengeFixture(t, 'interrupted-challenge');
   const reviewerPidFile = path.join(fixture.root, 'reviewer.pid');

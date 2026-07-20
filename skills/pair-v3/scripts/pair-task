@@ -1856,6 +1856,9 @@ function runReview({
     runtime,
     stdout: result.stdout || "",
     plannedSessionId: command.reviewerSessionId || null,
+    // A reviewer that never completed did not establish a resumable session; persisting
+    // its planned id would poison the reusable Review Session (see review-session.js).
+    runSucceeded: !result.error && (result.status ?? 1) === 0,
     model: reviewModel,
     effort: runtime === "claude" && anchor ? "max" : reviewEffort,
     phase: cumulative ? "cumulative-review" : anchor ? "anchor-review" : "slice-review",

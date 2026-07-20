@@ -9,6 +9,7 @@ const {
   ensureHost,
   hostStatus,
   sessionNameForRoot,
+  waitForPaneReady,
 } = require('../scripts/lib/tmux-host');
 const { runObservableCommandSync } = require('../scripts/lib/observable-command');
 const {
@@ -28,6 +29,45 @@ function fixture(t) {
   });
   return { root, session };
 }
+
+function panesExecute(commandSequence) {
+  // Mock tmux `execute`: each list-panes call yields the next pane_current_command
+  // in the sequence (repeating the last), so we can model a pane settling over time.
+  let index = 0;
+  return args => {
+    if (args[0] !== 'list-panes') return { status: 0, stdout: '' };
+    const command = commandSequence[Math.min(index, commandSequence.length - 1)];
+    index += 1;
+    const dead = command === '__dead__' ? '1' : '0';
+    const shown = command === '__dead__' ? 'zsh' : command;
+    return { status: 0, stdout: `%2\treviewer\t${dead}\t${shown}\n` };
+  };
+}
+
+test('waits for a freshly created pane to settle before dispatching', () => {
+  // The reviewer pane transiently reports its shell startup ("mkdir") right after
+  // ensureHost creates it — the failure that made the first real Pair v4 run fail.
+  const execute = panesExecute(['mkdir', 'mkdir', 'zsh']);
+  const pane = waitForPaneReady('sess', '%2', 'reviewer', execute, { timeoutMs: 2000, intervalMs: 5 });
+  assert.equal(pane.command, 'zsh', 'dispatch proceeds once the shell settles');
+});
+
+test('refuses a pane still running a real command past the settle window', () => {
+  const execute = panesExecute(['mkdir']);
+  assert.throws(
+    () => waitForPaneReady('sess', '%2', 'reviewer', execute, { timeoutMs: 60, intervalMs: 5 }),
+    /busy with mkdir/,
+    'a genuinely busy pane is refused rather than clobbered',
+  );
+});
+
+test('reports an unavailable pane distinctly from a busy one', () => {
+  const execute = panesExecute(['__dead__']);
+  assert.throws(
+    () => waitForPaneReady('sess', '%2', 'reviewer', execute, { timeoutMs: 60, intervalMs: 5 }),
+    /is unavailable/,
+  );
+});
 
 test('creates exactly three persistent panes idempotently', t => {
   if (childProcess.spawnSync('tmux', ['-V']).status !== 0) return t.skip('tmux unavailable');

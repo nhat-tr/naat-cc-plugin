@@ -32,6 +32,7 @@ const {
 const {
   buildReviewRuntimeCommand,
   readReviewSession,
+  reviewSessionFile,
   saveReviewSession,
 } = require("./lib/review-session");
 const {
@@ -636,10 +637,12 @@ async function runChallengeAttempt({
           requestKind: "plan-review",
         },
       });
+  const reviewerRunSucceeded = !run.error && (run.status ?? 1) === 0;
   saveReviewSession(root, {
     runtime,
     stdout: run.stdout || "",
     plannedSessionId: command.reviewerSessionId || null,
+    runSucceeded: reviewerRunSucceeded,
     model,
     effort,
     phase: "plan-review",
@@ -654,6 +657,20 @@ async function runChallengeAttempt({
   }
   const review = parseReview(runtime, run.stdout || "", outputPath);
   const classification = classifyChallengeAttempt({ run, review });
+  if (command.resumed && classification.kind === "environment-failure") {
+    // The stored Review Session could not be resumed (e.g. the provider no longer
+    // holds that conversation — "No conversation found with session ID"). Leaving it
+    // in place makes every later challenge resume a dead session forever. Invalidate
+    // it so the next finite invocation starts a fresh reviewer session instead.
+    try {
+      fs.rmSync(reviewSessionFile(root), { force: true });
+    } catch {
+      // Best-effort: an unwritable session file cannot block recovery.
+    }
+    console.error(
+      `pair-plan-challenge: stored reviewer session was unusable (${classification.reason}); cleared it so the next challenge starts a fresh reviewer session`,
+    );
+  }
   const usage = parseRuntimeUsage(runtime, run.stdout || "");
   if (resumeCheckpoint) {
     recordResumedTurn(root, {

@@ -119,11 +119,20 @@ function saveReviewSession(root, {
   runtime,
   stdout = '',
   plannedSessionId = null,
+  runSucceeded = true,
   model = null,
   effort = null,
   phase = null,
 }) {
-  const sessionId = observedSessionId(runtime, stdout) || plannedSessionId;
+  // A planned session id is only the id we *intended* to use; the provider
+  // establishes (and can later resume) that conversation only when the run
+  // actually completes. Persisting a planned id from a failed run poisons the
+  // reusable Review Session: every later resume then fails with "No conversation
+  // found with session ID" and hard-blocks the challenge. An observed id is real
+  // evidence the provider started the thread, so it stays trusted even on a
+  // non-zero exit; only the unconfirmed planned fallback is gated on success.
+  const sessionId = observedSessionId(runtime, stdout)
+    || (runSucceeded ? plannedSessionId : null);
   if (!sessionId) return null;
   const prior = readReviewSession(root, runtime);
   const state = {
