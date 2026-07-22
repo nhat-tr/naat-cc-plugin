@@ -14,12 +14,20 @@
     "status": "approved"
   },
   "decision_records": [
-    "docs/work/work-20260722-cold-agent-conversation-handover/decisions/DR-001-cold-agent-conversation-handover.md"
+    "docs/work/work-20260722-cold-agent-conversation-handover/decisions/DR-001-cold-agent-conversation-handover.md",
+    "docs/work/work-20260722-cold-agent-conversation-handover/decisions/DR-002-coordinated-stop-and-freshness-gate.md"
   ],
-  "decision_supersessions": [],
+  "decision_supersessions": [
+    {
+      "predecessor": "DR-001-cold-agent-conversation-handover",
+      "successor": "DR-002-coordinated-stop-and-freshness-gate"
+    }
+  ],
   "changes": [],
   "outcomes": [],
-  "evidence_records": [],
+  "evidence_records": [
+    "docs/work/work-20260722-cold-agent-conversation-handover/evidence/EVD-001-exact-acceptance-proofs.json"
+  ],
   "plan": {
     "path": ".pair/plan.md",
     "sha256": "e590e51853ee57103e9e574e739d4490476315e97ae4544fcf49af59f699dcb3",

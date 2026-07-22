@@ -22,6 +22,7 @@ const handover = require('../scripts/lib/handover-state');
 function fixture(t) {
   const base = process.env.CLAUDE_SCRATCH_DIR || path.join(os.homedir(), '.claude-scratch');
   const root = fs.mkdtempSync(path.join(base, 'pair-v4-tmux-'));
+  childProcess.spawnSync('git', ['init', '-q'], { cwd: root });
   const session = sessionNameForRoot(root);
   childProcess.spawnSync('tmux', ['kill-session', '-t', `=${session}`]);
   t.after(() => {
@@ -73,6 +74,14 @@ test('reports an unavailable pane distinctly from a busy one', () => {
 test('creates exactly three persistent panes idempotently', t => {
   if (childProcess.spawnSync('tmux', ['-V']).status !== 0) return t.skip('tmux unavailable');
   const { root, session } = fixture(t);
+  const now = Date.now();
+  handover.registerAgentConversation(root, {
+    runtime: 'codex', agentConversationId: 'tmux-live-warm', kind: 'pair', now: now - 50 * 60 * 1000,
+  });
+  handover.updateAgentConversationCheckpoint(root, {
+    runtime: 'codex', agentConversationId: 'tmux-live-warm', kind: 'pair', now,
+    checkpoint: { purpose: 'Render warm status.', currentDirection: 'Approach the deadline.', nextAction: 'Finish or hand over.' },
+  });
 
   const first = ensureHost(root);
   const second = ensureHost(root);
@@ -83,6 +92,16 @@ test('creates exactly three persistent panes idempotently', t => {
   assert.deepEqual(second.panes, first.panes);
   assert.equal(status.panes.length, 3);
   assert.deepEqual(status.panes.map(pane => pane.title).sort(), ['coordinator', 'editor', 'reviewer']);
+  const statusRight = childProcess.spawnSync(
+    'tmux', ['show-options', '-v', '-t', session, 'status-right'], { encoding: 'utf8' },
+  );
+  assert.equal(statusRight.status, 0, statusRight.stderr);
+  assert.match(statusRight.stdout, /--freshness-status/u);
+  const configuredCommand = statusRight.stdout.trim();
+  const rendered = childProcess.spawnSync('sh', ['-c', configuredCommand.slice(2, -1)], { encoding: 'utf8' });
+  assert.equal(rendered.status, 0, rendered.stderr);
+  assert.match(rendered.stdout, /codex\/pair.*warm/iu);
+  assert.match(rendered.stdout, /deadline.*checkpoint.*next safe action/iu);
   const stateFile = path.join(root, '.pair', 'tmux.json');
   assert.equal(fs.statSync(stateFile).mode & 0o077, 0);
 });

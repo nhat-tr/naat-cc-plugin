@@ -4,7 +4,7 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 
 const { loadPairState } = require('./lib/pair-state');
-const { freshnessProjection } = require('./lib/handover-state');
+const { formatFreshnessProjection, freshnessProjection } = require('./lib/handover-state');
 
 function main() {
   let input = {};
@@ -18,9 +18,15 @@ function main() {
   let state;
   try { state = loadPairState(git.stdout.trim()); } catch { return; }
   const root = git.stdout.trim();
-  const freshness = freshnessProjection(root);
+  const configuredNow = Number(process.env.PAIR_NOW_MS);
+  const freshness = freshnessProjection(
+    root,
+    Number.isFinite(configuredNow) && configuredNow >= 0 ? configuredNow : Date.now(),
+  );
   if (!state.work_id || ['idle', 'complete'].includes(state.lifecycle)) {
-    if (freshness.warning) process.stdout.write(`${freshness.warning}\n`);
+    if (freshness.conversations.length > 0 || freshness.warning) {
+      process.stdout.write(`${formatFreshnessProjection(freshness)}\n`);
+    }
     return;
   }
   const active = state.active;
@@ -32,7 +38,7 @@ function main() {
       ? `Resume attempt ${active.attempt_id}, task ${active.task_id}, exact phase ${active.phase}.`
       : `Resume target: ${state.continuation.resume_target || 'open the next Review Slice'}.`,
     `Evidence sequence ${state.sequence}; inspect with pair-loop --status.`,
-    freshness.warning || 'Freshness Gate: no registered Agent Conversation requires a handover.',
+    formatFreshnessProjection(freshness),
     state.lifecycle === 'blocked'
       ? 'Do not dispatch automatically; preserve the files and wait for the named material decision or an explicit takeover.'
       : state.continuation.human_edit

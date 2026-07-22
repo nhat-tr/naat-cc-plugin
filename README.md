@@ -31,7 +31,7 @@ The installer handles everything:
 - **Claude Code integration** — renders the global `CLAUDE.md` (with repo-path substitution) and installs manifest-driven agents, commands, and skills into `~/.claude/`
 - **CLI tools** — symlinks bundled wrappers like `aspire-logs`, `aspire-traces`, `az-pr-comments`, `kibana-logs`, `kibana-traffic`, `observability-index`, and `validate-mermaid` into `~/.local/bin/`
 - **Permissions** — merges `permissions/allow.json` into `~/.claude/settings.json`
-- **Hooks** — merges `hooks/hooks.json` into `~/.claude/settings.json`, installing the Stop-hook completion gate (`stop-gate.sh`)
+- **Hooks** — merges `hooks/hooks.json` into `~/.claude/settings.json`, installing the pre-prompt freshness gate and coordinated Stop gate
 
 Uninstall:
 
@@ -150,7 +150,10 @@ model processing and seals a bounded Agent Conversation Handover. Start a plain
 provider-affine conversation with `pair-loop --fresh-from <handover-id> --runtime auto`,
 then adopt it with `pair-loop --adopt-handover <handover-id> --runtime codex|claude`.
 Never resume or fork the source conversation. The sole explicit cost-risk recovery
-is `pair-loop --allow-cold-resume <handover-id> --once --confirm-cost-risk`.
+is `pair-loop --allow-cold-resume <handover-id> --once --confirm-cost-risk`; its
+Stop boundary retires the source behind an exact refreshed handover, which must
+then be launched and adopted. Direct adoption is the other retirement route and
+continues in the adopter.
 
 ##### Pair v4 quick start
 
@@ -173,8 +176,8 @@ of rules that instructions alone under-deliver:
 
 | Hook | Event | Does |
 |------|-------|------|
-| `handover-gate.sh` | UserPromptSubmit, Stop | Records registered Stop activity and blocks only a stale registered Agent Conversation before model processing; it never persists submitted prompts or compaction summaries. |
-| `stop-gate.sh` | Stop | Disabled by operator configuration; it emits no continuation response. |
+| `handover-gate.sh` | UserPromptSubmit | Blocks only a stale registered Agent Conversation before model processing and seals its bounded Agent Conversation Handover; it never persists submitted prompts or compaction summaries. |
+| `stop-gate.sh` | Stop | The single coordinated Stop hook: records registered activity and the latest bounded checkpoint, then continues only the Agent Conversation that owns active Pair Work. |
 | `delegation-nudge.sh` | PostToolUse (edits) | Once per session at the 8th main-session edit, reminds the model to batch mechanical remainders into a subagent (mech/haiku, general-purpose/sonnet). Opt-out `CLAUDE_DELEGATION_NUDGE=off`; threshold `CLAUDE_DELEGATION_NUDGE_AT` |
 | `commit-guard.sh` | PreToolUse (git commit) | Blocks commits containing attribution trailers (Co-Authored-By / Generated with Claude) before they run |
 | `scratch-guard.sh` | PreToolUse (Write) | Blocks writes to raw `/tmp` and throwaway `tmp-*.spec/test.*` files in repo trees; points to `$CLAUDE_SCRATCH_DIR` |
@@ -257,7 +260,7 @@ nhat-dev-toolkit/
 │   └── validate-mermaid
 ├── commands/
 ├── generated/
-├── hooks/                      Stop-hook completion gate (stop-gate.sh) + hooks.json manifest
+├── hooks/                      Pre-prompt freshness + coordinated Stop gates and hooks.json manifest
 ├── infra/
 │   ├── aspire/                 Aspire structured log + trace scripts
 │   ├── azure-devops/           Azure DevOps helpers

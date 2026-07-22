@@ -6,7 +6,9 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { chooseRoute, isDelegable } = require('../scripts/pair-task');
+const { appendPairEvent, loadPairState } = require('../scripts/lib/pair-state');
 const { validPairPlan } = require('./support/pair-plan-fixture');
+const { installedHookEnvironment } = require('./support/runtime-hook-fixture');
 
 const PAIR_TASK = path.join(__dirname, '..', 'scripts', 'pair-task');
 
@@ -275,14 +277,15 @@ test('bare pair-loop advances actionable Work from implementation through accept
 test('pair-doctor fails without a plan and passes on a valid one', t => {
   const root = testRepo(t);
   const dataDir = path.join(root, 'pair-data');
+  const hookEnv = installedHookEnvironment(t, path.dirname(root));
 
-  const missing = runPairTask(root, ['--doctor'], { PAIR_DATA_DIR: dataDir });
+  const missing = runPairTask(root, ['--doctor'], { ...hookEnv, PAIR_DATA_DIR: dataDir });
   assert.equal(missing.status, 1, missing.stdout);
   assert.match(missing.stdout, /fail plan — no \.pair\/plan\.md/);
 
   fs.mkdirSync(path.join(root, '.pair'), { recursive: true });
   fs.writeFileSync(path.join(root, '.pair', 'plan.md'), validPairPlan());
-  const healthy = runPairTask(root, ['--doctor'], { PAIR_DATA_DIR: dataDir });
+  const healthy = runPairTask(root, ['--doctor'], { ...hookEnv, PAIR_DATA_DIR: dataDir });
   assert.equal(healthy.status, 0, healthy.stdout + healthy.stderr);
   assert.match(healthy.stdout, /ok {3}plan — \.pair\/plan\.md validates/);
   assert.match(healthy.stdout, /ok {3}event store — \.pair\/events\.jsonl/);
@@ -291,6 +294,7 @@ test('pair-doctor fails without a plan and passes on a valid one', t => {
   const blockedLegacyRoot = path.join(root, 'blocked-legacy-root');
   fs.writeFileSync(blockedLegacyRoot, 'not a directory');
   const withoutLegacy = runPairTask(root, ['--doctor'], {
+    ...hookEnv,
     PAIR_DATA_DIR: path.join(blockedLegacyRoot, 'pair-data'),
   });
   assert.equal(withoutLegacy.status, 0, withoutLegacy.stdout + withoutLegacy.stderr);
@@ -304,6 +308,7 @@ test('pair-doctor accepts autonomous Codex-only execution inside the hosted sand
   fs.mkdirSync(path.join(root, '.pair'), { recursive: true });
   fs.writeFileSync(path.join(root, '.pair', 'plan.md'), validPairPlan());
   const nested = {
+    ...installedHookEnvironment(t, path.dirname(root)),
     PAIR_DATA_DIR: dataDir,
     CODEX_THREAD_ID: 'thread',
     CODEX_SANDBOX: 'seatbelt',
@@ -721,8 +726,11 @@ test('discard is an explicit preview-and-confirm operation that names and then r
   assert.ok(events.some(event => event.event === 'attempt.outcome' && event.attemptId === attemptId && event.disposition === 'discarded' && event.terminal === true));
 });
 
-test('--resume dispatches the exact saved attempt phase in the same invocation', t => {
+test('--resume dispatches the exact saved attempt phase and claims it with the native coordinator runtime', t => {
   const root = testRepo(t);
+  const fakeBin = path.join(root, 'fake-bin');
+  fs.mkdirSync(fakeBin);
+  writeExecutable(path.join(fakeBin, 'claude'), '#!/bin/sh\nexit 0\n');
   fs.mkdirSync(path.join(root, '.pair'), { recursive: true });
   fs.writeFileSync(path.join(root, '.pair', 'plan.md'), [
     '## Streams',
@@ -738,11 +746,48 @@ test('--resume dispatches the exact saved attempt phase in the same invocation',
   const paused = runPairTask(root, ['--pause'], env);
   assert.equal(paused.status, 0, paused.stdout + paused.stderr);
 
-  const resumed = runPairTask(root, ['--resume'], env);
+  const resumed = runPairTask(root, ['--resume', '--runtime', 'claude'], {
+    ...env,
+    CODEX_THREAD_ID: 'native-codex-resumer',
+    CLAUDE_CODE_SESSION_ID: '',
+    PATH: `${fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+  });
   assert.equal(resumed.status, 0, resumed.stdout + resumed.stderr);
   assert.match(resumed.stdout, new RegExp(`resumed ${attemptId}`));
   assert.match(resumed.stdout, /INLINE TASK BRIEF/);
   assert.match(resumed.stdout, /resume without another push/i);
+  assert.equal(loadPairState(root).continuation.owner_session_id, 'native-codex-resumer');
+  assert.equal(loadPairState(root).continuation.owner_runtime, 'codex');
+  assert.equal(loadPairState(root).active.phase, 'implementing', 'registration runtime files are not implementation changes');
+});
+
+test('default takeover uses native coordinator runtime while explicit takeover and status avoid eager identity resolution', t => {
+  const root = testRepo(t);
+  fs.mkdirSync(path.join(root, '.pair'), { recursive: true });
+  appendPairEvent(root, { event: 'work.opened', workId: 'work-control-runtime', phase: 'ready' });
+
+  const selfTakeover = runPairTask(root, ['--takeover', '--runtime', 'claude'], {
+    CODEX_THREAD_ID: 'native-codex-controller',
+    CLAUDE_CODE_SESSION_ID: '',
+  });
+  assert.equal(selfTakeover.status, 0, selfTakeover.stderr);
+  assert.equal(loadPairState(root).continuation.owner_session_id, 'native-codex-controller');
+  assert.equal(loadPairState(root).continuation.owner_runtime, 'codex');
+
+  const explicit = runPairTask(root, ['--takeover', 'external-claude-session', '--runtime', 'claude'], {
+    CODEX_THREAD_ID: 'native-codex-controller',
+    CLAUDE_CODE_SESSION_ID: 'also-present-but-irrelevant',
+  });
+  assert.equal(explicit.status, 0, explicit.stderr);
+  assert.equal(loadPairState(root).continuation.owner_session_id, 'external-claude-session');
+  assert.equal(loadPairState(root).continuation.owner_runtime, 'claude');
+
+  const status = runPairTask(root, ['--status', '--json'], {
+    CODEX_THREAD_ID: 'ambiguous-codex',
+    CLAUDE_CODE_SESSION_ID: 'ambiguous-claude',
+  });
+  assert.equal(status.status, 0, status.stderr);
+  assert.equal(JSON.parse(status.stdout).state.work_id, 'work-control-runtime');
 });
 
 test('accepting the last mapped Stream task closes its acceptance criterion without another attempt', t => {

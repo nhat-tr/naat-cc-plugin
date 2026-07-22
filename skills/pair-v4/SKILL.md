@@ -60,7 +60,7 @@ The Freshness Gate protects only registered Pair and brainstorming Agent Convers
 
 Use `pair-loop --fresh-from <handover-id> --runtime auto` to launch a plain provider-affine fresh conversation. In that new conversation, adopt exactly that handover with `pair-loop --adopt-handover <handover-id> --runtime codex|claude`; choosing a different provider is always explicit. Fresh launch arguments never use provider resume, continue, or fork flags.
 
-Only an explicit recovery command permits one old-conversation turn: `pair-loop --allow-cold-resume <handover-id> --once --confirm-cost-risk`. Its next Stop boundary refreshes and seals the Agent Conversation Checkpoint, then returns the source to Retired Agent Conversation status.
+Only an explicit recovery command permits one old-conversation turn: `pair-loop --allow-cold-resume <handover-id> --once --confirm-cost-risk`. Its next Stop boundary refreshes and seals the Agent Conversation Checkpoint, then returns the source to Retired Agent Conversation status; continue by launching and adopting that exact refreshed Agent Conversation Handover. Successful direct adoption is the other retirement route and continues in the adopter.
 
 ## Repository Authority
 

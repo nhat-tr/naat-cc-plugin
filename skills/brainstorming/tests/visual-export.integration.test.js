@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
+const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
@@ -20,6 +21,41 @@ function waitFor(predicate, timeoutMs = 2_000) {
     };
     tick();
   });
+}
+
+function deterministicWatcherFallback() {
+  const watchers = [];
+  const intervals = new Set();
+  return {
+    watchers,
+    intervals,
+    watch(_directory, listener) {
+      const watcher = new EventEmitter();
+      watcher.listener = listener;
+      watcher.closed = false;
+      watcher.close = () => { watcher.closed = true; };
+      watchers.push(watcher);
+      return watcher;
+    },
+    setInterval(callback, milliseconds) {
+      const handle = { callback, milliseconds, unref() {} };
+      intervals.add(handle);
+      return handle;
+    },
+    clearInterval(handle) {
+      intervals.delete(handle);
+    },
+    tick() {
+      for (const handle of [...intervals]) handle.callback();
+    },
+  };
+}
+
+function artifactVersion(files) {
+  return files.map(file => {
+    const stat = fs.statSync(file, { bigint: true });
+    return `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  }).join('|');
 }
 
 const sessionCli = path.resolve(__dirname, '../scripts/visual-session.cjs');
@@ -148,6 +184,75 @@ test('the running server maintains a live visual.html without any manual export'
   assert.equal(digest.schema, 'brainstorm-interview/v1');
   assert.equal(digest.history.events.some(event => event.message === 'Keep SSE with reconnect notes.'), true);
   assert.match(fs.readFileSync(interviewFile, 'utf8'), /## Interview/);
+});
+
+test('watcher-error fallback stays idle and exports only changed content or session state', async t => {
+  const sessionDir = createScratchDirectory(t, 'watcher-fallback-export');
+  const harness = deterministicWatcherFallback();
+  t.mock.method(console, 'error', () => {});
+  const app = createBrainstormServer({
+    sessionDir,
+    token: 'watcher-fallback-secret',
+    sessionId: 'watcher-fallback-session',
+    idleTimeoutMs: 60_000,
+    watch: harness.watch,
+    watcherSetInterval: harness.setInterval,
+    watcherClearInterval: harness.clearInterval,
+  });
+  const address = await app.listen();
+  t.after(() => app.close());
+  const artifacts = [
+    address.visual_file,
+    path.join(sessionDir, 'visual.json'),
+    path.join(sessionDir, 'visual.interview.md'),
+  ];
+  const initial = artifactVersion(artifacts);
+
+  harness.watchers[0].emit('error', new Error('simulated content watcher loss'));
+  assert.equal(harness.intervals.size, 1);
+  assert.equal([...harness.intervals][0].milliseconds, 1_000);
+  harness.watchers[1].emit('error', new Error('simulated state watcher loss'));
+  assert.equal(harness.intervals.size, 1, 'repeated watcher errors must share one fallback poller');
+  harness.tick();
+  harness.tick();
+  harness.tick();
+  assert.equal(artifactVersion(artifacts), initial, 'idle fallback polls must not rewrite live artifacts');
+
+  fs.writeFileSync(path.join(sessionDir, 'content', 'screen.json'), JSON.stringify(decisionDocument));
+  harness.watchers[0].listener('change', 'screen.json');
+  harness.tick();
+  assert.match(fs.readFileSync(address.visual_file, 'utf8'), /Transport decision/);
+  const afterContent = artifactVersion(artifacts);
+  assert.notEqual(afterContent, initial);
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(
+    artifactVersion(artifacts),
+    afterContent,
+    'watcher and fallback observations of one content change must produce one export',
+  );
+  harness.tick();
+  harness.tick();
+  assert.equal(artifactVersion(artifacts), afterContent, 'unchanged content must not be exported twice');
+
+  fs.writeFileSync(path.join(sessionDir, 'state', 'delivery-state.json'), JSON.stringify({
+    version: 1,
+    listening: true,
+    deliveredThrough: 0,
+  }));
+  harness.tick();
+  assert.equal(artifactVersion(artifacts), afterContent, 'delivery-only changes must not rewrite live artifacts');
+
+  app.store.appendBrowserTurn({ clientTurnId: 'watcher-fallback-turn', message: 'Fallback detected session state.' });
+  harness.tick();
+  assert.match(fs.readFileSync(address.visual_file, 'utf8'), /Fallback detected session state\./);
+  const afterSession = artifactVersion(artifacts);
+  assert.notEqual(afterSession, afterContent);
+  harness.tick();
+  assert.equal(artifactVersion(artifacts), afterSession, 'unchanged session state must remain idle');
+
+  await app.close();
+  assert.equal(harness.intervals.size, 0, 'closing the Visual Session must stop fallback polling');
+  assert.equal(harness.watchers.every(watcher => watcher.closed), true);
 });
 
 test('the server saves numbered standalone snapshots into the artifact directory', async t => {

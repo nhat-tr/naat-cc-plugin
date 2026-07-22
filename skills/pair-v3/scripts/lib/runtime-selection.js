@@ -33,7 +33,7 @@ function resolveRuntimeCandidates(requested, options = {}) {
 
   if (available.length === 0) throw new Error('neither codex nor claude is on PATH');
 
-  const coordinatorRuntime = (env.CLAUDECODE || env.CLAUDE_CODE)
+  const coordinatorRuntime = (env.CLAUDECODE || env.CLAUDE_CODE || env.CLAUDE_CODE_SESSION_ID)
     ? 'claude'
     : env.CODEX_THREAD_ID
       ? 'codex'

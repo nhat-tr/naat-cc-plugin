@@ -8,11 +8,10 @@ function reviewSessionFile(root) {
   return path.join(pairStatePaths(root).directory, 'review-session.json');
 }
 
-function readReviewSession(root, runtime = null, snapshotDigest = null) {
+function readReviewSession(root, runtime = null) {
   try {
     const state = JSON.parse(fs.readFileSync(reviewSessionFile(root), 'utf8'));
     if (runtime && state.runtime !== runtime) return null;
-    if (snapshotDigest && state.snapshot_digest !== snapshotDigest) return null;
     return state;
   } catch {
     return null;
@@ -124,7 +123,6 @@ function saveReviewSession(root, {
   model = null,
   effort = null,
   phase = null,
-  snapshotDigest = null,
 }) {
   // A planned session id is only the id we *intended* to use; the provider
   // establishes (and can later resume) that conversation only when the run
@@ -145,7 +143,6 @@ function saveReviewSession(root, {
     model: model || prior?.model || null,
     effort: effort || prior?.effort || null,
     last_phase: phase || prior?.last_phase || null,
-    snapshot_digest: snapshotDigest || prior?.snapshot_digest || null,
     created_at: prior?.created_at || new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };

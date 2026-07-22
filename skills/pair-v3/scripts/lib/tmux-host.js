@@ -169,6 +169,11 @@ function ensureHost(root, options = {}) {
 
   run(execute, ['set-window-option', '-t', `${session}:`, 'allow-rename', 'off']);
   run(execute, ['set-window-option', '-t', `${session}:`, 'remain-on-exit', 'on']);
+  const freshnessCommand = `#(cd ${shellQuote(resolvedRoot)} && ${shellQuote(process.execPath)} ${shellQuote(path.join(__dirname, '..', 'pair-task'))} --freshness-status 2>/dev/null)`;
+  run(execute, ['set-option', '-t', session, 'status', 'on']);
+  run(execute, ['set-option', '-t', session, 'status-interval', '5']);
+  run(execute, ['set-option', '-t', session, 'status-right-length', '240']);
+  run(execute, ['set-option', '-t', session, 'status-right', freshnessCommand]);
   for (const role of ROLES) {
     run(execute, ['select-pane', '-t', assigned[role], '-T', role]);
   }

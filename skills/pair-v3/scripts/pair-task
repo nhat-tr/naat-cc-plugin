@@ -72,8 +72,10 @@ const {
   adoptAgentConversationHandover,
   authorizeColdResume,
   derivePairCheckpoint,
+  formatFreshnessProjection,
   freshnessProjection,
   readAgentConversationHandover,
+  readAgentConversationHandoverForAdoption,
   registerAgentConversation,
   updateAgentConversationCheckpoint,
 } = require("./lib/handover-state");
@@ -121,6 +123,7 @@ function isPairRuntimeArtifact(file) {
     normalized === ".pair/test-proposal.json" ||
     normalized === ".pair/tmux.json" ||
     normalized === ".pair/review-session.json" ||
+    normalized.startsWith(".pair/handovers/") ||
     normalized.startsWith(".pair/attempts/") ||
     normalized.startsWith(".pair/runs/") ||
     normalized.startsWith(".pair/plan-reviews/");
@@ -152,6 +155,7 @@ function parseArgs(argv) {
     freshFrom: null,
     adoptHandover: null,
     allowColdResume: null,
+    brainstormCheckpoint: false,
     confirmCostRisk: false,
     allowCrossRuntimeFallback:
       process.env.PAIR_ALLOW_CROSS_RUNTIME_FALLBACK === "1",
@@ -164,6 +168,7 @@ function parseArgs(argv) {
     else if (arg === "--fresh-from") options.freshFrom = argv[++index];
     else if (arg === "--adopt-handover") options.adoptHandover = argv[++index];
     else if (arg === "--allow-cold-resume") options.allowColdResume = argv[++index];
+    else if (arg === "--brainstorm-checkpoint") options.brainstormCheckpoint = true;
     else if (arg === "--confirm-cost-risk") options.confirmCostRisk = true;
     else if (arg === "--model") options.model = argv[++index];
     else if (arg === "--effort") options.effort = argv[++index];
@@ -172,7 +177,7 @@ function parseArgs(argv) {
     else if (arg === "--inline") options.inline = true;
     else if (arg === "--complete") options.complete = true;
     else if (arg === "--doctor") options.doctor = true;
-    else if (["--host", "--attach", "--status", "--pause", "--resume", "--cancel-now", "--end-human-edit"].includes(arg))
+    else if (["--host", "--attach", "--status", "--freshness-status", "--pause", "--resume", "--cancel-now", "--end-human-edit"].includes(arg))
       options.control = arg.slice(2);
     else if (arg === "--discard-attempt") {
       options.control = "discard-attempt";
@@ -878,21 +883,29 @@ const NESTED_SESSION_ENV_KEYS = [
   "CLAUDE_CODE_BRIDGE_SESSION_ID",
   "CLAUDE_CODE_PARENT_SESSION_ID",
   "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_SESSION_ID",
+  "CLAUDE_SESSION_ID_OVERRIDE",
   "CLAUDE_CODE_ENTRYPOINT",
   "CLAUDE_CODE_EXECPATH",
   "CLAUDE_CODE_SSE_PORT",
 ];
 
-function runtimeEnv() {
+function runtimeEnv(options = {}) {
+  const sourceEnv = options.sourceEnv || process.env;
   const env = {
-    ...process.env,
-    PATH: (process.env.PATH || "")
+    ...sourceEnv,
+    PATH: (sourceEnv.PATH || "")
       .split(path.delimiter)
       .filter((entry) => entry && !entry.includes("cmux-cli-shims"))
       .join(path.delimiter),
-    PAIR_STOP_GATE: "off",
-    CLAUDE_STOP_GATE: "off",
   };
+  if (options.disableStopGate !== false) {
+    env.PAIR_STOP_GATE = "off";
+    env.CLAUDE_STOP_GATE = "off";
+  } else {
+    delete env.PAIR_STOP_GATE;
+    delete env.CLAUDE_STOP_GATE;
+  }
   for (const key of NESTED_SESSION_ENV_KEYS) delete env[key];
   return env;
 }
@@ -918,33 +931,52 @@ function freshHandoverBootstrap(handoverId, runtime) {
   return [
     `Adopt Agent Conversation Handover ${handoverId} in this fresh ${runtime} agent conversation.`,
     `Run pair-loop --adopt-handover ${handoverId} --runtime ${runtime}.`,
+    'That command prints the recovered bounded Agent Conversation Checkpoint; continue directly from its findings, confirmed choices, current direction, unresolved decisions, and next_action without requesting the old transcript.',
   ].join(" ");
 }
 
 function launchFreshAgentConversation(root, input, dependencies = {}) {
-  if (dependencies.nested ?? (isNestedCodexSandbox(process.env) || Boolean(process.env.CLAUDECODE))) {
+  const env = dependencies.env || process.env;
+  const nested = dependencies.nested ?? NESTED_SESSION_ENV_KEYS.some(key => Boolean(env[key]));
+  if (nested) {
     throw new Error("cannot launch a fresh Agent Conversation from a nested runtime");
   }
   const handover = readAgentConversationHandover(root, input.handoverId);
+  if (handover.manifest.pair_work) {
+    const referencedState = readJson(path.resolve(root, handover.manifest.pair_work.projection_path));
+    if (!referencedState) throw new Error("invalid handover Pair Work projection");
+    const inFlight = liveInFlightRequest(referencedState);
+    if (inFlight) {
+      throw new Error(`cannot launch a fresh Agent Conversation while Pair request ${inFlight.request_id || "unknown"} is in flight`);
+    }
+  }
   const requestedRuntime = input.runtime || "auto";
   const runtime = requestedRuntime === "auto"
-    ? handover.manifest.runtime
-    : resolveRuntime(requestedRuntime, { available: input.available });
+    ? resolveRuntime(handover.manifest.runtime, { available: input.available, env })
+    : resolveRuntime(requestedRuntime, { available: input.available, env });
   const args = [freshHandoverBootstrap(input.handoverId, runtime)];
+  if (Buffer.byteLength(args[0], "utf8") > 8_192) {
+    throw new Error("fresh Agent Conversation bootstrap exceeds 8,192 UTF-8 bytes");
+  }
   assertPlainFreshRuntimeCommand(runtime, args);
-  const spawn = dependencies.spawn || childProcess.spawn;
-  const child = spawn(runtime, args, {
+  const spawnSync = dependencies.spawnSync || childProcess.spawnSync;
+  const child = spawnSync(runtime, args, {
     cwd: root,
-    detached: true,
-    stdio: "ignore",
-    env: runtimeEnv(),
+    stdio: "inherit",
+    env: runtimeEnv({ sourceEnv: env, disableStopGate: false }),
   });
-  if (child?.unref) child.unref();
-  return { handoverId: input.handoverId, runtime, pid: child?.pid || null, bootstrap: args[0] };
+  if (child.error) throw new Error(runtimeDiagnostic(child));
+  if (child.status !== 0) {
+    throw new Error(`${runtime} fresh Agent Conversation exited ${child.status ?? "without status"}`);
+  }
+  return { handoverId: input.handoverId, runtime, status: child.status, bootstrap: args[0] };
 }
 
-function adoptFreshAgentConversation(root, input) {
-  return adoptAgentConversationHandover(root, input);
+function adoptFreshAgentConversation(root, input, dependencies = {}) {
+  return adoptAgentConversationHandover(root, {
+    ...input,
+    transferContinuation: dependencies.takeoverWork || takeoverWork,
+  });
 }
 
 function authorizeOneShotColdResume(root, input) {
@@ -1852,7 +1884,7 @@ function runReview({
       ? process.env.PAIR_CLAUDE_ANCHOR_MODEL || "opus"
       : process.env.PAIR_CLAUDE_REVIEW_MODEL ||
         (task.risk === "low" ? "sonnet" : "opus");
-  const reviewSession = readReviewSession(root, runtime, snapshot?.digest || null);
+  const reviewSession = readReviewSession(root, runtime);
   const fullReviewPrompt = reviewPrompt(
     task,
     base,
@@ -1949,7 +1981,6 @@ function runReview({
     model: reviewModel,
     effort: runtime === "claude" && anchor ? "max" : reviewEffort,
     phase: cumulative ? "cumulative-review" : anchor ? "anchor-review" : "slice-review",
-    snapshotDigest: snapshot?.digest || null,
   });
   const snapshotMutated = snapshot && treeDigest(snapshot.directory) !== snapshot.digest;
   const sourceMutated = snapshot
@@ -2808,21 +2839,103 @@ function queueTask(planPath, task) {
   return true;
 }
 
+function managedHookCommands(hooks, event) {
+  return (hooks?.[event] || [])
+    .flatMap(entry => entry.hooks || [])
+    .map(hook => hook.command)
+    .filter(command => typeof command === "string" && command.includes("my-claude-code/hooks/"));
+}
+
+function hookScriptPath(command, basename, env = process.env) {
+  const escaped = basename.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const match = command.match(new RegExp(`(?:^|\\s)(?:\"([^\"]*\\/${escaped})\"|'([^']*\\/${escaped})'|([^\\s\"']*\\/${escaped}))`, "u"));
+  const candidate = match?.[1] || match?.[2] || match?.[3] || null;
+  if (!candidate) return null;
+  return candidate.startsWith("~/")
+    ? path.join(env.HOME || os.homedir(), candidate.slice(2))
+    : candidate;
+}
+
+function inspectInstalledHookContract(runtime, options = {}) {
+  const env = options.env || process.env;
+  const config = runtime === "codex"
+    ? path.join(env.CODEX_HOME || path.join(env.HOME || os.homedir(), ".codex"), "hooks.json")
+    : runtime === "claude"
+      ? path.join(env.CLAUDE_HOME || path.join(env.HOME || os.homedir(), ".claude"), "settings.json")
+      : null;
+  if (!config) return { ok: false, detail: `unsupported runtime ${runtime}` };
+  const parsed = readJson(config);
+  if (!parsed) return { ok: false, detail: `missing or invalid ${config}` };
+  const hooks = parsed.hooks || parsed;
+  const prompt = managedHookCommands(hooks, "UserPromptSubmit");
+  const stop = managedHookCommands(hooks, "Stop");
+  const runtimeAssignment = new RegExp(`(?:^|\\s)PAIR_HOOK_RUNTIME=${runtime}(?:\\s|$)`, "u");
+  if (
+    prompt.length !== 1 || !prompt[0].includes("handover-gate.sh") ||
+    stop.length !== 1 || !stop[0].includes("stop-gate.sh") || stop[0].includes("handover-gate.sh") ||
+    !runtimeAssignment.test(prompt[0]) || !runtimeAssignment.test(stop[0])
+  ) {
+    return { ok: false, detail: `${runtime} installed hook contract is missing, has the wrong runtime, or is not coordinated` };
+  }
+  for (const [command, basename, event] of [
+    [prompt[0], "handover-gate.sh", "UserPromptSubmit"],
+    [stop[0], "stop-gate.sh", "Stop"],
+  ]) {
+    const script = hookScriptPath(command, basename, env);
+    try {
+      if (!script) throw new Error("path is not explicit");
+      fs.accessSync(script, fs.constants.R_OK | fs.constants.X_OK);
+      const probe = childProcess.spawnSync("bash", [script], {
+        cwd: options.root || process.cwd(),
+        encoding: "utf8",
+        env: { ...env, PAIR_HOOK_RUNTIME: runtime },
+        input: `${JSON.stringify({
+          hook_event_name: event,
+          session_id: 'pair-doctor-unregistered-probe',
+          cwd: options.root || process.cwd(),
+        })}\n`,
+      });
+      if (probe.status !== 0) throw new Error(`probe exited ${probe.status}`);
+      if (probe.stderr || probe.stdout) throw new Error('probe emitted output for an unregistered Agent Conversation');
+    } catch (error) {
+      return { ok: false, detail: `${runtime} ${basename} is broken: ${error.message}` };
+    }
+  }
+  return { ok: true, detail: `${runtime} UserPromptSubmit and coordinated Stop hooks are installed` };
+}
+
 // Preflight: check every environmental invariant the loop depends on and report
 // ok/warn/fail lines instead of letting a broken link surface an hour later as a
 // generic environment-failure. Returns the number of failing checks.
+function freshnessDoctorLevel(freshness) {
+  if (freshness?.unavailable) return 'fail';
+  return freshness?.warning ? 'warn' : 'ok';
+}
+
 function runDoctor(root, options = {}) {
   const results = [];
   const report = (level, name, detail) => results.push({ level, name, detail });
   let doctorWorkId = null;
 
   report("ok", "git repository", root);
-  const freshness = freshnessProjection(root);
+  const freshness = freshnessProjection(root, freshnessNow());
   report(
-    freshness.warning ? "warn" : "ok",
+    freshnessDoctorLevel(freshness),
     "Freshness Gate",
-    freshness.warning || "no registered Agent Conversation requires a handover",
+    formatFreshnessProjection(freshness, { compact: true }),
   );
+
+  const doctorRuntimes = options.runtime && options.runtime !== "auto"
+    ? [options.runtime]
+    : ["codex", "claude"].filter(commandExists);
+  for (const runtime of doctorRuntimes) {
+    const hookContract = inspectInstalledHookContract(runtime, { root });
+    report(
+      hookContract.ok ? "ok" : "fail",
+      "Freshness Gate hook installation",
+      hookContract.detail,
+    );
+  }
 
   const pairPlan = path.join(root, ".pair", "plan.md");
   const loopPlan = path.join(root, ".claude-loop.md");
@@ -3004,12 +3117,6 @@ function runDoctor(root, options = {}) {
     }
   }
 
-  if (!commandExists("jq"))
-    report(
-      "warn",
-      "jq",
-      "not on PATH; the stop-gate hook stays inert without it",
-    );
   const verifyScript = path.join(root, ".pair", "verify.sh");
   if (
     fs.existsSync(verifyScript) &&
@@ -3771,7 +3878,7 @@ function runOne(root, runtime, options, paths) {
   attempt.root = root;
   attempt.phase = "implementing";
   attempt.role = "coordinator";
-  attempt.sessionId = process.env.CODEX_THREAD_ID || process.env.CLAUDE_SESSION_ID || null;
+  attempt.sessionId = coordinatorSessionId();
   if (!options.dryRun) activateTask(paths.plan, task);
   let snapshot;
   try {
@@ -3978,11 +4085,66 @@ function runOne(root, runtime, options, paths) {
   });
 }
 
+function coordinatorIdentity(env = process.env) {
+  const codexId = String(env.CODEX_THREAD_ID || "").trim();
+  const claudeId = env.CLAUDE_CODE_SESSION_ID;
+  const normalizedClaudeId = String(claudeId || "").trim();
+  if (codexId && normalizedClaudeId) {
+    throw new Error("ambiguous native Agent Conversation identity: both Codex and Claude identities are set");
+  }
+  if (codexId) {
+    return { runtime: "codex", agentConversationId: codexId };
+  }
+  if (normalizedClaudeId) {
+    return { runtime: "claude", agentConversationId: normalizedClaudeId };
+  }
+  return null;
+}
+
 function coordinatorSessionId() {
-  return process.env.CODEX_THREAD_ID ||
-    process.env.CLAUDE_SESSION_ID ||
-    process.env.CLAUDE_SESSION_ID_OVERRIDE ||
-    null;
+  return coordinatorIdentity()?.agentConversationId || null;
+}
+
+function runtimeForNativeConversation(requested, identity) {
+  if (!identity) throw new Error("operation requires a native Agent Conversation identity");
+  const runtime = requested === "auto" ? identity.runtime : requested;
+  if (!['codex', 'claude'].includes(runtime)) throw new Error(`unsupported runtime ${runtime}`);
+  if (runtime !== identity.runtime) {
+    throw new Error(`--runtime ${runtime} does not match the active ${identity.runtime} Agent Conversation`);
+  }
+  return runtime;
+}
+
+function recordBrainstormCheckpoint(root, options, input = null) {
+  const identity = coordinatorIdentity();
+  const runtime = runtimeForNativeConversation(options.runtime, identity);
+  let checkpoint = input;
+  if (checkpoint === null) {
+    try {
+      checkpoint = JSON.parse(fs.readFileSync(0, "utf8") || "null");
+    } catch {
+      throw new Error("--brainstorm-checkpoint requires one JSON object on stdin");
+    }
+  }
+  if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
+    throw new Error("--brainstorm-checkpoint requires one JSON object on stdin");
+  }
+  registerAgentConversation(root, {
+    runtime,
+    agentConversationId: identity.agentConversationId,
+    kind: "brainstorming",
+  });
+  return updateAgentConversationCheckpoint(root, {
+    runtime,
+    agentConversationId: identity.agentConversationId,
+    kind: "brainstorming",
+    checkpoint,
+  });
+}
+
+function freshnessNow() {
+  const configured = Number(process.env.PAIR_NOW_MS);
+  return Number.isFinite(configured) && configured >= 0 ? configured : Date.now();
 }
 
 function discardActiveAttempt(root, options) {
@@ -4050,6 +4212,13 @@ function discardActiveAttempt(root, options) {
 
 function runControl(root, options) {
   const control = options.control;
+  if (control === "freshness-status") {
+    console.log(formatFreshnessProjection(
+      freshnessProjection(root, freshnessNow()),
+      { compact: true },
+    ));
+    return;
+  }
   if (control === "host") {
     const state = ensureHost(root);
     console.log(options.json ? JSON.stringify(state, null, 2) : `pair-v4: host ${state.session} ready (editor ${state.panes.editor}, coordinator ${state.panes.coordinator}, reviewer ${state.panes.reviewer})`);
@@ -4057,6 +4226,7 @@ function runControl(root, options) {
   }
   if (control === "attach") {
     const state = ensureHost(root);
+    console.log(formatFreshnessProjection(freshnessProjection(root, freshnessNow())));
     const args = process.env.TMUX
       ? ["switch-client", "-t", `=${state.session}`]
       : ["attach-session", "-t", `=${state.session}`];
@@ -4066,7 +4236,7 @@ function runControl(root, options) {
   }
   if (control === "status") {
     const state = loadPairState(root);
-    const freshness = freshnessProjection(root);
+    const freshness = freshnessProjection(root, freshnessNow());
     const host = hostStatus(root, { freshness });
     if (options.json) {
       console.log(JSON.stringify({ state, freshness, host }, null, 2));
@@ -4081,7 +4251,7 @@ function runControl(root, options) {
         `Coordinator owner: ${state.continuation.owner_session_id || "unclaimed"}`,
         `Review Session: ${active?.reviewer_session_id || readReviewSession(root)?.session_id || "none"}`,
         `Host: ${host.exists ? `${host.session} (${host.panes.length} panes)` : "not started"}`,
-        `Freshness Gate: ${freshness.warning || "no registered Agent Conversation requires a handover"}`,
+        formatFreshnessProjection(freshness),
       ].join("\n"));
     }
     return;
@@ -4094,15 +4264,21 @@ function runControl(root, options) {
     return;
   }
   if (control === "resume") {
-    const state = resumeWork(root, coordinatorSessionId(), options.runtime === "auto" ? null : options.runtime);
+    const identity = coordinatorIdentity();
+    const state = resumeWork(
+      root,
+      identity?.agentConversationId || null,
+      identity?.runtime || (options.runtime === "auto" ? null : options.runtime),
+    );
     console.log(`pair-v4: resumed ${state.active?.attempt_id || state.work_id || "Work"} at ${state.lifecycle}`);
     return;
   }
   if (control === "takeover") {
+    const identity = options.controlValue ? null : coordinatorIdentity();
     const state = takeoverWork(
       root,
-      options.controlValue || coordinatorSessionId(),
-      options.runtime === "auto" ? null : options.runtime,
+      options.controlValue || identity?.agentConversationId,
+      identity?.runtime || (options.runtime === "auto" ? null : options.runtime),
     );
     console.log(`pair-v4: continuation ownership transferred to ${state.continuation.owner_session_id}`);
     return;
@@ -4141,12 +4317,24 @@ function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     console.log(
-      "Usage: pair-task [--runtime codex|claude|auto] [--fresh-from HANDOVER_ID|--adopt-handover HANDOVER_ID|--allow-cold-resume HANDOVER_ID --once --confirm-cost-risk] [--host|--attach|--status [--json]|--pause|--resume|--takeover [SESSION]|--cancel-now|--discard-attempt [ATTEMPT] [--confirm-discard]|--begin-human-edit plan|code|--end-human-edit|--steer MESSAGE] [--allow-cross-runtime-fallback] [--model MODEL] [--effort LEVEL] [--once] [--inline] [--complete] [--doctor] [--dry-run] [--no-independent-review] [--advisory-review] [--hitl] [--approve-tests all|1,3|none] [--max-attempts N] [--max-work-attempts N] [--max-final-reviews N] [--legacy-v3]",
+      "Usage: pair-task [--runtime codex|claude|auto] [--fresh-from HANDOVER_ID|--adopt-handover HANDOVER_ID|--allow-cold-resume HANDOVER_ID --once --confirm-cost-risk|--brainstorm-checkpoint] [--host|--attach|--status [--json]|--freshness-status|--pause|--resume|--takeover [SESSION]|--cancel-now|--discard-attempt [ATTEMPT] [--confirm-discard]|--begin-human-edit plan|code|--end-human-edit|--steer MESSAGE] [--allow-cross-runtime-fallback] [--model MODEL] [--effort LEVEL] [--once] [--inline] [--complete] [--doctor] [--dry-run] [--no-independent-review] [--advisory-review] [--hitl] [--approve-tests all|1,3|none] [--max-attempts N] [--max-work-attempts N] [--max-final-reviews N] [--legacy-v3]",
     );
     return;
   }
-  const root = gitRoot();
   const handoverCommands = [options.freshFrom, options.adoptHandover, options.allowColdResume].filter(Boolean);
+  if (options.brainstormCheckpoint && (handoverCommands.length > 0 || options.control)) {
+    fail("--brainstorm-checkpoint cannot be combined with Agent Conversation Handover or control modes");
+  }
+  const root = gitRoot();
+  if (options.brainstormCheckpoint) {
+    try {
+      const recorded = recordBrainstormCheckpoint(root, options);
+      console.log(`pair-loop: brainstorming Agent Conversation Checkpoint r${recorded.revision} recorded`);
+    } catch (error) {
+      fail(error.message);
+    }
+    return;
+  }
   if (handoverCommands.length > 1) fail("choose exactly one Agent Conversation Handover command");
   if (options.freshFrom) {
     try {
@@ -4161,24 +4349,38 @@ function main() {
     return;
   }
   if (options.adoptHandover || options.allowColdResume) {
-    const agentConversationId = coordinatorSessionId();
-    if (!agentConversationId) fail("Agent Conversation adoption requires a native conversation identity");
     let handoverRuntime;
     try {
-      handoverRuntime = resolveRuntime(options.runtime);
+      const identity = coordinatorIdentity();
+      if (!identity) throw new Error("Agent Conversation adoption requires a native conversation identity");
+      handoverRuntime = runtimeForNativeConversation(options.runtime, identity);
       if (options.adoptHandover) {
+        if (options.runtime === "auto") {
+          const handover = readAgentConversationHandoverForAdoption(root, options.adoptHandover, {
+            runtime: identity.runtime,
+            agentConversationId: identity.agentConversationId,
+          });
+          if (handover.manifest.runtime !== handoverRuntime) {
+            throw new Error(`cross-provider adoption from ${handover.manifest.runtime} to ${handoverRuntime} requires explicit --runtime ${handoverRuntime}`);
+          }
+        }
         const adopted = adoptFreshAgentConversation(root, {
           handoverId: options.adoptHandover,
           runtime: handoverRuntime,
-          agentConversationId,
+          agentConversationId: identity.agentConversationId,
         });
-        takeoverWork(root, agentConversationId, handoverRuntime);
-        console.log(`pair-loop: adopted Agent Conversation Handover ${adopted.handoverId}`);
+        console.log(JSON.stringify({
+          status: 'adopted',
+          message: `pair-loop: adopted Agent Conversation Handover ${adopted.handoverId}`,
+          handover_id: adopted.handoverId,
+          checkpoint: adopted.checkpoint,
+          recovery_instruction: 'Continue directly from checkpoint.next_action using its bounded findings and confirmed choices; do not request the old transcript.',
+        }, null, 2));
       } else {
         const authorized = authorizeOneShotColdResume(root, {
           handoverId: options.allowColdResume,
           runtime: handoverRuntime,
-          agentConversationId,
+          agentConversationId: identity.agentConversationId,
           once: options.once,
           confirmCostRisk: options.confirmCostRisk,
         });
@@ -4218,6 +4420,12 @@ function main() {
       }`,
     );
     return;
+  }
+  let nativeCoordinator = null;
+  try {
+    nativeCoordinator = coordinatorIdentity();
+  } catch (error) {
+    fail(error.message);
   }
   let runtime;
   try {
@@ -4334,22 +4542,22 @@ function main() {
       if (persisted.continuation.paused) {
         fail(`Work is paused at ${persisted.continuation.resume_target || "ready"}; use --resume before dispatch`);
       }
-      if (coordinatorSessionId()) {
+      if (nativeCoordinator) {
         appendPairEvent(root, {
           event: "continuation.claimed",
           workId: canonicalLinkage?.workId || null,
           attemptId: persisted.active?.attempt_id || null,
-          session_id: coordinatorSessionId(),
-          runtime,
+          session_id: nativeCoordinator.agentConversationId,
+          runtime: nativeCoordinator.runtime,
         });
         registerAgentConversation(root, {
-          runtime,
-          agentConversationId: coordinatorSessionId(),
+          runtime: nativeCoordinator.runtime,
+          agentConversationId: nativeCoordinator.agentConversationId,
           kind: "pair",
         });
         updateAgentConversationCheckpoint(root, {
-          runtime,
-          agentConversationId: coordinatorSessionId(),
+          runtime: nativeCoordinator.runtime,
+          agentConversationId: nativeCoordinator.agentConversationId,
           kind: "pair",
           checkpoint: derivePairCheckpoint(root),
         });
@@ -4421,10 +4629,13 @@ module.exports = {
   chooseRoute,
   clearTestProposal,
   endActivePairLoop,
+  coordinatorIdentity,
   finalGateFailureCapStatus,
   finalReviewCapStatus,
   finalizePairPlan,
+  freshnessDoctorLevel,
   hitlGate,
+  inspectInstalledHookContract,
   isDelegable,
   isExpectedFailingTestTask,
   liveInFlightRequest,
@@ -4432,6 +4643,7 @@ module.exports = {
   parseArgs,
   parseWorkerResult,
   readTestProposal,
+  recordBrainstormCheckpoint,
   readWorkLinkage,
   redWorkerPrompt,
   reconcileOrphanedAttempts,

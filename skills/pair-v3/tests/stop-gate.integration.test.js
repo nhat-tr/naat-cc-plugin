@@ -6,6 +6,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const hook = path.resolve(__dirname, '../../../hooks/stop-gate.sh');
+const stopAdapter = path.resolve(__dirname, '../scripts/pair-stop-adapter');
 const ownerAdapter = path.resolve(__dirname, '../scripts/pair-owner-adapter');
 const orientAdapter = path.resolve(__dirname, '../scripts/pair-orient');
 const { appendPairEvent, loadPairState } = require('../scripts/lib/pair-state');
@@ -70,23 +71,48 @@ function orient(root, sessionId = 'orient-session') {
   });
 }
 
-test('disabled Stop gate leaves both owning and unrelated Codex and Claude sessions unblocked', t => {
+test('coordinated Stop gate continues only the owning Codex and Claude conversations', t => {
   const root = fixture(t);
-  assert.equal(invoke(root, 'codex', 'owner-session'), null);
+  const codexOwner = invoke(root, 'codex', 'owner-session');
+  assert.equal(codexOwner.decision, 'block');
+  assert.match(codexOwner.reason, /Pair v4 continuation owns this chat/u);
   assert.equal(invoke(root, 'codex', 'other-codex'), null);
   takeoverWork(root, 'claude-owner', 'claude');
-  assert.equal(invoke(root, 'claude', 'claude-owner'), null);
+  const claudeOwner = invoke(root, 'claude', 'claude-owner');
+  assert.equal(claudeOwner.decision, 'block');
+  assert.match(claudeOwner.reason, /Pair v4 continuation owns this chat/u);
   assert.equal(invoke(root, 'claude', 'other-claude'), null);
 });
 
-test('disabled Stop gate emits no native blocking response shape', t => {
+test('coordinated Stop gate emits each provider native blocking response shape', t => {
   const root = fixture(t);
   const codex = invoke(root, 'codex', 'owner-session');
-  assert.equal(codex, null);
+  assert.deepEqual(Object.keys(codex).sort(), ['decision', 'reason']);
+  assert.equal(codex.decision, 'block');
 
   takeoverWork(root, 'claude-owner', 'claude');
   const claude = invoke(root, 'claude', 'claude-owner', { stop_hook_active: true });
-  assert.equal(claude, null);
+  assert.deepEqual(Object.keys(claude).sort(), ['decision', 'reason']);
+  assert.equal(claude.decision, 'block');
+});
+
+test('Stop adapter keeps empty malformed and unrelated hook input byte-inert', t => {
+  const root = fixture(t);
+  for (const input of ['{}\n', '{malformed\n', `${JSON.stringify({
+    cwd: root,
+    session_id: 'owner-session',
+    hook_event_name: 'PostToolUse',
+  })}\n`]) {
+    const result = childProcess.spawnSync(process.execPath, [stopAdapter], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, PAIR_HOOK_RUNTIME: 'codex' },
+      input,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '');
+  }
 });
 
 test('Claude captures ownership from the exact Pair Bash invocation, not an unrelated command', t => {
@@ -102,7 +128,7 @@ test('Claude captures ownership from the exact Pair Bash invocation, not an unre
   const captured = captureOwner(root, 'claude-pair-owner', 'PAIR_RUNTIME=auto pair-loop --runtime auto');
   assert.equal(captured.status, 0, captured.stderr);
   assert.equal(loadPairState(root).continuation.owner_session_id, 'claude-pair-owner');
-  assert.equal(invoke(root, 'claude', 'claude-pair-owner'), null);
+  assert.equal(invoke(root, 'claude', 'claude-pair-owner').decision, 'block');
   assert.equal(invoke(root, 'claude', 'unrelated-session'), null);
 });
 
@@ -133,16 +159,16 @@ test('orientation names a material blocker without telling a new session to adva
   assert.doesNotMatch(result.stdout, /advance only the saved phase/i);
 });
 
-test('disabled Stop gate never emits continuation instructions despite evidence progress', t => {
+test('owning Stop gate keeps emitting continuation instructions across evidence progress', t => {
   const root = fixture(t);
   for (let index = 0; index < 10; index++) {
-    assert.equal(invoke(root, 'codex', 'owner-session'), null);
+    assert.equal(invoke(root, 'codex', 'owner-session').decision, 'block');
   }
   appendPairEvent(root, {
     event: 'phase.progressed', attemptId: '1.1-stop', taskId: '1.1', phase: 'verifying',
     evidence_digest: 'a'.repeat(64),
   });
-  assert.equal(invoke(root, 'codex', 'owner-session'), null);
+  assert.equal(invoke(root, 'codex', 'owner-session').decision, 'block');
 });
 
 test('hook infrastructure failure never deletes or rewrites the durable phase', t => {

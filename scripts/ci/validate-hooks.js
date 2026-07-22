@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Validate hooks.json schema.
+ * Validate hooks.json schema and coordinated handover topology.
  */
 
 const fs = require('fs');
@@ -19,6 +19,34 @@ function validateHookEntry(hook, label) {
 
   if (!hook.command || (typeof hook.command !== 'string' && !Array.isArray(hook.command))) {
     console.error(`ERROR: ${label} missing or invalid 'command' field`);
+    hasErrors = true;
+  }
+
+  return hasErrors;
+}
+
+function managedHookCommands(hooks, eventType) {
+  return (hooks[eventType] || [])
+    .flatMap(matcher => Array.isArray(matcher.hooks) ? matcher.hooks : [])
+    .map(hook => hook.command)
+    .filter(command => typeof command === 'string' && command.includes('my-claude-code/hooks/'));
+}
+
+function validateHandoverTopology(hooks) {
+  let hasErrors = false;
+  const promptCommands = managedHookCommands(hooks, 'UserPromptSubmit');
+  const stopCommands = managedHookCommands(hooks, 'Stop');
+
+  if (promptCommands.length !== 1 || !promptCommands[0].includes('handover-gate.sh')) {
+    console.error('ERROR: UserPromptSubmit must have exactly one managed handover-gate hook');
+    hasErrors = true;
+  }
+  if (
+    stopCommands.length !== 1 ||
+    !stopCommands[0].includes('stop-gate.sh') ||
+    stopCommands[0].includes('handover-gate.sh')
+  ) {
+    console.error('ERROR: Stop must have exactly one coordinated managed Stop hook');
     hasErrors = true;
   }
 
@@ -80,6 +108,8 @@ function validateHooks() {
     console.error('ERROR: hooks.json must be an object with event type keys');
     process.exit(1);
   }
+
+  if (validateHandoverTopology(hooks)) hasErrors = true;
 
   if (hasErrors) process.exit(1);
   console.log(`Validated ${totalMatchers} hook matchers`);

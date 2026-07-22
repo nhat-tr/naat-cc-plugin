@@ -150,7 +150,7 @@ _Domain glossary for the brainstorming skill's Visual Companion (`skills/brainst
 
 **Cold Agent Conversation** — a registered Codex or Claude agent conversation whose deterministic idle age has reached the configured freshness policy; the classification does not assert that the provider actually evicted its cache.
 - Aliases to avoid: "cold session", "expired session", "cache-evicted conversation" — the first is ambiguous, and the latter two claim provider state the toolkit cannot observe.
-- Relations: stopped by the **Freshness Gate**; supplies an **Agent Conversation Handover** to a fresh agent conversation; becomes a **Retired Agent Conversation** after adoption.
+- Relations: stopped by the **Freshness Gate**; supplies an **Agent Conversation Handover** to a fresh agent conversation; becomes a **Retired Agent Conversation** after direct adoption or after its one authorized cold-resume turn seals a refreshed handover.
 
 **Agent Conversation Checkpoint** — the bounded semantic state needed to preserve current intent, evidence, decisions, unresolved questions, and the next action while an agent conversation is still warm.
 - Aliases to avoid: "conversation summary", "transcript snapshot" — both imply unbounded or raw conversation content rather than approved semantic state.
@@ -164,9 +164,9 @@ _Domain glossary for the brainstorming skill's Visual Companion (`skills/brainst
 - Aliases to avoid: "cache check", "token warning" — cache state is not observable, and a warning does not enforce the boundary.
 - Relations: classifies a **Cold Agent Conversation** from idle age; blocks it before model processing; remains inert for unregistered agent conversations.
 
-**Retired Agent Conversation** — a source agent conversation whose Agent Conversation Handover was adopted and which may no longer continue automatically.
+**Retired Agent Conversation** — a source agent conversation whose current Agent Conversation Handover was either adopted or replaced by the refreshed handover sealed at the Stop boundary of its one authorized cold-resume turn; the source may no longer continue automatically.
 - Aliases to avoid: "dead session", "completed Work" — retirement concerns conversation continuation, not process liveness or Work outcome.
-- Relations: created by successful handover adoption; remains distinct from paused, blocked, or complete Pair Work.
+- Relations: created by successful handover adoption or successful one-shot checkpoint refresh; after adoption, continue in the adopter, while after refresh, launch and adopt the exact refreshed Agent Conversation Handover; remains distinct from paused, blocked, or complete Pair Work.
 
 **Visual Session** — the lifetime of one companion server instance: its session directory, capability token, Session Store, and CLI lifecycle (scaffold, start, publish, wait, drain, reply, status, export, stop).
 - Aliases to avoid: unqualified "session" — see Ambiguity A.

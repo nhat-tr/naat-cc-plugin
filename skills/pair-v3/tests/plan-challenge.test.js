@@ -26,6 +26,7 @@ const {
 const { planContractDigest } = require('../scripts/lib/pair-core');
 const { pairStatePaths } = require('../scripts/lib/pair-state');
 const { validPairPlan } = require('./support/pair-plan-fixture');
+const { installedHookEnvironment } = require('./support/runtime-hook-fixture');
 
 const PAIR_TASK = path.resolve(__dirname, '../scripts/pair-task');
 
@@ -673,6 +674,7 @@ test('one Pair invocation migrates a Work-bound legacy ledger while automaticall
   const dataDir = path.join(fixture.root, 'pair-data');
   const blockedHome = path.join(fixture.root, 'blocked-home');
   const runtimeLog = path.join(fixture.scratchRoot, 'automatic-plan-gate.log');
+  const hookEnv = installedHookEnvironment(t, fixture.scratchRoot);
   fs.writeFileSync(blockedHome, 'not a directory');
   fs.writeFileSync(
     path.join(fixture.root, '.pair', 'ledger-bindings.json'),
@@ -703,6 +705,7 @@ process.stdout.write('{"type":"turn.completed"}\\n');
       encoding: 'utf8',
       env: {
         ...process.env,
+        ...hookEnv,
         CODEX_THREAD_ID: '',
         CODEX_SANDBOX: '',
         CLAUDECODE: '',

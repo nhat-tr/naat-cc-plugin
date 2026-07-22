@@ -88,16 +88,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PAIR_HOOK_RUNTIME=claude bash ~/.local/share/my-claude-code/hooks/handover-gate.sh",
-            "timeout": 30
-          }
-        ]
-      },
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
             "command": "PAIR_HOOK_RUNTIME=claude bash ~/.local/share/my-claude-code/hooks/stop-gate.sh",
             "timeout": 180
           }

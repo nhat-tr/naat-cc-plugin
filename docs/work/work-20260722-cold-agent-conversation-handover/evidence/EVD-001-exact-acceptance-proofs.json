@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "id": "EVD-001-exact-acceptance-proofs",
+  "work_id": "work-20260722-cold-agent-conversation-handover",
+  "kind": "exact-acceptance-proofs",
+  "acceptance_criteria": [
+    "AC-1",
+    "AC-2",
+    "AC-3",
+    "AC-4",
+    "AC-5",
+    "AC-6",
+    "AC-7",
+    "AC-8",
+    "AC-9",
+    "AC-10",
+    "AC-11",
+    "AC-12",
+    "AC-13"
+  ],
+  "decision_record_ids": [
+    "DR-002-coordinated-stop-and-freshness-gate"
+  ],
+  "source": "scripts/ci/validate-handover-proofs.js",
+  "recorded_at": "2026-07-22T09:13:19Z",
+  "result": {
+    "status": "passed_with_operator_exclusion",
+    "exact_proofs": {
+      "command": "node scripts/ci/validate-handover-proofs.js",
+      "acceptance_mappings_passed": 13,
+      "exact_clauses_passed": 59,
+      "failed": 0,
+      "skipped_by_runner": 0
+    },
+    "repository_validation": {
+      "pair_without_tmux": {
+        "status": "passed",
+        "passed": 300,
+        "failed": 0
+      },
+      "brainstorming": {
+        "command": "npm run test:brainstorming",
+        "status": "passed"
+      },
+      "runtime_assets_hooks_and_wrappers": "passed",
+      "infra_typecheck": "passed",
+      "observability_index": {
+        "passed": 26,
+        "failed": 0,
+        "preexisting_integration_skips": 13
+      },
+      "diff_check": "passed"
+    },
+    "operator_exclusion": {
+      "authority": "user",
+      "scope": "tmux-specific warning and attach-output testing",
+      "effect": "The tmux test file was not executed; non-tmux status, orientation, doctor, hook, Codex, and Claude clauses passed."
+    }
+  }
+}

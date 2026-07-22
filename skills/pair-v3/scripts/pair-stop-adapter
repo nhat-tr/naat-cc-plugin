@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { loadPairState } = require('./lib/pair-state');
+const { recordAgentConversationStop } = require('./lib/handover-state');
 
 function readInput() {
   try {
@@ -38,34 +39,72 @@ function continuationReason(state) {
 }
 
 function response(runtime, reason) {
-  return runtime === 'claude'
-    ? { decision: 'block', reason }
-    : { continue: false, stopReason: reason };
+  return { decision: 'block', reason };
+}
+
+function hardStopResponse(reason) {
+  return { continue: false, stopReason: reason };
+}
+
+function continuationResponse(root, input, runtime = runtimeFor(input)) {
+  const pairDirectory = path.join(root, '.pair');
+  const hasAuthority = [
+    path.join(pairDirectory, 'events.jsonl'),
+    path.join(pairDirectory, 'current-run.json'),
+    path.join(pairDirectory, 'runs'),
+  ].some(candidate => fs.existsSync(candidate));
+  if (!hasAuthority) return null;
+  let state;
+  try {
+    state = loadPairState(root);
+  } catch {
+    return null;
+  }
+  const owner = state.continuation?.owner_session_id;
+  if (!owner || !input.session_id || owner !== input.session_id) return null;
+  if (
+    state.continuation.paused ||
+    state.continuation.human_edit ||
+    ['idle', 'paused', 'blocked', 'complete'].includes(state.lifecycle)
+  ) return null;
+  return response(runtime, continuationReason(state));
 }
 
 function main() {
   if (process.env.PAIR_STOP_GATE === 'off' || process.env.CLAUDE_STOP_GATE === 'off') return;
   const input = readInput();
-  if (!input || input.hook_event_name && !['Stop', 'SubagentStop'].includes(input.hook_event_name)) return;
+  if (!input || input.hook_event_name !== 'Stop' || !String(input.session_id || '').trim()) return;
   const cwd = input.cwd || input.project_dir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const root = repositoryRoot(cwd);
   if (!root) return;
-  let state;
+  const runtime = runtimeFor(input);
+  let recorded;
   try {
-    state = loadPairState(root);
-  } catch {
+    recorded = recordAgentConversationStop(root, {
+      runtime,
+      agentConversationId: input.session_id,
+      kind: input.agent_conversation_kind || 'pair',
+      now: input.now,
+    });
+  } catch (error) {
+    const checkpointFailure = /checkpoint|not consumed/iu.test(error.message || '');
+    const reason = checkpointFailure
+      ? 'Freshness Gate stopped this turn without scheduling another old-conversation prompt: refresh the Agent Conversation Checkpoint during the one authorized turn before Stop.'
+      : 'Freshness Gate stopped this registered Agent Conversation because its handover state is invalid.';
+    process.stdout.write(`${JSON.stringify(hardStopResponse(reason))}\n`);
     return;
   }
-  const owner = state.continuation?.owner_session_id;
-  if (!owner || !input.session_id || owner !== input.session_id) return;
-  if (
-    state.continuation.paused ||
-    state.continuation.human_edit ||
-    ['idle', 'paused', 'blocked', 'complete'].includes(state.lifecycle)
-  ) return;
-  process.stdout.write(`${JSON.stringify(response(runtimeFor(input), continuationReason(state)))}\n`);
+  if (['sealed', 'retired', 'override-active', 'override-consumed'].includes(recorded.status)) return;
+  const continuation = continuationResponse(root, input, runtime);
+  if (continuation) process.stdout.write(`${JSON.stringify(continuation)}\n`);
 }
 
 if (require.main === module) main();
 
-module.exports = { continuationReason, response, runtimeFor };
+module.exports = {
+  continuationReason,
+  continuationResponse,
+  hardStopResponse,
+  response,
+  runtimeFor,
+};

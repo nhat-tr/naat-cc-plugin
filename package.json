@@ -14,7 +14,7 @@
     "test:brainstorming:visual": "playwright test --config skills/brainstorming/playwright.config.ts --project=visual",
     "test:pair": "node --test skills/pair-v3/tests/*.test.js",
     "typecheck:brainstorming": "tsc --project skills/brainstorming/tsconfig.json",
-    "validate": "node scripts/generate-runtime-assets.js --check && node scripts/ci/validate-runtime-assets.js && node scripts/ci/validate-agents.js && node scripts/ci/validate-commands.js && node scripts/ci/validate-skills.js && node scripts/ci/validate-contexts.js && node scripts/ci/validate-global-instructions.js && node scripts/ci/validate-hooks.js && npm run test:brainstorming && npm run test:pair && npm --prefix infra run typecheck && npm --prefix infra/observability-index run test && node scripts/ci/validate-bin-smoke.js"
+    "validate": "node scripts/generate-runtime-assets.js --check && node scripts/ci/validate-runtime-assets.js && node scripts/ci/validate-agents.js && node scripts/ci/validate-commands.js && node scripts/ci/validate-skills.js && node scripts/ci/validate-contexts.js && node scripts/ci/validate-global-instructions.js && node scripts/ci/validate-hooks.js && node scripts/ci/validate-handover-proofs.js && npm run test:brainstorming && npm run test:pair && npm --prefix infra run typecheck && npm --prefix infra/observability-index run test && node scripts/ci/validate-bin-smoke.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",

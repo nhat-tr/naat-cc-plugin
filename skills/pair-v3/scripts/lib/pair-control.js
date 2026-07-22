@@ -136,12 +136,22 @@ function resumeWork(root, sessionId = null, runtime = null) {
   return loadPairState(root);
 }
 
-function takeoverWork(root, sessionId, runtime = null) {
+function takeoverWork(root, sessionId, runtime = null, options = {}) {
   if (!String(sessionId || '').trim()) throw new Error('takeover requires a session ID');
   const state = loadPairState(root);
+  if (
+    Object.prototype.hasOwnProperty.call(options, 'expectedWorkId') &&
+    state.work_id !== options.expectedWorkId
+  ) throw new Error('Pair Work changed before continuation ownership transfer');
+  if (
+    state.continuation.owner_session_id === String(sessionId) &&
+    (runtime === null || state.continuation.owner_runtime === runtime)
+  ) return state;
   appendPairEvent(root, {
     event: 'continuation.claimed',
-    workId: state.work_id,
+    workId: Object.prototype.hasOwnProperty.call(options, 'expectedWorkId')
+      ? options.expectedWorkId
+      : state.work_id,
     attemptId: state.active?.attempt_id || null,
     session_id: String(sessionId),
     runtime: runtime || null,

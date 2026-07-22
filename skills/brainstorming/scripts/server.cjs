@@ -17,6 +17,7 @@ const {
 const COOKIE_NAME = 'brainstorm_session';
 const MAX_REQUEST_BYTES = 64 * 1024;
 const DEFAULT_SSE_HEARTBEAT_MS = 15_000;
+const DEFAULT_WATCHER_FALLBACK_MS = 1_000;
 const MIN_SSE_HEARTBEAT_MS = 10;
 const MAX_SSE_HEARTBEAT_MS = 60_000;
 const REVIEW_SOURCE_ID_PATTERN = /^source-[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -248,6 +249,10 @@ function createBrainstormServer(options = {}) {
   const sseHeartbeatMs = options.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
   const sseSetInterval = options.sseSetInterval || setInterval;
   const sseClearInterval = options.sseClearInterval || clearInterval;
+  const watch = options.watch || fs.watch;
+  const watcherFallbackMs = options.watcherFallbackMs ?? DEFAULT_WATCHER_FALLBACK_MS;
+  const watcherSetInterval = options.watcherSetInterval || setInterval;
+  const watcherClearInterval = options.watcherClearInterval || clearInterval;
   if (!/^[a-zA-Z0-9_-]{8,128}$/.test(sessionId)) throw new TypeError('sessionId must be a URL-safe identifier');
   if (!Number.isInteger(sseHeartbeatMs)
     || sseHeartbeatMs < MIN_SSE_HEARTBEAT_MS
@@ -256,6 +261,12 @@ function createBrainstormServer(options = {}) {
   }
   if (typeof sseSetInterval !== 'function' || typeof sseClearInterval !== 'function') {
     throw new TypeError('SSE interval scheduler must provide set and clear functions');
+  }
+  if (typeof watch !== 'function' || typeof watcherSetInterval !== 'function' || typeof watcherClearInterval !== 'function') {
+    throw new TypeError('watcher fallback requires watch, setInterval, and clearInterval functions');
+  }
+  if (!Number.isInteger(watcherFallbackMs) || watcherFallbackMs < 100 || watcherFallbackMs > 60_000) {
+    throw new TypeError('watcherFallbackMs must be an integer between 100 and 60000');
   }
 
   const basePath = `/session/${sessionId}/`;
@@ -571,28 +582,56 @@ function createBrainstormServer(options = {}) {
     });
   });
 
+  function fileVersion(file) {
+    try {
+      const stat = fs.lstatSync(file, { bigint: true });
+      return `${stat.mode}:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+    } catch (error) {
+      if (error.code === 'ENOENT') return 'missing';
+      return `unreadable:${error.code || 'unknown'}`;
+    }
+  }
+
+  function watcherSourceVersions() {
+    return {
+      screen: [screenPath, workspacePath, formatPath].map(fileVersion).join('|'),
+      session: [store.eventsFile, store.cursorFile].map(fileVersion).join('|'),
+      delivery: fileVersion(deliveryStatePath),
+    };
+  }
+
+  let observedWatcherSources = watcherSourceVersions();
   let watcherFallback = null;
+
+  function reconcileWatcherSources() {
+    if (closing) return;
+    const current = watcherSourceVersions();
+    const changed = ['screen', 'session', 'delivery'].filter(event => (
+      current[event] !== observedWatcherSources[event]
+    ));
+    if (changed.length === 0) return;
+
+    // Watchers and fallback polling are only change hints. Advance the observed snapshot before
+    // publishing effects so both paths observing the same filesystem revision remain idempotent.
+    observedWatcherSources = current;
+    if (changed.includes('screen')) touchActivity();
+    for (const event of changed) sendEvent(event);
+    if (changed.some(event => event !== 'delivery')) writeLiveExport();
+  }
+
   function enableWatcherFallback() {
     if (watcherFallback) return;
-    watcherFallback = setInterval(() => {
-      if (closing) return;
-      sendEvent('screen');
-      sendEvent('session');
-      sendEvent('delivery');
-      writeLiveExport();
-    }, 100);
+    watcherFallback = watcherSetInterval(reconcileWatcherSources, watcherFallbackMs);
     watcherFallback.unref?.();
   }
 
-  const contentWatcher = fs.watch(contentDir, (_eventType, filename) => {
+  const contentWatcher = watch(contentDir, (_eventType, filename) => {
     // Some platforms report a null filename; fall through rather than miss the refresh.
     if (filename != null && !['screen.json', 'workspace.json'].includes(String(filename))) return;
     if (debounceTimers.has('screen')) clearTimeout(debounceTimers.get('screen'));
     debounceTimers.set('screen', setTimeout(() => {
       debounceTimers.delete('screen');
-      touchActivity();
-      sendEvent('screen');
-      writeLiveExport();
+      reconcileWatcherSources();
     }, 60));
   });
   contentWatcher.on('error', error => {
@@ -600,7 +639,7 @@ function createBrainstormServer(options = {}) {
     enableWatcherFallback();
   });
 
-  const stateWatcher = fs.watch(stateDir, (_eventType, filename) => {
+  const stateWatcher = watch(stateDir, (_eventType, filename) => {
     if (filename != null && !['session.jsonl', 'agent-cursor.json', 'visual-format.json', 'delivery-state.json'].includes(String(filename))) return;
     const events = filename == null
       ? ['screen', 'session', 'delivery']
@@ -612,8 +651,7 @@ function createBrainstormServer(options = {}) {
       if (debounceTimers.has(timerKey)) clearTimeout(debounceTimers.get(timerKey));
       debounceTimers.set(timerKey, setTimeout(() => {
         debounceTimers.delete(timerKey);
-        sendEvent(event);
-        if (event !== 'delivery') writeLiveExport();
+        reconcileWatcherSources();
       }, 40));
     }
   });
@@ -679,7 +717,7 @@ function createBrainstormServer(options = {}) {
     closing = true;
     const safeReason = ['closed', 'idle timeout', 'owner process exited'].includes(reason) ? reason : 'closed';
     clearInterval(lifecycleCheck);
-    if (watcherFallback) clearInterval(watcherFallback);
+    if (watcherFallback) watcherClearInterval(watcherFallback);
     sseClearInterval(heartbeat);
     for (const timer of debounceTimers.values()) clearTimeout(timer);
     contentWatcher.close();

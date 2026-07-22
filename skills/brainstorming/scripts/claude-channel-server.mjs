@@ -96,7 +96,9 @@ function activeBinding(activeFile) {
     return {
       stateDir: metadata.state_dir,
       sessionId: metadata.session_id,
-      conversationId: process.env.CLAUDE_SESSION_ID || metadata.session_id,
+      conversationId: process.env.CLAUDE_CODE_SESSION_ID
+        || process.env.CLAUDE_SESSION_ID
+        || metadata.session_id,
     };
   } catch {
     return null;

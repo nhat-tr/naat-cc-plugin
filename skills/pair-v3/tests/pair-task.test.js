@@ -33,7 +33,8 @@ const {
   workAttemptCapStatus,
 } = require('../scripts/pair-task');
 const { planContractDigest } = require('../scripts/lib/pair-core');
-const { reviewSessionFile } = require('../scripts/lib/review-session');
+const { readReviewSession } = require('../scripts/lib/review-session');
+const { appendPairEvent } = require('../scripts/lib/pair-state');
 const {
   createWorkRoot,
   writeDecisionRecord,
@@ -368,7 +369,7 @@ test('runReview uses an external sandbox command for hosted Codex', t => {
   assert.match(result.command.args.at(-1), /at most 8 shell commands/i);
 });
 
-test('runReview materializes the canonical complete patch in the external reviewer snapshot', t => {
+test('runReview reuses one external Review Session while rebinding each turn to its new snapshot', t => {
   const root = testRepo(t);
   const scratchRoot = fs.mkdtempSync(path.join(path.dirname(root), 'review-snapshot-parent-'));
   const fakeBin = path.join(scratchRoot, 'bin');
@@ -386,29 +387,38 @@ test('runReview materializes the canonical complete patch in the external review
   fs.mkdirSync(fakeBin, { recursive: true });
   fs.mkdirSync(path.join(root, '.pair'), { recursive: true });
   fs.writeFileSync(path.join(root, '.pair', 'plan.md'), '# Plan\n');
-  fs.writeFileSync(completePatch, 'Review Slice task: 1.1\n');
-  const staleSessionFile = reviewSessionFile(root);
-  fs.mkdirSync(path.dirname(staleSessionFile), { recursive: true });
-  fs.writeFileSync(staleSessionFile, `${JSON.stringify({
-    schema: 1,
-    product: 'pair-v4',
-    runtime: 'codex',
-    session_id: 'reviewer-bound-to-an-old-snapshot',
-    snapshot_digest: '0'.repeat(64),
-  })}\n`);
+  fs.writeFileSync(completePatch, 'first immutable Review Slice\n');
+  appendPairEvent(root, {
+    event: 'work.opened', workId: 'work-review-snapshot', planDigest: 'a'.repeat(64),
+  });
   fs.writeFileSync(path.join(fakeBin, 'codex'), `#!/usr/bin/env node
 const fs = require('node:fs');
 const path = require('node:path');
 const args = process.argv.slice(2);
 const output = args[args.indexOf('--output-last-message') + 1];
 const prompt = args.at(-1);
-const patch = prompt.match(/Review Slice patch: (.+)/)?.[1];
-fs.writeFileSync(process.env.PAIR_TEST_REVIEW_CAPTURE, JSON.stringify({
+const resumed = args[0] === 'exec' && args[1] === 'resume';
+let patch;
+if (resumed) {
+  const serialized = prompt.slice(prompt.indexOf('{'), prompt.lastIndexOf('}') + 1);
+  const checkpoint = JSON.parse(serialized);
+  patch = path.resolve(process.cwd(), checkpoint.patch.path);
+} else {
+  patch = prompt.match(/Review Slice patch: (.+)/)?.[1];
+}
+const prior = fs.existsSync(process.env.PAIR_TEST_REVIEW_CAPTURE)
+  ? JSON.parse(fs.readFileSync(process.env.PAIR_TEST_REVIEW_CAPTURE, 'utf8'))
+  : [];
+prior.push({
   cwd: process.cwd(),
+  resumed,
+  args,
   patch,
   patchExists: Boolean(patch) && fs.existsSync(patch),
+  patchContent: Boolean(patch) && fs.existsSync(patch) ? fs.readFileSync(patch, 'utf8') : null,
   planExists: fs.existsSync(path.join(process.cwd(), '.pair', 'plan.md')),
-}));
+});
+fs.writeFileSync(process.env.PAIR_TEST_REVIEW_CAPTURE, JSON.stringify(prior));
 fs.writeFileSync(output, JSON.stringify({
   verdict: 'approve', recommended_action: 'approve', summary: 'snapshot has the complete patch', findings: [],
 }));
@@ -430,31 +440,37 @@ process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: 'review
     fs.rmSync(scratchRoot, { recursive: true, force: true });
   });
 
-  const result = runReview({
+  const reviewInput = {
     runtime: 'codex',
     route: { id: 'codex-default-medium', model: 'default' },
     root,
     task: { id: '1.1', text: 'review snapshot evidence', risk: 'medium' },
     planPath: '.pair/plan.md',
     scratchDir: scratchRoot,
-    attemptId: '1.1-snapshot',
     timeoutMs: 5_000,
     dryRun: false,
     externalSandbox: true,
     reviewSlicePath: completePatch,
-  });
+  };
+  const first = runReview({ ...reviewInput, attemptId: '1.1-snapshot-first' });
+  fs.writeFileSync(completePatch, 'second immutable Review Slice\n');
+  const second = runReview({ ...reviewInput, attemptId: '1.1-snapshot-second' });
 
   const observed = JSON.parse(fs.readFileSync(capture, 'utf8'));
-  assert.equal(result.status, 0);
-  assert.equal(result.command.resumed, false, 'a session bound to another snapshot must not be resumed');
-  assert.match(observed.cwd, /review-snapshot-/);
-  assert.equal(observed.planExists, true);
-  assert.equal(observed.patchExists, true);
-  assert.equal(
-    observed.patch,
-    path.join(observed.cwd, '.pair', 'runs', 'work-review-snapshot', 'attempts', '1.1-snapshot', 'complete.patch'),
-  );
-  assert.notEqual(observed.patch, completePatch, 'the reviewer must read the snapshot copy, never the source patch');
+  assert.equal(first.status, 0);
+  assert.equal(second.status, 0);
+  assert.equal(first.command.resumed, false);
+  assert.equal(second.command.resumed, true, 'the second review must reuse the provider Review Session');
+  assert.equal(readReviewSession(root, 'codex').session_id, 'review-snapshot-session');
+  assert.equal(observed.length, 2);
+  assert.deepEqual(observed.map(run => run.resumed), [false, true]);
+  assert.notEqual(observed[0].cwd, observed[1].cwd, 'each immutable review turn gets a new snapshot');
+  assert.deepEqual(observed.map(run => run.planExists), [true, true]);
+  assert.deepEqual(observed.map(run => run.patchExists), [true, true]);
+  assert.equal(observed[0].patchContent, 'first immutable Review Slice\n');
+  assert.equal(observed[1].patchContent, 'second immutable Review Slice\n');
+  assert.equal(observed[1].patch, path.join(observed[1].cwd, '.pair', 'runs', 'work-review-snapshot', 'attempts', '1.1-snapshot', 'complete.patch'));
+  assert.notEqual(observed[1].patch, completePatch, 'the resumed reviewer must read the new snapshot copy, never the source patch');
 });
 
 test('anchor reviews are opt-in instead of silently doubling successful review cost', () => {

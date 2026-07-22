@@ -5,7 +5,6 @@ const fs = require('node:fs');
 
 const {
   assessAgentConversationFreshness,
-  recordAgentConversationStop,
 } = require('./lib/handover-state');
 
 function readInput() {
@@ -29,35 +28,36 @@ function runtimeFor(input) {
 }
 
 function response(runtime, reason) {
-  return runtime === 'claude'
-    ? { decision: 'block', reason }
-    : { continue: false, stopReason: reason };
+  return { decision: 'block', reason };
 }
 
 function blockReason(assessment, runtime) {
+  const freshStart = handoverId => `From a plain terminal outside any agent conversation, run pair-loop --fresh-from ${handoverId} --runtime ${runtime}; or open a fresh ${runtime} agent conversation manually, then inside it run pair-loop --adopt-handover ${handoverId} --runtime ${runtime}.`;
   if (assessment.status === 'invalid-activity') {
     return `Freshness Gate blocked this Agent Conversation before model processing: ${assessment.diagnostic}. Open a fresh ${runtime} agent conversation after repairing the registered handover state.`;
   }
   if (assessment.status === 'retired') {
-    return 'Freshness Gate blocked this Retired Agent Conversation before model processing. Its Agent Conversation Handover was already adopted.';
+    if (assessment.retirementReason === 'refreshed' && assessment.handoverId) {
+      return `Freshness Gate blocked this Retired Agent Conversation before model processing. Its one-shot recovery sealed refreshed Agent Conversation Handover ${assessment.handoverId}. ${freshStart(assessment.handoverId)}`;
+    }
+    return 'Freshness Gate blocked this Retired Agent Conversation before model processing. Its Agent Conversation Handover was already adopted; use the adopted fresh Agent Conversation.';
+  }
+  if (assessment.status === 'override-consumed') {
+    return `Freshness Gate blocked this Agent Conversation before model processing because its exact one-shot cold-resume allowance was already consumed. Continue only from Agent Conversation Handover ${assessment.handoverId}.`;
   }
   const handoverId = assessment.handoverId;
-  return `Freshness Gate blocked this Cold Agent Conversation before model processing after ${assessment.ageMs ?? 'unknown'}ms idle. Agent Conversation Handover ${handoverId} is sealed. Open a fresh ${runtime} agent conversation and run pair-loop --fresh-from ${handoverId} --runtime ${runtime}.`;
+  return `Freshness Gate blocked this Cold Agent Conversation before model processing after ${assessment.ageMs ?? 'unknown'}ms idle. Agent Conversation Handover ${handoverId} is sealed. ${freshStart(handoverId)}`;
 }
 
 function main() {
   const input = readInput();
   if (!input || !input.session_id) return;
   const event = input.hook_event_name;
-  if (!['UserPromptSubmit', 'Stop', 'PreCompact', 'PostCompact'].includes(event)) return;
+  if (!['UserPromptSubmit', 'PreCompact', 'PostCompact'].includes(event)) return;
   const root = repositoryRoot(input.cwd || input.project_dir || process.env.CLAUDE_PROJECT_DIR || process.cwd());
   if (!root) return;
   const runtime = runtimeFor(input);
   const identity = { runtime, agentConversationId: input.session_id, kind: input.agent_conversation_kind || 'pair' };
-  if (event === 'Stop') {
-    recordAgentConversationStop(root, { ...identity, now: input.now });
-    return;
-  }
   if (event !== 'UserPromptSubmit') return;
   let assessment;
   try {
@@ -66,7 +66,7 @@ function main() {
     process.stdout.write(`${JSON.stringify(response(runtime, 'Freshness Gate blocked this Agent Conversation before model processing because registered handover state is invalid.'))}\n`);
     return;
   }
-  if (!['cold', 'sealed', 'retired', 'invalid-activity', 'override-active'].includes(assessment.status)) return;
+  if (!['cold', 'sealed', 'retired', 'invalid-activity', 'override-consumed'].includes(assessment.status)) return;
   process.stdout.write(`${JSON.stringify(response(runtime, blockReason(assessment, runtime)))}\n`);
 }
 

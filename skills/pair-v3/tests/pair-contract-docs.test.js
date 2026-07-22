@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
@@ -161,8 +162,6 @@ test('cold agent conversation vocabulary and commands stay aligned without mutat
   const pair = read('skills/pair-v4/SKILL.md');
   const brainstorming = read('skills/brainstorming/SKILL.md');
   const readme = read('README.md');
-  const decision = read('docs/work/work-20260722-cold-agent-conversation-handover/decisions/DR-001-cold-agent-conversation-handover.md');
-  const priorDecision = read('docs/work/work-20260719-pair-loop-observable-control/decisions/DR-003-bounded-resume-token-strategy.md');
 
   for (const term of ['Cold Agent Conversation', 'Agent Conversation Checkpoint', 'Agent Conversation Handover', 'Freshness Gate', 'Retired Agent Conversation']) {
     assert.match(glossary, new RegExp(`\\*\\*${term}\\*\\*`));
@@ -170,10 +169,42 @@ test('cold agent conversation vocabulary and commands stay aligned without mutat
   for (const document of [pair, brainstorming, readme]) {
     assert.match(document, /--fresh-from <handover-id>/i);
     assert.match(document, /--allow-cold-resume <handover-id> --once --confirm-cost-risk/i);
+    assert.match(document, /refreshed handover|refreshed Agent Conversation Handover/i);
+    assert.match(document, /direct adoption|adoption is the other retirement route/i);
   }
-  assert.match(decision, /supersedes only DR-003.*stale same-agent-conversation default/i);
-  assert.match(decision, /does not supersede DR-003.*bounded Resume Checkpoint/i);
+  assert.match(glossary, /successful handover adoption or successful one-shot checkpoint refresh/i);
+});
+
+test('Pair CLI help exposes the exact handover launch adoption and one-shot recovery commands', () => {
+  const result = childProcess.spawnSync(process.execPath, [
+    path.join(root, 'skills', 'pair-v3', 'scripts', 'pair-task'),
+    '--help',
+  ], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /--fresh-from HANDOVER_ID/iu);
+  assert.match(result.stdout, /--adopt-handover HANDOVER_ID/iu);
+  assert.match(result.stdout, /--allow-cold-resume HANDOVER_ID --once --confirm-cost-risk/iu);
+  assert.match(result.stdout, /--brainstorm-checkpoint/iu);
+});
+
+test('new Decision Record supersedes DR-003 without mutation', () => {
+  const predecessorPath = 'docs/work/work-20260722-cold-agent-conversation-handover/decisions/DR-001-cold-agent-conversation-handover.md';
+  const successorPath = 'docs/work/work-20260722-cold-agent-conversation-handover/decisions/DR-002-coordinated-stop-and-freshness-gate.md';
+  const predecessor = read(predecessorPath);
+  const successor = read(successorPath);
+  const priorDecision = read('docs/work/work-20260719-pair-loop-observable-control/decisions/DR-003-bounded-resume-token-strategy.md');
+  const work = JSON.parse(read('docs/work/work-20260722-cold-agent-conversation-handover/work.json'));
+
+  assert.equal(crypto.createHash('sha256').update(predecessor).digest('hex'), '15454be533b19435ecc4ae3783127629333bf4f0e155530f525c5b3e688794eb');
+  assert.match(successor, /\*\*Supersedes:\*\* `DR-001-cold-agent-conversation-handover`/u);
+  assert.match(successor, /supersedes only.*DR-003.*stale same-agent-conversation default/isu);
+  assert.match(successor, /does not supersede.*bounded Resume Checkpoint|preserves.*bounded Resume Checkpoint/isu);
   assert.match(priorDecision, /\*\*Superseded By:\*\* none/i);
+  assert.ok(work.decision_records.includes(successorPath));
+  assert.deepEqual(work.decision_supersessions, [{
+    predecessor: 'DR-001-cold-agent-conversation-handover',
+    successor: 'DR-002-coordinated-stop-and-freshness-gate',
+  }]);
 });
 
 test('digest-bound plan challenge is a portable Codex and Claude CLI', () => {

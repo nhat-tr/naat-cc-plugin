@@ -511,9 +511,9 @@ function rebuildProjection(root) {
   return writeProjection(root, reducePairEvents(readPairEvents(root)));
 }
 
-function loadPairState(root) {
-  const paths = pairStatePaths(root);
-  const events = readPairEvents(root);
+function loadPairState(root, workId = undefined) {
+  const paths = pairStatePaths(root, workId);
+  const events = readPairEvents(root, workId);
   const expectedSequence = events.at(-1)?.sequence || 0;
   const state = readJson(paths.state);
   if (!state || state.schema !== STATE_SCHEMA || state.sequence !== expectedSequence) {
