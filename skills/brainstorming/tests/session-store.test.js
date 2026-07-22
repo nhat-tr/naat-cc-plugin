@@ -407,3 +407,21 @@ test('SessionStore exposes one synchronous snapshot transaction for identity-pre
   );
   assert.equal(store.snapshot().events.length, 1, 'the lock is released after a rejected async callback');
 });
+
+test('SessionStore immediately reclaims a lock owned by a dead process', t => {
+  const stateDir = createScratchDirectory(t, 'dead-lock-owner');
+  const observedPids = [];
+  const store = new SessionStore(stateDir, {
+    processAlive: pid => {
+      observedPids.push(pid);
+      return false;
+    },
+  });
+  const lockDir = path.join(stateDir, '.session.lock');
+  fs.mkdirSync(lockDir);
+  fs.writeFileSync(path.join(lockDir, 'owner.json'), `${JSON.stringify({ pid: 424242 })}\n`, { mode: 0o600 });
+
+  assert.equal(store.readCursor(), 0);
+  assert.deepEqual(observedPids, [424242]);
+  assert.equal(fs.existsSync(lockDir), false);
+});

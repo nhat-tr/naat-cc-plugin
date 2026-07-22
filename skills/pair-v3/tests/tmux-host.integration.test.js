@@ -17,6 +17,7 @@ const {
   loadPairState,
   readPairEvents,
 } = require('../scripts/lib/pair-state');
+const handover = require('../scripts/lib/handover-state');
 
 function fixture(t) {
   const base = process.env.CLAUDE_SCRATCH_DIR || path.join(os.homedir(), '.claude-scratch');
@@ -99,6 +100,39 @@ test('host refuses a conflicting fourth pane without deleting it', t => {
     { encoding: 'utf8' },
   ).stdout.trim().split('\n');
   assert.equal(panes.length, 4, 'Pair must never destroy an unknown pane to repair its layout');
+});
+
+test('tmux warns before stale prompt while absent tmux preserves headless status', t => {
+  const { root } = fixture(t);
+  handover.registerAgentConversation(root, {
+    runtime: 'codex', agentConversationId: 'tmux-warning-agent', kind: 'pair', now: 1_000,
+  });
+  handover.updateAgentConversationCheckpoint(root, {
+    runtime: 'codex', agentConversationId: 'tmux-warning-agent', kind: 'pair', now: 1_000,
+    checkpoint: { purpose: 'Warn early.', currentDirection: 'Observe freshness.', nextAction: 'Open a fresh Agent Conversation.' },
+  });
+  const status = hostStatus(root, { execute: () => ({ status: 1, stdout: '', stderr: '' }), now: 1_000 + 60 * 60 * 1000 });
+  assert.equal(status.exists, false);
+  assert.equal(status.freshness.conversations[0].status, 'cold');
+  assert.match(status.freshness.warning, /Freshness Gate/i);
+});
+
+test('multiple handovers do not replace panes', t => {
+  if (childProcess.spawnSync('tmux', ['-V']).status !== 0) return t.skip('tmux unavailable');
+  const { root } = fixture(t);
+  const host = ensureHost(root);
+  for (const agentConversationId of ['first-handover', 'second-handover']) {
+    handover.registerAgentConversation(root, { runtime: 'codex', agentConversationId, kind: 'pair', now: 1_000 });
+    handover.updateAgentConversationCheckpoint(root, {
+      runtime: 'codex', agentConversationId, kind: 'pair', now: 1_000,
+      checkpoint: { purpose: 'Preserve panes.', currentDirection: 'Seal.', nextAction: 'Adopt.' },
+    });
+    handover.sealAgentConversationHandover(root, { runtime: 'codex', agentConversationId, kind: 'pair', now: 2_000 });
+  }
+  const status = hostStatus(root, { now: 3_000 });
+  assert.equal(status.panes.length, 3);
+  assert.deepEqual(status.configured.panes, host.panes);
+  assert.equal(status.freshness.conversations.filter(conversation => conversation.status === 'sealed').length, 2);
 });
 
 test('the actual review request runs visibly in the reusable reviewer pane and journals request identity', t => {

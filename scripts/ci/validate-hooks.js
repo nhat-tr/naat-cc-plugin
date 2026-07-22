@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 
 const HOOKS_FILE = process.env.HOOKS_FILE || path.join(__dirname, '../../hooks/hooks.json');
-const VALID_EVENTS = ['PreToolUse', 'PostToolUse', 'PreCompact', 'SessionStart', 'SessionEnd', 'Stop', 'Notification', 'SubagentStop'];
+const VALID_EVENTS = ['PreToolUse', 'PostToolUse', 'PreCompact', 'PostCompact', 'SessionStart', 'SessionEnd', 'Stop', 'Notification', 'SubagentStop', 'UserPromptSubmit'];
 
 function validateHookEntry(hook, label) {
   let hasErrors = false;

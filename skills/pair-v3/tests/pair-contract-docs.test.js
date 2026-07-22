@@ -156,6 +156,26 @@ test('Pair v4 runbook is visible, resumable, repository-local, and portable acro
   assert.doesNotMatch(skill, /AskUserQuestion/);
 });
 
+test('cold agent conversation vocabulary and commands stay aligned without mutating DR-003', () => {
+  const glossary = read('UBIQUITOUS_LANGUAGE.md');
+  const pair = read('skills/pair-v4/SKILL.md');
+  const brainstorming = read('skills/brainstorming/SKILL.md');
+  const readme = read('README.md');
+  const decision = read('docs/work/work-20260722-cold-agent-conversation-handover/decisions/DR-001-cold-agent-conversation-handover.md');
+  const priorDecision = read('docs/work/work-20260719-pair-loop-observable-control/decisions/DR-003-bounded-resume-token-strategy.md');
+
+  for (const term of ['Cold Agent Conversation', 'Agent Conversation Checkpoint', 'Agent Conversation Handover', 'Freshness Gate', 'Retired Agent Conversation']) {
+    assert.match(glossary, new RegExp(`\\*\\*${term}\\*\\*`));
+  }
+  for (const document of [pair, brainstorming, readme]) {
+    assert.match(document, /--fresh-from <handover-id>/i);
+    assert.match(document, /--allow-cold-resume <handover-id> --once --confirm-cost-risk/i);
+  }
+  assert.match(decision, /supersedes only DR-003.*stale same-agent-conversation default/i);
+  assert.match(decision, /does not supersede DR-003.*bounded Resume Checkpoint/i);
+  assert.match(priorDecision, /\*\*Superseded By:\*\* none/i);
+});
+
 test('digest-bound plan challenge is a portable Codex and Claude CLI', () => {
   const manifest = JSON.parse(read('metadata/runtime-asset-map.json'));
   const challenge = read('skills/pair-v3/scripts/pair-plan-challenge');

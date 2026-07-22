@@ -576,7 +576,7 @@ async function runChallengeAttempt({
     snapshot.digest = treeDigest(snapshot.directory);
   }
   const reviewRoot = snapshot?.directory || root;
-  const reviewSession = readReviewSession(root, runtime);
+  const reviewSession = readReviewSession(root, runtime, snapshot?.digest || null);
   let resumeCheckpoint = null;
   let effectivePrompt = prompt;
   if (reviewSession?.session_id && workId) {
@@ -646,6 +646,7 @@ async function runChallengeAttempt({
     model,
     effort,
     phase: "plan-review",
+    snapshotDigest: snapshot?.digest || null,
   });
   if (snapshot && treeDigest(snapshot.directory) !== snapshot.digest) {
     run.status = run.status === 0 ? 74 : run.status;

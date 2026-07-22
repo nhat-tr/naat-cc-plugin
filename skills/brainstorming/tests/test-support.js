@@ -8,7 +8,12 @@ function createScratchDirectory(t, purpose) {
   const parent = path.join(scratchRoot, 'my-claude-code', 'brainstorming-tests');
   fs.mkdirSync(parent, { recursive: true });
   const directory = fs.mkdtempSync(path.join(parent, `${purpose}-`));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(directory, {
+    recursive: true,
+    force: true,
+    maxRetries: 3,
+    retryDelay: 25,
+  }));
   return directory;
 }
 

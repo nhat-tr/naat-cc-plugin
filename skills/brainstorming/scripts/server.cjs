@@ -571,6 +571,19 @@ function createBrainstormServer(options = {}) {
     });
   });
 
+  let watcherFallback = null;
+  function enableWatcherFallback() {
+    if (watcherFallback) return;
+    watcherFallback = setInterval(() => {
+      if (closing) return;
+      sendEvent('screen');
+      sendEvent('session');
+      sendEvent('delivery');
+      writeLiveExport();
+    }, 100);
+    watcherFallback.unref?.();
+  }
+
   const contentWatcher = fs.watch(contentDir, (_eventType, filename) => {
     // Some platforms report a null filename; fall through rather than miss the refresh.
     if (filename != null && !['screen.json', 'workspace.json'].includes(String(filename))) return;
@@ -582,7 +595,10 @@ function createBrainstormServer(options = {}) {
       writeLiveExport();
     }, 60));
   });
-  contentWatcher.on('error', error => console.error(`brainstorm content watcher failed: ${error.message}`));
+  contentWatcher.on('error', error => {
+    console.error(`brainstorm content watcher failed: ${error.message}`);
+    enableWatcherFallback();
+  });
 
   const stateWatcher = fs.watch(stateDir, (_eventType, filename) => {
     if (filename != null && !['session.jsonl', 'agent-cursor.json', 'visual-format.json', 'delivery-state.json'].includes(String(filename))) return;
@@ -601,7 +617,10 @@ function createBrainstormServer(options = {}) {
       }, 40));
     }
   });
-  stateWatcher.on('error', error => console.error(`brainstorm state watcher failed: ${error.message}`));
+  stateWatcher.on('error', error => {
+    console.error(`brainstorm state watcher failed: ${error.message}`);
+    enableWatcherFallback();
+  });
 
   const heartbeat = sseSetInterval(() => sendComment('heartbeat'), sseHeartbeatMs);
   heartbeat.unref?.();
@@ -660,6 +679,7 @@ function createBrainstormServer(options = {}) {
     closing = true;
     const safeReason = ['closed', 'idle timeout', 'owner process exited'].includes(reason) ? reason : 'closed';
     clearInterval(lifecycleCheck);
+    if (watcherFallback) clearInterval(watcherFallback);
     sseClearInterval(heartbeat);
     for (const timer of debounceTimers.values()) clearTimeout(timer);
     contentWatcher.close();

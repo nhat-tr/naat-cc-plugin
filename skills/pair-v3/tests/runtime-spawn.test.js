@@ -4,6 +4,7 @@ const test = require('node:test');
 
 const {
   NESTED_SESSION_ENV_KEYS,
+  parseArgs,
   resolveRuntime,
   runtimeDiagnostic,
   runtimeEnv,
@@ -61,6 +62,16 @@ test('runtimeEnv forces the stop gate off for the spawned runtime', t => {
   const env = runtimeEnv();
   assert.equal(env.PAIR_STOP_GATE, 'off');
   assert.equal(env.CLAUDE_STOP_GATE, 'off');
+});
+
+test('fresh-handover command parsing requires exact identifiers and explicit cost-risk confirmation', () => {
+  const fresh = parseArgs(['--fresh-from', 'handover-11111111-1111-4111-8111-111111111111', '--runtime', 'claude']);
+  assert.equal(fresh.freshFrom, 'handover-11111111-1111-4111-8111-111111111111');
+  assert.equal(fresh.runtime, 'claude');
+  const override = parseArgs(['--allow-cold-resume', 'handover-11111111-1111-4111-8111-111111111111', '--once', '--confirm-cost-risk']);
+  assert.equal(override.allowColdResume, 'handover-11111111-1111-4111-8111-111111111111');
+  assert.equal(override.once, true);
+  assert.equal(override.confirmCostRisk, true);
 });
 
 test('auto task routing keeps Codex inside an existing Codex sandbox', () => {

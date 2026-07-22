@@ -7,7 +7,7 @@
   "scripts": {
     "build:brainstorming": "node scripts/build-visual-shell.mjs",
     "generate:runtime-assets": "node scripts/generate-runtime-assets.js --write",
-    "test:brainstorming": "node --test skills/brainstorming/tests/*.test.js",
+    "test:brainstorming": "ulimit -n 4096 2>/dev/null || true; for test_file in skills/brainstorming/tests/*.test.js; do node --test \"$test_file\" || exit $?; done",
     "test:brainstorming:a11y": "playwright test --config skills/brainstorming/playwright.config.ts --project=a11y",
     "test:brainstorming:e2e": "playwright test --config skills/brainstorming/playwright.config.ts --project=e2e",
     "test:brainstorming:performance": "playwright test --config skills/brainstorming/playwright.config.ts --project=performance",

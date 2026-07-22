@@ -2,6 +2,7 @@ const childProcess = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { freshnessProjection } = require('./handover-state');
 
 const ROLES = ['editor', 'coordinator', 'reviewer'];
 const SHELLS = new Set(['bash', 'dash', 'fish', 'ksh', 'sh', 'tcsh', 'zsh']);
@@ -117,6 +118,7 @@ function hostStatus(root, options = {}) {
     exists: panes !== null,
     panes: panes || [],
     configured: readState(root),
+    freshness: options.freshness || freshnessProjection(root, options.now),
   };
 }
 

@@ -30,6 +30,7 @@ const {
 const {
   createReviewSnapshot,
   repositoryDigest,
+  reviewArtifactDigest,
   treeDigest,
 } = require("./lib/review-snapshot");
 const {
@@ -67,6 +68,15 @@ const {
   recordResumedTurn,
   serializeResumeCheckpoint,
 } = require("./lib/resume-checkpoint");
+const {
+  adoptAgentConversationHandover,
+  authorizeColdResume,
+  derivePairCheckpoint,
+  freshnessProjection,
+  readAgentConversationHandover,
+  registerAgentConversation,
+  updateAgentConversationCheckpoint,
+} = require("./lib/handover-state");
 
 const POLICY_VERSION = "4.0.0";
 const SCRIPT_DIR = __dirname;
@@ -137,6 +147,12 @@ function parseArgs(argv) {
       ? Number(process.env.PAIR_MAX_FINAL_REVIEWS)
       : null,
     legacyV3: process.env.PAIR_LEGACY_V3 === "1",
+    independentReview: process.env.PAIR_INDEPENDENT_REVIEW !== "off",
+    advisoryReview: process.env.PAIR_REVIEW_MODE === "advisory",
+    freshFrom: null,
+    adoptHandover: null,
+    allowColdResume: null,
+    confirmCostRisk: false,
     allowCrossRuntimeFallback:
       process.env.PAIR_ALLOW_CROSS_RUNTIME_FALLBACK === "1",
     control: null,
@@ -145,6 +161,10 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === "--runtime") options.runtime = argv[++index];
+    else if (arg === "--fresh-from") options.freshFrom = argv[++index];
+    else if (arg === "--adopt-handover") options.adoptHandover = argv[++index];
+    else if (arg === "--allow-cold-resume") options.allowColdResume = argv[++index];
+    else if (arg === "--confirm-cost-risk") options.confirmCostRisk = true;
     else if (arg === "--model") options.model = argv[++index];
     else if (arg === "--effort") options.effort = argv[++index];
     else if (arg === "--once") options.once = true;
@@ -173,6 +193,8 @@ function parseArgs(argv) {
       options.controlValue = argv[++index];
     } else if (arg === "--json") options.json = true;
     else if (arg === "--legacy-v3") options.legacyV3 = true;
+    else if (["--no-independent-review", "--no-review"].includes(arg)) options.independentReview = false;
+    else if (arg === "--advisory-review") options.advisoryReview = true;
     else if (arg === "--allow-cross-runtime-fallback")
       options.allowCrossRuntimeFallback = true;
     else if (arg === "--hitl") options.hitl = true;
@@ -239,6 +261,14 @@ function processAlive(pid) {
   } catch {
     return false;
   }
+}
+
+function liveInFlightRequest(state) {
+  const request = state?.in_flight_request;
+  // The journal, not a best-effort PID probe, owns request liveness. Sandboxed
+  // coordinators can be unable to signal a visible reviewer process even while
+  // it is running; only request.completed/request.cancelled may release it.
+  return request || null;
 }
 
 function beginActivePairLoop(root, plan) {
@@ -875,6 +905,53 @@ function runtimeDiagnostic(result) {
   if (!(result.stdout || "").trim())
     return `runtime exited ${result.status ?? "null"} with no output`;
   return "";
+}
+
+function assertPlainFreshRuntimeCommand(runtime, args) {
+  if (!["codex", "claude"].includes(runtime)) throw new Error(`unsupported runtime ${runtime}`);
+  if (!Array.isArray(args) || args.some(arg => /--(?:resume|continue|fork(?:-session)?)(?:=|\b)/iu.test(String(arg)))) {
+    throw new Error("fresh Agent Conversation launch rejects resume and fork argv");
+  }
+}
+
+function freshHandoverBootstrap(handoverId, runtime) {
+  return [
+    `Adopt Agent Conversation Handover ${handoverId} in this fresh ${runtime} agent conversation.`,
+    `Run pair-loop --adopt-handover ${handoverId} --runtime ${runtime}.`,
+  ].join(" ");
+}
+
+function launchFreshAgentConversation(root, input, dependencies = {}) {
+  if (dependencies.nested ?? (isNestedCodexSandbox(process.env) || Boolean(process.env.CLAUDECODE))) {
+    throw new Error("cannot launch a fresh Agent Conversation from a nested runtime");
+  }
+  const handover = readAgentConversationHandover(root, input.handoverId);
+  const requestedRuntime = input.runtime || "auto";
+  const runtime = requestedRuntime === "auto"
+    ? handover.manifest.runtime
+    : resolveRuntime(requestedRuntime, { available: input.available });
+  const args = [freshHandoverBootstrap(input.handoverId, runtime)];
+  assertPlainFreshRuntimeCommand(runtime, args);
+  const spawn = dependencies.spawn || childProcess.spawn;
+  const child = spawn(runtime, args, {
+    cwd: root,
+    detached: true,
+    stdio: "ignore",
+    env: runtimeEnv(),
+  });
+  if (child?.unref) child.unref();
+  return { handoverId: input.handoverId, runtime, pid: child?.pid || null, bootstrap: args[0] };
+}
+
+function adoptFreshAgentConversation(root, input) {
+  return adoptAgentConversationHandover(root, input);
+}
+
+function authorizeOneShotColdResume(root, input) {
+  if (input.once !== true || input.confirmCostRisk !== true) {
+    throw new Error("cold resume requires --once and --confirm-cost-risk");
+  }
+  return authorizeColdResume(root, input);
 }
 
 function runCommand(command, outputFile, timeoutMs, label = "model runtime", execution = {}) {
@@ -1749,14 +1826,24 @@ function runReview({
       : task.risk === "critical"
         ? "high"
         : "medium";
+  const resolvedReviewSlicePath = path.resolve(root, reviewSlicePath);
+  const reviewArtifacts = fs.existsSync(resolvedReviewSlicePath)
+    ? [resolvedReviewSlicePath]
+    : [];
   const snapshot = externalSandbox && !dryRun
-    ? createReviewSnapshot(root, scratchDir)
+    ? createReviewSnapshot(root, scratchDir, reviewArtifacts)
     : null;
   const reviewRoot = snapshot?.directory || root;
   const resolvedPlanPath = path.resolve(root, planPath);
   const reviewPlanPath = snapshot && resolvedPlanPath.startsWith(`${path.resolve(root)}${path.sep}`)
     ? path.join(reviewRoot, path.relative(root, resolvedPlanPath))
     : planPath;
+  const reviewArtifact = snapshot?.artifacts.find(
+    artifact => artifact.sourcePath === resolvedReviewSlicePath,
+  );
+  const reviewPatchPath = reviewArtifact
+    ? path.join(reviewRoot, reviewArtifact.relativePath)
+    : reviewSlicePath;
   const reviewModel = runtime === "codex"
     ? anchor
       ? process.env.PAIR_CODEX_ANCHOR_MODEL || "default"
@@ -1765,12 +1852,12 @@ function runReview({
       ? process.env.PAIR_CLAUDE_ANCHOR_MODEL || "opus"
       : process.env.PAIR_CLAUDE_REVIEW_MODEL ||
         (task.risk === "low" ? "sonnet" : "opus");
-  const reviewSession = readReviewSession(root, runtime);
+  const reviewSession = readReviewSession(root, runtime, snapshot?.digest || null);
   const fullReviewPrompt = reviewPrompt(
     task,
     base,
     reviewPlanPath,
-    reviewSlicePath,
+    reviewPatchPath,
     redVerification,
     priorReview,
     cumulative,
@@ -1862,10 +1949,14 @@ function runReview({
     model: reviewModel,
     effort: runtime === "claude" && anchor ? "max" : reviewEffort,
     phase: cumulative ? "cumulative-review" : anchor ? "anchor-review" : "slice-review",
+    snapshotDigest: snapshot?.digest || null,
   });
   const snapshotMutated = snapshot && treeDigest(snapshot.directory) !== snapshot.digest;
   const sourceMutated = snapshot
-    && repositoryDigest(root, scratchDir) !== snapshot.sourceDigest;
+    && (
+      repositoryDigest(root, scratchDir) !== snapshot.sourceDigest
+      || reviewArtifactDigest(snapshot.artifacts) !== snapshot.artifactDigest
+    );
   const parsed =
     runtime === "codex"
       ? readJson(outputPath)
@@ -1920,6 +2011,7 @@ function shouldRunAnchorReview(attemptId, task, review, env = process.env) {
 }
 
 function shouldRunTaskReview(task, options = {}, env = process.env) {
+  if (options.independentReview === false) return false;
   if (options.legacyV3) return true;
   const policy = String(env.PAIR_TASK_REVIEW || "critical").toLowerCase();
   if (policy === "all") return true;
@@ -2219,6 +2311,46 @@ function finalizePairPlan(root, runtime, options, paths) {
     repoId,
     patchFile,
   );
+  if (options.independentReview === false) {
+    const evidence = {
+      schema: 1,
+      plan_digest: linkage.planDigest,
+      patch_digest: patch.digest,
+      reviewer: null,
+      reviewerSessionId: null,
+      classification: "skipped-by-operator",
+      verification,
+      verdict: "approve",
+      recommended_action: "approve",
+      summary: "Independent review was explicitly disabled by the operator.",
+      findings: [],
+    };
+    writeFinalReviewEvidence(root, evidence);
+    appendJsonLine(paths.ledger, {
+      event: "final-review.completed",
+      repositoryId: repoId,
+      workId: budgetWorkId,
+      canonicalWorkId: linkage.workId,
+      planDigest: linkage.planDigest,
+      patchDigest: patch.digest,
+      reviewer: null,
+      reviewerSessionId: null,
+      classification: evidence.classification,
+      usage: null,
+      elapsedMs: 0,
+      findings: [],
+      at: new Date().toISOString(),
+    });
+    appendPairEvent(root, {
+      event: "work.completed",
+      workId: linkage.workId || null,
+      planDigest: linkage.planDigest,
+      patchDigest: patch.digest,
+      evidence: "cumulative-verification-approved-independent-review-disabled",
+    });
+    console.log(`pair-loop: cumulative final verification approved ${patch.digest}; independent review disabled`);
+    return { approved: true, cached: false, reviewSkipped: true };
+  }
   const finalTask = {
     id: "FINAL",
     text: "cumulative Work implementation",
@@ -2259,10 +2391,14 @@ function finalizePairPlan(root, runtime, options, paths) {
   );
   const approved = reviewRun.status === 0 &&
     !environmentFinding &&
-    reviewRun.review.verdict === "approve" &&
-    reviewRun.review.findings.length === 0;
+    (options.advisoryReview || (
+      reviewRun.review.verdict === "approve" &&
+      reviewRun.review.findings.length === 0
+    ));
   const classification = approved
-    ? "approved"
+    ? options.advisoryReview && reviewRun.review.findings.length > 0
+      ? "advisory-findings"
+      : "approved"
     : reviewRun.status !== 0 || environmentFinding
       ? "environment-failure"
       : "findings";
@@ -2274,6 +2410,7 @@ function finalizePairPlan(root, runtime, options, paths) {
     reviewer,
     reviewerSessionId: reviewRun.reviewerSessionId || null,
     classification,
+    advisory: options.advisoryReview,
     verification,
     ...reviewRun.review,
   };
@@ -2300,7 +2437,9 @@ function finalizePairPlan(root, runtime, options, paths) {
       planDigest: linkage.planDigest,
       patchDigest: patch.digest,
       reviewerSessionId: reviewRun.reviewerSessionId || null,
-      evidence: "cumulative-verification-and-review-approved",
+      evidence: options.advisoryReview
+        ? "cumulative-verification-approved-advisory-review"
+        : "cumulative-verification-and-review-approved",
     });
     console.log(
       `pair-loop: cumulative final review approved ${patch.digest}`,
@@ -2678,6 +2817,12 @@ function runDoctor(root, options = {}) {
   let doctorWorkId = null;
 
   report("ok", "git repository", root);
+  const freshness = freshnessProjection(root);
+  report(
+    freshness.warning ? "warn" : "ok",
+    "Freshness Gate",
+    freshness.warning || "no registered Agent Conversation requires a handover",
+  );
 
   const pairPlan = path.join(root, ".pair", "plan.md");
   const loopPlan = path.join(root, ".claude-loop.md");
@@ -3201,7 +3346,7 @@ function assessAttempt({
     workerBlocker: worker.blocker,
     verification: verification.status,
     ownership,
-    findings: effectiveReview.findings || [],
+    findings: options.advisoryReview ? [] : effectiveReview.findings || [],
     priorRetryCounts: options.legacyV3
       ? attemptCapStatus(prior, options.maxAttempts).retryCounts
       : {},
@@ -3210,7 +3355,9 @@ function assessAttempt({
     recommendedAction: effectiveReview.recommended_action,
     workerParseError: worker.parseError === true,
   });
-  const recordedReview = outcome.action === "retry-context"
+  const recordedReview = options.advisoryReview
+    ? { ...effectiveReview, advisory: true, remediation_required: false }
+    : outcome.action === "retry-context"
     ? { ...effectiveReview, retry_context: worker.blocker }
     : outcome.action === "retry-ownership"
       ? {
@@ -3919,9 +4066,10 @@ function runControl(root, options) {
   }
   if (control === "status") {
     const state = loadPairState(root);
-    const host = hostStatus(root);
+    const freshness = freshnessProjection(root);
+    const host = hostStatus(root, { freshness });
     if (options.json) {
-      console.log(JSON.stringify({ state, host }, null, 2));
+      console.log(JSON.stringify({ state, freshness, host }, null, 2));
     } else {
       const active = state.active;
       console.log([
@@ -3933,6 +4081,7 @@ function runControl(root, options) {
         `Coordinator owner: ${state.continuation.owner_session_id || "unclaimed"}`,
         `Review Session: ${active?.reviewer_session_id || readReviewSession(root)?.session_id || "none"}`,
         `Host: ${host.exists ? `${host.session} (${host.panes.length} panes)` : "not started"}`,
+        `Freshness Gate: ${freshness.warning || "no registered Agent Conversation requires a handover"}`,
       ].join("\n"));
     }
     return;
@@ -3992,11 +4141,54 @@ function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     console.log(
-      "Usage: pair-task [--runtime codex|claude|auto] [--host|--attach|--status [--json]|--pause|--resume|--takeover [SESSION]|--cancel-now|--discard-attempt [ATTEMPT] [--confirm-discard]|--begin-human-edit plan|code|--end-human-edit|--steer MESSAGE] [--allow-cross-runtime-fallback] [--model MODEL] [--effort LEVEL] [--once] [--inline] [--complete] [--doctor] [--dry-run] [--hitl] [--approve-tests all|1,3|none] [--max-attempts N] [--max-work-attempts N] [--max-final-reviews N] [--legacy-v3]",
+      "Usage: pair-task [--runtime codex|claude|auto] [--fresh-from HANDOVER_ID|--adopt-handover HANDOVER_ID|--allow-cold-resume HANDOVER_ID --once --confirm-cost-risk] [--host|--attach|--status [--json]|--pause|--resume|--takeover [SESSION]|--cancel-now|--discard-attempt [ATTEMPT] [--confirm-discard]|--begin-human-edit plan|code|--end-human-edit|--steer MESSAGE] [--allow-cross-runtime-fallback] [--model MODEL] [--effort LEVEL] [--once] [--inline] [--complete] [--doctor] [--dry-run] [--no-independent-review] [--advisory-review] [--hitl] [--approve-tests all|1,3|none] [--max-attempts N] [--max-work-attempts N] [--max-final-reviews N] [--legacy-v3]",
     );
     return;
   }
   const root = gitRoot();
+  const handoverCommands = [options.freshFrom, options.adoptHandover, options.allowColdResume].filter(Boolean);
+  if (handoverCommands.length > 1) fail("choose exactly one Agent Conversation Handover command");
+  if (options.freshFrom) {
+    try {
+      const launched = launchFreshAgentConversation(root, {
+        handoverId: options.freshFrom,
+        runtime: options.runtime,
+      });
+      console.log(`pair-loop: launched fresh ${launched.runtime} Agent Conversation for ${launched.handoverId}`);
+    } catch (error) {
+      fail(error.message);
+    }
+    return;
+  }
+  if (options.adoptHandover || options.allowColdResume) {
+    const agentConversationId = coordinatorSessionId();
+    if (!agentConversationId) fail("Agent Conversation adoption requires a native conversation identity");
+    let handoverRuntime;
+    try {
+      handoverRuntime = resolveRuntime(options.runtime);
+      if (options.adoptHandover) {
+        const adopted = adoptFreshAgentConversation(root, {
+          handoverId: options.adoptHandover,
+          runtime: handoverRuntime,
+          agentConversationId,
+        });
+        takeoverWork(root, agentConversationId, handoverRuntime);
+        console.log(`pair-loop: adopted Agent Conversation Handover ${adopted.handoverId}`);
+      } else {
+        const authorized = authorizeOneShotColdResume(root, {
+          handoverId: options.allowColdResume,
+          runtime: handoverRuntime,
+          agentConversationId,
+          once: options.once,
+          confirmCostRisk: options.confirmCostRisk,
+        });
+        console.log(`pair-loop: one cold-cost turn authorized for ${authorized.handoverId}`);
+      }
+    } catch (error) {
+      fail(error.message);
+    }
+    return;
+  }
   if (options.control) {
     try {
       runControl(root, options);
@@ -4150,6 +4342,24 @@ function main() {
           session_id: coordinatorSessionId(),
           runtime,
         });
+        registerAgentConversation(root, {
+          runtime,
+          agentConversationId: coordinatorSessionId(),
+          kind: "pair",
+        });
+        updateAgentConversationCheckpoint(root, {
+          runtime,
+          agentConversationId: coordinatorSessionId(),
+          kind: "pair",
+          checkpoint: derivePairCheckpoint(root),
+        });
+      }
+      const inFlight = liveInFlightRequest(loadPairState(root));
+      if (inFlight) {
+        console.log(
+          `pair-v4: ${inFlight.request_kind || "request"} ${inFlight.request_id || "in flight"} is still running; preserving its ${inFlight.phase || "saved"} phase`,
+        );
+        return;
       }
     }
     if (options.complete) {
@@ -4201,7 +4411,10 @@ if (require.main === module) main();
 
 module.exports = {
   NESTED_SESSION_ENV_KEYS,
+  adoptFreshAgentConversation,
   applyTestApproval,
+  assertPlainFreshRuntimeCommand,
+  authorizeOneShotColdResume,
   beginActivePairLoop,
   bindAttemptLedger,
   changedPathsSinceSnapshot,
@@ -4214,6 +4427,8 @@ module.exports = {
   hitlGate,
   isDelegable,
   isExpectedFailingTestTask,
+  liveInFlightRequest,
+  launchFreshAgentConversation,
   parseArgs,
   parseWorkerResult,
   readTestProposal,

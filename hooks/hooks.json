@@ -70,7 +70,29 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PAIR_HOOK_RUNTIME=claude bash ~/.local/share/my-claude-code/hooks/handover-gate.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
     "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PAIR_HOOK_RUNTIME=claude bash ~/.local/share/my-claude-code/hooks/handover-gate.sh",
+            "timeout": 30
+          }
+        ]
+      },
       {
         "matcher": "",
         "hooks": [

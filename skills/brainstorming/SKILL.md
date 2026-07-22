@@ -54,6 +54,12 @@ Emit all three fields together. Ask the user to confirm or correct the anchor. O
 
 For discussions longer than roughly five Q&A turns, emit a short pulse: Purpose, emerging direction, anchor tension, and the next unresolved upstream decision.
 
+## Agent Conversation Checkpoint
+
+When this skill is running in a registered brainstorming Agent Conversation, persist its bounded Agent Conversation Checkpoint after every material research or decision boundary and before asking the next question. Include the confirmed Core Anchor, evidence references and digests, confirmed choices, rejected alternatives, current direction, unresolved decisions, next action, and artifact digests. Never persist a prompt, transcript, private reasoning, compact summary, environment map, credential, capability token, or secret-like value.
+
+The Freshness Gate blocks a Cold Agent Conversation before model processing. Continue through its exact Agent Conversation Handover in a plain fresh provider-affine conversation: `pair-loop --fresh-from <handover-id> --runtime auto`, then `pair-loop --adopt-handover <handover-id> --runtime codex|claude`. Do not resume or fork the old conversation. The only old-conversation recovery is `pair-loop --allow-cold-resume <handover-id> --once --confirm-cost-risk`; its next Stop boundary refreshes and seals the checkpoint before retiring the source.
+
 ## Ask Efficient Questions
 
 - Never ask for information that repository evidence can answer.

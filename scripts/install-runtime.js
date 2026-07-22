@@ -395,8 +395,10 @@ function declareRuntimeDelivery(manifest, runtime, dryRun, operations) {
 function managedPairHook(entry) {
   return (entry.hooks || []).some(hook => typeof hook.command === 'string' && (
     hook.command.includes('my-claude-code/hooks/stop-gate.sh') ||
+    hook.command.includes('my-claude-code/hooks/handover-gate.sh') ||
     hook.command.includes('my-claude-code/hooks/pair-owner.sh') ||
     hook.command.includes('/hooks/stop-gate.sh') ||
+    hook.command.includes('/hooks/handover-gate.sh') ||
     hook.command.includes('/hooks/pair-owner.sh')
   ));
 }
@@ -421,6 +423,8 @@ function installCodexHooks(codexDir, pluginDir, dryRun, operations) {
         ...hook,
         command: typeof hook.command === 'string' && hook.command.includes('my-claude-code/hooks/stop-gate.sh')
           ? `PAIR_HOOK_RUNTIME=codex bash ${JSON.stringify(path.join(pluginDir, 'hooks', 'stop-gate.sh'))}`
+          : typeof hook.command === 'string' && hook.command.includes('my-claude-code/hooks/handover-gate.sh')
+            ? `PAIR_HOOK_RUNTIME=codex bash ${JSON.stringify(path.join(pluginDir, 'hooks', 'handover-gate.sh'))}`
           : typeof hook.command === 'string' && hook.command.includes('my-claude-code/hooks/pair-owner.sh')
             ? `PAIR_HOOK_RUNTIME=codex bash ${JSON.stringify(path.join(pluginDir, 'hooks', 'pair-owner.sh'))}`
             : hook.command,

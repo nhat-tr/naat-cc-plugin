@@ -8,6 +8,7 @@ const test = require('node:test');
 const STATE_MODULE = path.resolve(__dirname, '../scripts/lib/pair-state.js');
 const CONTROL_MODULE = path.resolve(__dirname, '../scripts/lib/pair-control.js');
 const OBSERVABLE_MODULE = path.resolve(__dirname, '../scripts/lib/observable-command.js');
+const HANDOVER_MODULE = path.resolve(__dirname, '../scripts/lib/handover-state.js');
 
 function fixture(t) {
   const scratchRoot = process.env.CLAUDE_SCRATCH_DIR
@@ -26,6 +27,10 @@ function stateApi() {
 
 function controlApi() {
   return require(CONTROL_MODULE);
+}
+
+function handoverApi() {
+  return require(HANDOVER_MODULE);
 }
 
 test('real active Work creates repository events, atomic state, readable status, and private attempt evidence', t => {
@@ -63,6 +68,32 @@ test('real active Work creates repository events, atomic state, readable status,
   for (const file of [paths.events, paths.state, paths.status]) {
     assert.equal(fs.statSync(file).mode & 0o077, 0, `${path.basename(file)} must be private`);
   }
+});
+
+test('one reducer retains Work authority and freshness projection survives restart', t => {
+  const root = fixture(t);
+  const { appendPairEvent, loadPairState } = stateApi();
+  const { readAgentConversationRegistry, registerAgentConversation, sealAgentConversationHandover, updateAgentConversationCheckpoint } = handoverApi();
+  appendPairEvent(root, { event: 'work.opened', workId: 'work-handover-integration', planDigest: 'a'.repeat(64) });
+  appendPairEvent(root, { event: 'attempt.started', attemptId: '1.1-handover', taskId: '1.1', phase: 'implementing' });
+  const source = { runtime: 'codex', agentConversationId: 'handover-source', kind: 'pair', now: 1_000 };
+  registerAgentConversation(root, source);
+  updateAgentConversationCheckpoint(root, {
+    ...source,
+    checkpoint: { coreAnchor: 'Preserve Work authority.', nextAction: 'Seal the Agent Conversation Handover.', artifacts: [] },
+  });
+  const sealed = sealAgentConversationHandover(root, { ...source, now: 2_000 });
+
+  const registry = readAgentConversationRegistry(root);
+  assert.equal(registry.work_id, undefined);
+  assert.equal(registry.phase, undefined);
+  assert.equal(registry.attempt_id, undefined);
+  assert.equal(registry.conversations[sealed.sourceKey].status, 'sealed');
+  assert.equal(loadPairState(root).active.phase, 'implementing');
+  delete require.cache[require.resolve(STATE_MODULE)];
+  const afterRestart = require(STATE_MODULE).loadPairState(root);
+  assert.equal(afterRestart.active.attempt_id, '1.1-handover');
+  assert.equal(afterRestart.active.phase, 'implementing');
 });
 
 test('opening a different Work starts an isolated event sequence and projection', t => {

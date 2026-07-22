@@ -7,6 +7,9 @@ const fs = require('fs');
 const path = require('path');
 
 const SKILLS_DIR = process.env.SKILLS_DIR || path.join(__dirname, '../../skills');
+// Pair v3 is retained only as the Pair v4 runtime engine. Its SKILL.md was
+// deliberately removed so agents cannot discover or invoke it as a skill.
+const RUNTIME_ENGINE_DIRECTORIES = new Set(['pair-v3']);
 
 function validateSkills() {
   if (!fs.existsSync(SKILLS_DIR)) {
@@ -16,6 +19,7 @@ function validateSkills() {
 
   const dirs = fs.readdirSync(SKILLS_DIR, { withFileTypes: true })
     .filter(e => e.isDirectory())
+    .filter(e => !RUNTIME_ENGINE_DIRECTORIES.has(e.name))
     .map(e => e.name);
 
   let hasErrors = false;

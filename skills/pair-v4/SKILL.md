@@ -54,6 +54,14 @@ One attempt ID survives CLI exits, agent exits, verification-launch failures, an
 
 Plan challenge is automatic when canonical approval is missing or stale. `auto` remains provider-affine. Cross-provider fallback requires explicit user authorization.
 
+## Cold Agent Conversation Handover
+
+The Freshness Gate protects only registered Pair and brainstorming Agent Conversations. At the exact 60-minute idle boundary it seals an immutable Agent Conversation Handover before model processing; ordinary unregistered conversations remain inert. The handover contains bounded semantic state, never prompts, transcripts, compact summaries, private reasoning, environment maps, credentials, or capability tokens.
+
+Use `pair-loop --fresh-from <handover-id> --runtime auto` to launch a plain provider-affine fresh conversation. In that new conversation, adopt exactly that handover with `pair-loop --adopt-handover <handover-id> --runtime codex|claude`; choosing a different provider is always explicit. Fresh launch arguments never use provider resume, continue, or fork flags.
+
+Only an explicit recovery command permits one old-conversation turn: `pair-loop --allow-cold-resume <handover-id> --once --confirm-cost-risk`. Its next Stop boundary refreshes and seals the Agent Conversation Checkpoint, then returns the source to Retired Agent Conversation status.
+
 ## Repository Authority
 
 For canonical Work, all authority lives under `.pair/runs/<work-id>/`:
@@ -77,7 +85,9 @@ Legacy home-directory history is optional import evidence, never authority. Miss
 - A material implementation finding returns the same attempt to implementation and waits for the patch digest to change before re-verifying.
 - Pair v4 never silently restores visible coordinator work. `pair-loop --discard-attempt` previews affected paths; only the exact follow-up command with the attempt ID and `--confirm-discard` restores the pre-attempt snapshot. The discarded complete patch remains in attempt evidence.
 
-Routine slice review defaults to critical risk; `PAIR_TASK_REVIEW=high-risk|all|off` is an explicit policy choice. The final complete-Work patch always receives cumulative verification and independent review.
+Routine slice review defaults to critical risk; `PAIR_TASK_REVIEW=high-risk|all|off` is an explicit policy choice. `pair-loop --no-independent-review` (or `PAIR_INDEPENDENT_REVIEW=off`) explicitly disables both slice and cumulative independent review, while preserving verification and recording the operator opt-out in final-review evidence.
+
+`pair-loop --advisory-review` (or `PAIR_REVIEW_MODE=advisory`) keeps independent slice and cumulative review enabled, records every finding as evidence, but does not require the coordinator to remediate findings before the Work proceeds. Reviewer-environment failures still preserve the reviewing phase rather than being accepted.
 
 ## Pause, Resume, Takeover, and Human Editing
 
@@ -113,6 +123,8 @@ pair-loop --status --json
 pair-loop --pause
 pair-loop --resume
 pair-loop --cancel-now
+pair-loop --no-independent-review
+pair-loop --advisory-review
 pair-loop --takeover [SESSION]
 pair-loop --begin-human-edit plan|code
 pair-loop --end-human-edit

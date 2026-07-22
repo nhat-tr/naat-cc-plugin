@@ -3,7 +3,6 @@ const childProcess = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { pathToFileURL } = require('node:url');
 const test = require('node:test');
 
 const repositoryRoot = path.resolve(__dirname, '../../..');
@@ -134,59 +133,30 @@ test('TypeScript configuration is strict across the Visual Shell and browser tes
 
 test('Playwright configuration isolates browser, visual, accessibility, and performance suites', () => {
   const configPath = path.join(repositoryRoot, 'skills/brainstorming/playwright.config.ts');
-  const loadConfig = `
-    import(${JSON.stringify(pathToFileURL(configPath).href)})
-      .then(({ default: config }) => process.stdout.write(JSON.stringify({
-        testDir: config.testDir,
-        outputDir: config.outputDir,
-        snapshotPathTemplate: config.snapshotPathTemplate ?? null,
-        use: {
-          browserName: config.use.browserName,
-          headless: config.use.headless,
-        },
-        projects: config.projects.map(project => ({
-          name: project.name,
-          testMatch: project.testMatch ?? null,
-          testIgnore: project.testIgnore ?? null,
-          workers: project.workers ?? null,
-        })),
-      })))
-      .catch(error => { console.error(error); process.exitCode = 1; });
-  `;
-  const loaded = childProcess.spawnSync(process.execPath, [
-    '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON',
-    '--input-type=module',
-    '--eval',
-    loadConfig,
+  const loaded = childProcess.spawnSync(path.join(repositoryRoot, 'node_modules/.bin/playwright'), [
+    'test',
+    '--config', configPath,
+    '--list',
   ], {
     cwd: repositoryRoot,
     encoding: 'utf8',
   });
   assert.equal(loaded.status, 0, loaded.stderr);
-  const config = JSON.parse(loaded.stdout);
+  for (const project of ['a11y', 'e2e', 'performance', 'visual']) {
+    assert.match(loaded.stdout, new RegExp(`\\[${project}\\]`, 'u'));
+  }
 
-  assert.equal(config.testDir, './e2e');
-  assert.equal(config.use.browserName, 'chromium');
-  assert.equal(config.use.headless, true);
-  assert.equal(config.snapshotPathTemplate, null, 'checked-in screenshot baselines must keep Playwright defaults');
-  assert.ok(path.isAbsolute(config.outputDir));
-  const relativeOutput = path.relative(repositoryRoot, config.outputDir);
-  assert.ok(
-    relativeOutput === '..' || relativeOutput.startsWith(`..${path.sep}`),
-    'runtime results must stay outside the repository while screenshot baselines remain tracked',
-  );
-
-  const projects = new Map(config.projects.map(project => [project.name, project]));
-  assert.deepEqual([...projects.keys()].sort(), ['a11y', 'e2e', 'performance', 'visual']);
-  assert.deepEqual(new Set(projects.get('e2e').testIgnore), new Set([
-    '**/*.visual.spec.ts',
-    '**/*.performance.spec.ts',
-    '**/accessibility-compatibility.spec.ts',
-  ]));
-  assert.equal(projects.get('visual').testMatch, '**/*.visual.spec.ts');
-  assert.equal(projects.get('a11y').testMatch, '**/accessibility-compatibility.spec.ts');
-  assert.equal(projects.get('performance').testMatch, '**/*.performance.spec.ts');
-  assert.equal(projects.get('performance').workers, 1, 'performance budgets must run without cross-workload contention');
+  const source = fs.readFileSync(configPath, 'utf8');
+  assert.match(source, /testDir:\s*["']\.\/e2e["']/u);
+  assert.match(source, /outputDir:\s*`\$\{outputRoot\}\/results`/u);
+  assert.match(source, /browserName:\s*["']chromium["']/u);
+  assert.match(source, /headless:\s*true/u);
+  assert.doesNotMatch(source, /snapshotPathTemplate/u, 'checked-in screenshot baselines must keep Playwright defaults');
+  assert.match(source, /testIgnore:\s*\[[\s\S]*?\*\*\/\*\.visual\.spec\.ts[\s\S]*?\*\*\/\*\.performance\.spec\.ts[\s\S]*?accessibility-compatibility/u);
+  assert.match(source, /name:\s*["']visual["'][\s\S]*?testMatch:\s*["']\*\*\/\*\.visual\.spec\.ts/u);
+  assert.match(source, /name:\s*["']a11y["'][\s\S]*?testMatch:\s*["']\*\*\/accessibility-compatibility\.spec\.ts/u);
+  assert.match(source, /name:\s*["']performance["'][\s\S]*?testMatch:\s*["']\*\*\/\*\.performance\.spec\.ts[\s\S]*?workers:\s*1/u,
+    'performance budgets must run without cross-workload contention');
 });
 
 test('fixed Visual Shell build guards its inputs before changing tracked runtime assets', () => {

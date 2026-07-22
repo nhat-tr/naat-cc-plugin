@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "work_id": "work-20260722-cold-agent-conversation-handover",
+  "title": "Cold Agent-Conversation Handover",
+  "status": "design-approved",
+  "spec": {
+    "path": "docs/work/work-20260722-cold-agent-conversation-handover/spec.md",
+    "sha256": "d82ada6cf985dd9430a05e21122aa9c20f4ad3ee7b256db94b6283ebedd136d6"
+  },
+  "active_pair_mirror": ".pair/spec.md",
+  "engineering_quality_contract": {
+    "path": "docs/work/work-20260722-cold-agent-conversation-handover/spec.md",
+    "section": "Engineering Quality Contract",
+    "status": "approved"
+  },
+  "decision_records": [
+    "docs/work/work-20260722-cold-agent-conversation-handover/decisions/DR-001-cold-agent-conversation-handover.md"
+  ],
+  "decision_supersessions": [],
+  "changes": [],
+  "outcomes": [],
+  "evidence_records": [],
+  "plan": {
+    "path": ".pair/plan.md",
+    "sha256": "e590e51853ee57103e9e574e739d4490476315e97ae4544fcf49af59f699dcb3",
+    "status": "validated",
+    "independent_review": "no-blockers:e590e51853ee57103e9e574e739d4490476315e97ae4544fcf49af59f699dcb3:codex/default"
+  }
+}

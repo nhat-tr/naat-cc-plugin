@@ -9,6 +9,46 @@ const REVIEWABLE_PAIR_FILES = new Set([
   '.pair/verify.sh',
 ]);
 
+function normalizedArtifactPath(root, artifactPath) {
+  const sourcePath = path.resolve(root, artifactPath);
+  let stat;
+  try {
+    stat = fs.lstatSync(sourcePath);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      throw new Error(`review artifact does not exist: ${artifactPath}`);
+    }
+    throw error;
+  }
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error(`review artifact must be a regular file: ${artifactPath}`);
+  }
+
+  const repositoryRoot = path.resolve(root);
+  const relative = path.relative(repositoryRoot, sourcePath);
+  const insideRepository = relative && !relative.startsWith(`..${path.sep}`) && relative !== '..';
+  const snapshotPath = insideRepository
+    ? relative
+    : path.join('.pair', 'review-artifacts', `${crypto
+      .createHash('sha256')
+      .update(sourcePath)
+      .digest('hex')}-${path.basename(sourcePath)}`);
+  return {
+    sourcePath,
+    relativePath: snapshotPath.split(path.sep).join('/'),
+  };
+}
+
+function reviewArtifacts(root, artifactPaths = []) {
+  const seen = new Set();
+  return artifactPaths.map(artifactPath => normalizedArtifactPath(root, artifactPath))
+    .filter((artifact) => {
+      if (seen.has(artifact.sourcePath)) return false;
+      seen.add(artifact.sourcePath);
+      return true;
+    });
+}
+
 function repositoryFiles(root, excludedRoot = null) {
   const listed = childProcess.spawnSync(
     'git',
@@ -98,17 +138,39 @@ function repositoryDigest(root, excludedRoot = null) {
   return hash.digest('hex');
 }
 
-function createReviewSnapshot(root, parentDirectory) {
+function reviewArtifactDigest(artifacts = []) {
+  const hash = crypto.createHash('sha256');
+  for (const artifact of artifacts) {
+    hash.update(`${artifact.relativePath}\0`);
+    hash.update(fs.readFileSync(artifact.sourcePath));
+    hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
+function copyReviewArtifact(artifact, destinationRoot) {
+  const destination = path.join(destinationRoot, artifact.relativePath);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.copyFileSync(artifact.sourcePath, destination);
+  fs.chmodSync(destination, fs.statSync(artifact.sourcePath).mode);
+}
+
+function createReviewSnapshot(root, parentDirectory, artifactPaths = []) {
   const directory = fs.mkdtempSync(path.join(parentDirectory, 'review-snapshot-'));
+  const artifacts = reviewArtifacts(root, artifactPaths);
   const sourceDigest = repositoryDigest(root, parentDirectory);
+  const artifactDigest = reviewArtifactDigest(artifacts);
   for (const relativePath of repositoryFiles(root, parentDirectory)) {
     copyRepositoryEntry(root, directory, relativePath);
   }
-  return { directory, digest: treeDigest(directory), sourceDigest };
+  for (const artifact of artifacts) copyReviewArtifact(artifact, directory);
+  return { directory, digest: treeDigest(directory), sourceDigest, artifactDigest, artifacts };
 }
 
 module.exports = {
   createReviewSnapshot,
   repositoryDigest,
+  reviewArtifactDigest,
+  reviewArtifacts,
   treeDigest,
 };

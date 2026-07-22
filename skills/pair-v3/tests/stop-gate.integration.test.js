@@ -70,27 +70,23 @@ function orient(root, sessionId = 'orient-session') {
   });
 }
 
-test('native Stop contract continues only the owning Codex and Claude session', t => {
+test('disabled Stop gate leaves both owning and unrelated Codex and Claude sessions unblocked', t => {
   const root = fixture(t);
-  assert.equal(invoke(root, 'codex', 'owner-session').continue, false);
+  assert.equal(invoke(root, 'codex', 'owner-session'), null);
   assert.equal(invoke(root, 'codex', 'other-codex'), null);
   takeoverWork(root, 'claude-owner', 'claude');
-  assert.equal(invoke(root, 'claude', 'claude-owner').decision, 'block');
+  assert.equal(invoke(root, 'claude', 'claude-owner'), null);
   assert.equal(invoke(root, 'claude', 'other-claude'), null);
 });
 
-test('Codex and Claude native Stop response shapes are exact', t => {
+test('disabled Stop gate emits no native blocking response shape', t => {
   const root = fixture(t);
   const codex = invoke(root, 'codex', 'owner-session');
-  assert.equal(codex.continue, false);
-  assert.match(codex.stopReason, /attempt 1\.1-stop.*implementing/i);
-  assert.deepEqual(Object.keys(codex).sort(), ['continue', 'stopReason']);
+  assert.equal(codex, null);
 
   takeoverWork(root, 'claude-owner', 'claude');
   const claude = invoke(root, 'claude', 'claude-owner', { stop_hook_active: true });
-  assert.equal(claude.decision, 'block');
-  assert.match(claude.reason, /attempt 1\.1-stop.*implementing/i);
-  assert.deepEqual(Object.keys(claude).sort(), ['decision', 'reason']);
+  assert.equal(claude, null);
 });
 
 test('Claude captures ownership from the exact Pair Bash invocation, not an unrelated command', t => {
@@ -106,7 +102,7 @@ test('Claude captures ownership from the exact Pair Bash invocation, not an unre
   const captured = captureOwner(root, 'claude-pair-owner', 'PAIR_RUNTIME=auto pair-loop --runtime auto');
   assert.equal(captured.status, 0, captured.stderr);
   assert.equal(loadPairState(root).continuation.owner_session_id, 'claude-pair-owner');
-  assert.equal(invoke(root, 'claude', 'claude-pair-owner').decision, 'block');
+  assert.equal(invoke(root, 'claude', 'claude-pair-owner'), null);
   assert.equal(invoke(root, 'claude', 'unrelated-session'), null);
 });
 
@@ -137,19 +133,16 @@ test('orientation names a material blocker without telling a new session to adva
   assert.doesNotMatch(result.stdout, /advance only the saved phase/i);
 });
 
-test('evidence progress is reported and no checkbox or fixed retry count opens the gate', t => {
+test('disabled Stop gate never emits continuation instructions despite evidence progress', t => {
   const root = fixture(t);
   for (let index = 0; index < 10; index++) {
-    const response = invoke(root, 'codex', 'owner-session');
-    assert.equal(response.continue, false);
+    assert.equal(invoke(root, 'codex', 'owner-session'), null);
   }
   appendPairEvent(root, {
     event: 'phase.progressed', attemptId: '1.1-stop', taskId: '1.1', phase: 'verifying',
     evidence_digest: 'a'.repeat(64),
   });
-  const progressed = invoke(root, 'codex', 'owner-session');
-  assert.match(progressed.stopReason, /verifying/);
-  assert.match(progressed.stopReason, /evidence sequence/i);
+  assert.equal(invoke(root, 'codex', 'owner-session'), null);
 });
 
 test('hook infrastructure failure never deletes or rewrites the durable phase', t => {

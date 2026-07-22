@@ -144,6 +144,14 @@ not a skill). `pair-loop --legacy-v3` is still the explicit CLI route to the old
 split headless lifecycle; existing `pair-loop`, `--once`, `--inline`, and
 `--complete` entry points still work against v4 state.
 
+Registered Pair and brainstorming Agent Conversations are protected by the
+Freshness Gate after 60 minutes idle. A Cold Agent Conversation is blocked before
+model processing and seals a bounded Agent Conversation Handover. Start a plain
+provider-affine conversation with `pair-loop --fresh-from <handover-id> --runtime auto`,
+then adopt it with `pair-loop --adopt-handover <handover-id> --runtime codex|claude`.
+Never resume or fork the source conversation. The sole explicit cost-risk recovery
+is `pair-loop --allow-cold-resume <handover-id> --once --confirm-cost-risk`.
+
 ##### Pair v4 quick start
 
 1. **Spec and promote** — use `brainstorming`, then `pair-promote`, to publish
@@ -165,7 +173,8 @@ of rules that instructions alone under-deliver:
 
 | Hook | Event | Does |
 |------|-------|------|
-| `stop-gate.sh` | Stop | Delegates to the Pair v4 reducer and emits the native Codex or Claude continuation response only for the owning session. Unrelated, paused, blocked, and complete sessions stop normally; there is no checkbox or fixed no-progress counter. Opt-out `PAIR_STOP_GATE=off` (legacy `CLAUDE_STOP_GATE=off`) |
+| `handover-gate.sh` | UserPromptSubmit, Stop | Records registered Stop activity and blocks only a stale registered Agent Conversation before model processing; it never persists submitted prompts or compaction summaries. |
+| `stop-gate.sh` | Stop | Disabled by operator configuration; it emits no continuation response. |
 | `delegation-nudge.sh` | PostToolUse (edits) | Once per session at the 8th main-session edit, reminds the model to batch mechanical remainders into a subagent (mech/haiku, general-purpose/sonnet). Opt-out `CLAUDE_DELEGATION_NUDGE=off`; threshold `CLAUDE_DELEGATION_NUDGE_AT` |
 | `commit-guard.sh` | PreToolUse (git commit) | Blocks commits containing attribution trailers (Co-Authored-By / Generated with Claude) before they run |
 | `scratch-guard.sh` | PreToolUse (Write) | Blocks writes to raw `/tmp` and throwaway `tmp-*.spec/test.*` files in repo trees; points to `$CLAUDE_SCRATCH_DIR` |

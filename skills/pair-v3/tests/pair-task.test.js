@@ -14,6 +14,7 @@ const {
   finalReviewCapStatus,
   finalGateFailureCapStatus,
   isExpectedFailingTestTask,
+  liveInFlightRequest,
   parseArgs,
   parseWorkerResult,
   readWorkLinkage,
@@ -32,6 +33,7 @@ const {
   workAttemptCapStatus,
 } = require('../scripts/pair-task');
 const { planContractDigest } = require('../scripts/lib/pair-core');
+const { reviewSessionFile } = require('../scripts/lib/review-session');
 const {
   createWorkRoot,
   writeDecisionRecord,
@@ -65,6 +67,28 @@ test('Pair v4 has no implicit count ceilings while legacy v3 keeps its compatibi
       else process.env[key] = value;
     }
   }
+});
+
+test('explicit independent-review opt-out disables slice review', () => {
+  assert.equal(parseArgs(['--no-independent-review']).independentReview, false);
+  assert.equal(shouldRunTaskReview({ risk: 'critical' }, { independentReview: false }, {}), false);
+});
+
+test('advisory review keeps the independent reviewer enabled without requiring remediation', () => {
+  assert.equal(parseArgs(['--advisory-review']).advisoryReview, true);
+  assert.equal(parseArgs(['--advisory-review']).independentReview, true);
+});
+
+test('liveInFlightRequest preserves a journaled reviewer request until its completion event clears it', () => {
+  const active = {
+    request_id: 'review-1',
+    request_pid: 321,
+    request_kind: 'slice-review',
+    phase: 'reviewing',
+  };
+  assert.equal(liveInFlightRequest({ in_flight_request: active }, pid => pid === 321), active);
+  assert.equal(liveInFlightRequest({ in_flight_request: active }, () => false), active);
+  assert.equal(liveInFlightRequest({ in_flight_request: null }, () => true), null);
 });
 
 function testRepo(t) {
@@ -344,6 +368,95 @@ test('runReview uses an external sandbox command for hosted Codex', t => {
   assert.match(result.command.args.at(-1), /at most 8 shell commands/i);
 });
 
+test('runReview materializes the canonical complete patch in the external reviewer snapshot', t => {
+  const root = testRepo(t);
+  const scratchRoot = fs.mkdtempSync(path.join(path.dirname(root), 'review-snapshot-parent-'));
+  const fakeBin = path.join(scratchRoot, 'bin');
+  const capture = path.join(scratchRoot, 'reviewer-capture.json');
+  const completePatch = path.join(
+    root,
+    '.pair',
+    'runs',
+    'work-review-snapshot',
+    'attempts',
+    '1.1-snapshot',
+    'complete.patch',
+  );
+  fs.mkdirSync(path.dirname(completePatch), { recursive: true });
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.mkdirSync(path.join(root, '.pair'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.pair', 'plan.md'), '# Plan\n');
+  fs.writeFileSync(completePatch, 'Review Slice task: 1.1\n');
+  const staleSessionFile = reviewSessionFile(root);
+  fs.mkdirSync(path.dirname(staleSessionFile), { recursive: true });
+  fs.writeFileSync(staleSessionFile, `${JSON.stringify({
+    schema: 1,
+    product: 'pair-v4',
+    runtime: 'codex',
+    session_id: 'reviewer-bound-to-an-old-snapshot',
+    snapshot_digest: '0'.repeat(64),
+  })}\n`);
+  fs.writeFileSync(path.join(fakeBin, 'codex'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const output = args[args.indexOf('--output-last-message') + 1];
+const prompt = args.at(-1);
+const patch = prompt.match(/Review Slice patch: (.+)/)?.[1];
+fs.writeFileSync(process.env.PAIR_TEST_REVIEW_CAPTURE, JSON.stringify({
+  cwd: process.cwd(),
+  patch,
+  patchExists: Boolean(patch) && fs.existsSync(patch),
+  planExists: fs.existsSync(path.join(process.cwd(), '.pair', 'plan.md')),
+}));
+fs.writeFileSync(output, JSON.stringify({
+  verdict: 'approve', recommended_action: 'approve', summary: 'snapshot has the complete patch', findings: [],
+}));
+process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: 'review-snapshot-session' }) + '\\n');
+`);
+  fs.chmodSync(path.join(fakeBin, 'codex'), 0o755);
+  const previousPath = process.env.PATH;
+  const previousCapture = process.env.PAIR_TEST_REVIEW_CAPTURE;
+  const previousTransport = process.env.PAIR_REVIEW_TRANSPORT;
+  process.env.PATH = `${fakeBin}${path.delimiter}${previousPath || ''}`;
+  process.env.PAIR_TEST_REVIEW_CAPTURE = capture;
+  process.env.PAIR_REVIEW_TRANSPORT = 'direct';
+  t.after(() => {
+    process.env.PATH = previousPath;
+    if (previousCapture === undefined) delete process.env.PAIR_TEST_REVIEW_CAPTURE;
+    else process.env.PAIR_TEST_REVIEW_CAPTURE = previousCapture;
+    if (previousTransport === undefined) delete process.env.PAIR_REVIEW_TRANSPORT;
+    else process.env.PAIR_REVIEW_TRANSPORT = previousTransport;
+    fs.rmSync(scratchRoot, { recursive: true, force: true });
+  });
+
+  const result = runReview({
+    runtime: 'codex',
+    route: { id: 'codex-default-medium', model: 'default' },
+    root,
+    task: { id: '1.1', text: 'review snapshot evidence', risk: 'medium' },
+    planPath: '.pair/plan.md',
+    scratchDir: scratchRoot,
+    attemptId: '1.1-snapshot',
+    timeoutMs: 5_000,
+    dryRun: false,
+    externalSandbox: true,
+    reviewSlicePath: completePatch,
+  });
+
+  const observed = JSON.parse(fs.readFileSync(capture, 'utf8'));
+  assert.equal(result.status, 0);
+  assert.equal(result.command.resumed, false, 'a session bound to another snapshot must not be resumed');
+  assert.match(observed.cwd, /review-snapshot-/);
+  assert.equal(observed.planExists, true);
+  assert.equal(observed.patchExists, true);
+  assert.equal(
+    observed.patch,
+    path.join(observed.cwd, '.pair', 'runs', 'work-review-snapshot', 'attempts', '1.1-snapshot', 'complete.patch'),
+  );
+  assert.notEqual(observed.patch, completePatch, 'the reviewer must read the snapshot copy, never the source patch');
+});
+
 test('anchor reviews are opt-in instead of silently doubling successful review cost', () => {
   const review = { verdict: 'approve', recommended_action: 'approve', findings: [] };
   assert.equal(shouldRunAnchorReview('attempt-ff', { risk: 'high' }, review, {}), false);
@@ -552,7 +665,7 @@ test('read-only Git metadata still snapshots, compares, and restores a dirty wor
   try {
     const prohibited = gitIn(root, ['stash', 'create', 'permission-probe']);
     assert.notEqual(prohibited.status, 0, 'the test must exercise a real Git metadata-write denial');
-    assert.match(prohibited.stderr, /index\.lock|operation not permitted|permission denied/i);
+    assert.match(prohibited.stderr, /index\.lock|could not write index|operation not permitted|permission denied/i);
 
     const snapshot = snapshotWorktree(root, snapshotRoot);
     assert.equal(snapshot.strategy, 'worktree-copy');

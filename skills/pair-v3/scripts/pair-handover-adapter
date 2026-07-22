@@ -1,0 +1,75 @@
+#!/usr/bin/env node
+
+const childProcess = require('node:child_process');
+const fs = require('node:fs');
+
+const {
+  assessAgentConversationFreshness,
+  recordAgentConversationStop,
+} = require('./lib/handover-state');
+
+function readInput() {
+  try {
+    return JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
+  } catch {
+    return null;
+  }
+}
+
+function repositoryRoot(cwd) {
+  const result = childProcess.spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function runtimeFor(input) {
+  const configured = String(process.env.PAIR_HOOK_RUNTIME || input?.runtime || '').toLowerCase();
+  if (configured === 'codex' || configured === 'claude') return configured;
+  if (process.env.CLAUDE_PROJECT_DIR || process.env.CLAUDECODE) return 'claude';
+  return 'codex';
+}
+
+function response(runtime, reason) {
+  return runtime === 'claude'
+    ? { decision: 'block', reason }
+    : { continue: false, stopReason: reason };
+}
+
+function blockReason(assessment, runtime) {
+  if (assessment.status === 'invalid-activity') {
+    return `Freshness Gate blocked this Agent Conversation before model processing: ${assessment.diagnostic}. Open a fresh ${runtime} agent conversation after repairing the registered handover state.`;
+  }
+  if (assessment.status === 'retired') {
+    return 'Freshness Gate blocked this Retired Agent Conversation before model processing. Its Agent Conversation Handover was already adopted.';
+  }
+  const handoverId = assessment.handoverId;
+  return `Freshness Gate blocked this Cold Agent Conversation before model processing after ${assessment.ageMs ?? 'unknown'}ms idle. Agent Conversation Handover ${handoverId} is sealed. Open a fresh ${runtime} agent conversation and run pair-loop --fresh-from ${handoverId} --runtime ${runtime}.`;
+}
+
+function main() {
+  const input = readInput();
+  if (!input || !input.session_id) return;
+  const event = input.hook_event_name;
+  if (!['UserPromptSubmit', 'Stop', 'PreCompact', 'PostCompact'].includes(event)) return;
+  const root = repositoryRoot(input.cwd || input.project_dir || process.env.CLAUDE_PROJECT_DIR || process.cwd());
+  if (!root) return;
+  const runtime = runtimeFor(input);
+  const identity = { runtime, agentConversationId: input.session_id, kind: input.agent_conversation_kind || 'pair' };
+  if (event === 'Stop') {
+    recordAgentConversationStop(root, { ...identity, now: input.now });
+    return;
+  }
+  if (event !== 'UserPromptSubmit') return;
+  let assessment;
+  try {
+    assessment = assessAgentConversationFreshness(root, { ...identity, now: input.now });
+  } catch {
+    process.stdout.write(`${JSON.stringify(response(runtime, 'Freshness Gate blocked this Agent Conversation before model processing because registered handover state is invalid.'))}\n`);
+    return;
+  }
+  if (!['cold', 'sealed', 'retired', 'invalid-activity', 'override-active'].includes(assessment.status)) return;
+  process.stdout.write(`${JSON.stringify(response(runtime, blockReason(assessment, runtime)))}\n`);
+}
+
+if (require.main === module) main();
+
+module.exports = { blockReason, response, runtimeFor };

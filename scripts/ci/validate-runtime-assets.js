@@ -139,6 +139,8 @@ function validateRuntimeAssets() {
       // .brainstorm/ holds explicitly persistent, machine-local Visual Sessions.
       // Absolute recovery paths are expected there and the directory is gitignored.
       !filePath.includes(`${path.sep}.brainstorm${path.sep}`) &&
+      // .pair is ignored, machine-local runtime evidence; it is not checked-in source.
+      !filePath.includes(`${path.sep}.pair${path.sep}`) &&
       !filePath.endsWith('.png') &&
       !filePath.endsWith('.jpg') &&
       !filePath.endsWith('.jpeg') &&

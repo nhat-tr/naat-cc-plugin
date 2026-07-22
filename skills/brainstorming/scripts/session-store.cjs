@@ -6,11 +6,23 @@ const MAX_MESSAGE_LENGTH = 10_000;
 const MAX_COMMENT_LENGTH = 4_000;
 const MAX_ITEMS = 50;
 const LOCK_STALE_MS = 30_000;
+const LOCK_OWNER_FILE = 'owner.json';
 const DEFAULT_RECONCILIATION_INTERVAL_MS = 1_000;
 const MAX_RECONCILIATION_INTERVAL_MS = 60_000;
 
 function sleep(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function processIsAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ESRCH') return false;
+    if (error?.code === 'EPERM') return true;
+    throw error;
+  }
 }
 
 function optionalText(value, maximum, label) {
@@ -116,6 +128,7 @@ class SessionStore {
     this.lockDir = path.join(this.stateDir, '.session.lock');
     this.now = options.now || Date.now;
     this.randomUUID = options.randomUUID || crypto.randomUUID;
+    this.processAlive = options.processAlive || processIsAlive;
     this.lockTimeoutMs = options.lockTimeoutMs || 2_000;
     this.watch = options.watch || ((directory, listener) => fs.watch(directory, listener));
     this.setTimeout = options.setTimeout || setTimeout;
@@ -129,6 +142,7 @@ class SessionStore {
       ['clearTimeout', this.clearTimeout],
       ['setImmediate', this.setImmediate],
       ['clearImmediate', this.clearImmediate],
+      ['processAlive', this.processAlive],
     ]) {
       if (typeof dependency !== 'function') throw new TypeError(`${name} must be a function`);
     }
@@ -140,27 +154,66 @@ class SessionStore {
     fs.mkdirSync(this.stateDir, { recursive: true, mode: 0o700 });
   }
 
+  _createLock() {
+    const temporary = `${this.lockDir}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    fs.writeFileSync(temporary, `${JSON.stringify({ pid: process.pid })}\n`, {
+      flag: 'wx',
+      mode: 0o600,
+    });
+    try {
+      fs.linkSync(temporary, this.lockDir);
+      return true;
+    } catch (error) {
+      if (error.code === 'EEXIST') return false;
+      throw error;
+    } finally {
+      fs.rmSync(temporary, { force: true });
+    }
+  }
+
+  _lockOwnerHasExited() {
+    let stat;
+    try {
+      stat = fs.lstatSync(this.lockDir);
+    } catch (error) {
+      if (error.code === 'ENOENT') return false;
+      throw error;
+    }
+    const ownerFile = stat.isDirectory()
+      ? path.join(this.lockDir, LOCK_OWNER_FILE)
+      : this.lockDir;
+    if (stat.isSymbolicLink()) return false;
+    let owner;
+    try {
+      const ownerStat = fs.lstatSync(ownerFile);
+      if (!ownerStat.isFile() || ownerStat.isSymbolicLink()) return false;
+      owner = JSON.parse(fs.readFileSync(ownerFile, 'utf8'));
+    } catch {
+      return false;
+    }
+    return Number.isInteger(owner?.pid) && owner.pid > 0 && !this.processAlive(owner.pid);
+  }
+
   _withLock(action) {
     const deadline = Date.now() + this.lockTimeoutMs;
     while (true) {
+      if (this._createLock()) break;
       try {
-        fs.mkdirSync(this.lockDir);
-        break;
-      } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        try {
-          const age = Date.now() - fs.statSync(this.lockDir).mtimeMs;
-          if (age > LOCK_STALE_MS) {
-            fs.rmSync(this.lockDir, { recursive: true, force: true });
-            continue;
-          }
-        } catch (statError) {
-          if (statError.code !== 'ENOENT') throw statError;
+        if (this._lockOwnerHasExited()) {
+          fs.rmSync(this.lockDir, { recursive: true, force: true });
           continue;
         }
-        if (Date.now() >= deadline) throw new Error('timed out waiting for the brainstorming session lock');
-        sleep(10);
+        const age = Date.now() - fs.statSync(this.lockDir).mtimeMs;
+        if (age > LOCK_STALE_MS) {
+          fs.rmSync(this.lockDir, { recursive: true, force: true });
+          continue;
+        }
+      } catch (statError) {
+        if (statError.code !== 'ENOENT') throw statError;
+        continue;
       }
+      if (Date.now() >= deadline) throw new Error('timed out waiting for the brainstorming session lock');
+      sleep(10);
     }
     try {
       return action();
