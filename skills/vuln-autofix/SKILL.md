@@ -7,7 +7,7 @@ description: "Use this skill WHENEVER the user wants to FIX / remediate / patch 
 
 Turns kube-vuln HIGH/CRITICAL findings into remediation: mechanical package bumps become build-verified PRs (**Lane A**); everything a clean bump can't resolve is researched and returned as scored options (**Lane B**). Nothing is silently ignored.
 
-The bundled CLI (`scripts/vuln-fix.ts`) is a thin front-end over the shared `repo-ops` library (`../../../lib/repo-ops/`, reusable by other tools) plus this skill's own `plan`/`policy`. `repo-ops` owns the deterministic plumbing (discovery, git worktrees, the csproj bump/remove, restore-reconcile, `az` PR creation, submodule bumps); this skill supplies the judgment, the research, and **one** approval gate.
+The bundled CLI (`scripts/vuln-fix.ts`) is a thin front-end over the shared `repo-ops` library (`../../../lib/repo-ops/`, reusable by other tools), the shared `az` PR module (`../../../infra/azure-devops/pr.ts`), plus this skill's own `plan`/`policy`. `repo-ops` owns the deterministic workspace plumbing (discovery, git worktrees, the csproj bump/remove, restore-reconcile, submodule bumps); `infra/azure-devops/pr.ts` owns `az repos pr` create/update/complete (shared with the `az-pr` skill); this skill supplies the judgment, the research, and **one** approval gate.
 
 ## Automation model (default: one upfront "go", then unattended)
 Optimize for the fewest interruptions. The project `.claude/settings.json` allowlists the git/az/kubectl/dotnet command surface + the Azure/NuGet sandbox network+filesystem egress, so individual commands do **not** prompt. Safety comes from **a single batched approval**, not per-command prompts:

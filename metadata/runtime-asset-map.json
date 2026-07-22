@@ -415,6 +415,20 @@
       "supported_runtimes": [
         "claude"
       ]
+    },
+    "agent.az-pr": {
+      "type": "agent",
+      "canonical_file": "agents/az-pr.md",
+      "supported_runtimes": [
+        "claude"
+      ]
+    },
+    "skill.az-pr": {
+      "type": "skill",
+      "canonical_file": "skills/az-pr/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ]
     }
   }
 }

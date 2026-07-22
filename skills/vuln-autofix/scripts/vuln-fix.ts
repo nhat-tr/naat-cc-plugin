@@ -26,7 +26,7 @@ import { defaultMapPath, loadRepoImageMap } from "../../../lib/repo-ops/repo-ima
 import { createFixWorktree } from "../../../lib/repo-ops/worktree.ts";
 import { bumpPackageReference, removePackageReference, verifyBuild } from "../../../lib/repo-ops/bump.ts";
 import { reconcile } from "../../../lib/repo-ops/reconcile.ts";
-import { openPr } from "../../../lib/repo-ops/pr.ts";
+import { createPr } from "../../../infra/azure-devops/pr.ts";
 import { bumpCommonSubmodule } from "../../../lib/repo-ops/submodule.ts";
 import { git } from "../../../lib/repo-ops/sh.ts";
 import type { ServiceRepo, Topology } from "../../../lib/repo-ops/types.ts";
@@ -156,7 +156,7 @@ function main(): void {
           ? (flags["remote-url"] as string)
           : git(repoPath, ["remote", "get-url", "origin"]).stdout.trim() || undefined;
       out(
-        openPr({
+        createPr({
           repoPath,
           repoName: req(flags, "repo-name"),
           branch: req(flags, "branch"),
