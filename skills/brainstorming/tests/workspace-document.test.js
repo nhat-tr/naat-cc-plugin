@@ -71,6 +71,7 @@ test('Visual Document v2 exposes one stable lowercase Workspace Kind discriminat
     'research',
     'business',
     'review',
+    'uml',
   ]);
 
   const normalizeWorkspaceDocument = contractValue('normalizeWorkspaceDocument', 'function');

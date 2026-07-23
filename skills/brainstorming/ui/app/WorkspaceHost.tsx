@@ -36,7 +36,7 @@ export interface EvidenceReference {
 export interface WorkspaceEnvelope {
   version: 2;
   work_id: string;
-  workspace_kind: "product" | "architecture" | "research" | "business" | "review";
+  workspace_kind: "product" | "architecture" | "research" | "business" | "review" | "uml";
   title: string;
   evidence_refs: EvidenceReference[];
   revision: string;

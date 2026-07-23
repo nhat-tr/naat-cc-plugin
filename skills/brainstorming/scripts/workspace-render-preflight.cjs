@@ -7,6 +7,7 @@ const {
   buildArchitectureElkGraph,
   defaultArchitecturePresentationScope,
 } = require('./architecture-elk-graph.cjs');
+const { buildUmlElkGraph } = require('./uml-elk-graph.cjs');
 
 function finitePositive(value) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
@@ -124,17 +125,81 @@ async function preflightArchitectureContent(content, options = {}) {
   };
 }
 
-async function preflightWorkspaceDocument(document, options = {}) {
-  if (document?.version !== 2 || document.workspace_kind !== 'architecture') {
+async function preflightUmlContent(content, options = {}) {
+  // The sequence family renders with a deterministic client-side layout, not ELK, so
+  // there is no ELK geometry to preflight — schema + semantics already guaranteed every
+  // message endpoint resolves. Report ready without invoking the layout engine.
+  if (content.diagram_kind === 'sequence') {
     return {
-      status: 'not_applicable',
-      workspace_kind: document?.version === 2 ? document.workspace_kind : null,
+      status: 'ready',
+      workspace_kind: 'uml',
+      diagram_kind: 'sequence',
+      width: 0,
+      height: 0,
+      node_count: content.lifelines.length,
+      edge_count: content.messages.length,
+      scopes: [],
     };
   }
-  return preflightArchitectureContent(document.content, options);
+
+  const layoutGraph = options.layout || defaultLayout;
+  const scopeId = content.diagram_kind;
+  try {
+    const graph = buildUmlElkGraph(content);
+    const layout = await layoutGraph(graph);
+    if (!finitePositive(layout.width) || !finitePositive(layout.height)) {
+      throw new Error('ELK returned blank canvas dimensions');
+    }
+    const layoutNodes = new Map();
+    collectLayoutNodes(layout, layoutNodes);
+    for (const node of content.nodes) {
+      const geometry = layoutNodes.get(node.id);
+      if (!geometry
+        || !Number.isFinite(geometry.x)
+        || !Number.isFinite(geometry.y)
+        || !finitePositive(geometry.width)
+        || !finitePositive(geometry.height)) {
+        throw new Error(`ELK omitted finite geometry for node ${node.id}`);
+      }
+    }
+    return {
+      status: 'ready',
+      workspace_kind: 'uml',
+      diagram_kind: content.diagram_kind,
+      width: layout.width,
+      height: layout.height,
+      node_count: content.nodes.length,
+      edge_count: content.edges.length,
+      scopes: [{
+        id: scopeId,
+        status: 'ready',
+        width: layout.width,
+        height: layout.height,
+        node_count: content.nodes.length,
+        edge_count: content.edges.length,
+      }],
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`UML render preflight failed: ${scopeId}: ${message}`, { cause: error });
+  }
+}
+
+async function preflightWorkspaceDocument(document, options = {}) {
+  if (document?.version !== 2) {
+    return { status: 'not_applicable', workspace_kind: null };
+  }
+  if (document.workspace_kind === 'architecture') {
+    return preflightArchitectureContent(document.content, options);
+  }
+  if (document.workspace_kind === 'uml') {
+    return preflightUmlContent(document.content, options);
+  }
+  return { status: 'not_applicable', workspace_kind: document.workspace_kind };
 }
 
 module.exports = {
   preflightArchitectureContent,
+  preflightUmlContent,
   preflightWorkspaceDocument,
 };

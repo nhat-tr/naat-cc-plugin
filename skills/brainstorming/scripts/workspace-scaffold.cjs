@@ -11,6 +11,7 @@ const DEFAULT_TITLES = Object.freeze({
   research: 'Research Evidence Board',
   business: 'Business Reasoning Canvas',
   review: 'Feature Review Workbench',
+  uml: 'UML Diagram',
 });
 
 function digest(value) {
@@ -469,12 +470,70 @@ function reviewDraft(workId) {
   };
 }
 
+function umlDraft() {
+  return {
+    evidence_refs: [],
+    frames: [{
+      id: 'diagram',
+      title: 'UML diagram',
+      component_ids: ['component-one', 'component-two', 'depends-on'],
+    }],
+    components: [
+      { id: 'component-one', frame_id: 'diagram', label: 'Replace with a component' },
+      { id: 'component-two', frame_id: 'diagram', label: 'Replace with a collaborator' },
+      { id: 'depends-on', frame_id: 'diagram', label: 'depends on' },
+    ],
+    decisions: [],
+    content: {
+      diagram_kind: 'component',
+      layout: { contract_version: 1, engine: 'elk', algorithm: 'layered', direction: 'RIGHT' },
+      containers: [],
+      nodes: [
+        {
+          id: 'component-one',
+          component_id: 'component-one',
+          label: 'Replace with a component',
+          node_kind: 'component',
+          container_id: null,
+          layout_hint: { layer: 0, order: 0 },
+        },
+        {
+          id: 'component-two',
+          component_id: 'component-two',
+          label: 'Replace with a collaborator',
+          node_kind: 'component',
+          container_id: null,
+          layout_hint: { layer: 1, order: 0 },
+        },
+      ],
+      edges: [{
+        id: 'depends-on',
+        component_id: 'depends-on',
+        label: 'depends on',
+        relation: 'dependency',
+        source: 'component-one',
+        target: 'component-two',
+      }],
+      camera: {
+        min_zoom: 0.2,
+        max_zoom: 2,
+        default_zoom: 1,
+        fit_padding: 0.15,
+        controls: ['pan', 'zoom_in', 'zoom_out', 'fit_view', 'minimap'],
+      },
+      focus_targets: ['component-one'],
+      annotation_targets: ['component-one', 'component-two', 'depends-on'],
+    },
+  };
+}
+
 const DRAFT_BUILDERS = Object.freeze({
   product: (_workId, title) => productDraft(title),
   architecture: () => architectureDraft(),
   research: () => researchDraft(),
   business: () => businessDraft(),
   review: workId => reviewDraft(workId),
+  uml: () => umlDraft(),
 });
 
 function createWorkspaceScaffold(options = {}) {

@@ -17,6 +17,7 @@ const workspaceTitles = {
   research: 'Research Evidence Board',
   business: 'Business Reasoning Canvas',
   review: 'Feature Review Workbench',
+  uml: 'UML Diagram',
 };
 
 function runSession(...args) {

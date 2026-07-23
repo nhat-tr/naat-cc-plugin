@@ -702,6 +702,23 @@ function writeDocumentIntoLiveSession(metadata, document) {
   });
 }
 
+// A --draft file is self-describing: an optional top-level `kind` selects the compiler
+// (default `architecture`, so every existing Architecture Draft keeps working untouched).
+// This is the single draft dispatch shared by present, publish, and validate.
+function compileDraft(resolvedPath) {
+  const draft = readRegularJson(resolvedPath, 'Visual Draft');
+  const kind = draft && typeof draft === 'object' && !Array.isArray(draft)
+    ? (draft.kind ?? 'architecture')
+    : 'architecture';
+  if (kind === 'architecture') {
+    return require('./architecture-draft.cjs').compileArchitectureDraft(draft);
+  }
+  if (kind === 'uml') {
+    return require('./uml-draft.cjs').compileUmlDraft(draft);
+  }
+  return fail(`unsupported draft kind ${kind}; expected architecture or uml`);
+}
+
 async function publish(options) {
   if (Boolean(options.document) === Boolean(options.draft)) {
     fail('publish requires exactly one of --document FILE or --draft FILE');
@@ -713,9 +730,7 @@ async function publish(options) {
   // (normalizeDocument enforces that); a mismatched or malformed revision is rejected rather than
   // silently recomputed. present, by contrast, authors a fresh document and derives the revision.
   const document = options.draft
-    ? require('./architecture-draft.cjs').compileArchitectureDraft(
-      readRegularJson(source, 'Architecture Draft'),
-    )
+    ? compileDraft(source)
     : normalizeDocument(readRegularJson(source, 'Visual Document candidate'));
   const roundTrip = normalizeDocument(document);
   if (JSON.stringify(roundTrip) !== JSON.stringify(document)) {
@@ -733,14 +748,13 @@ async function present(options) {
   }
   let document;
   if (options.draft) {
-    const { compileArchitectureDraft } = require('./architecture-draft.cjs');
-    document = compileArchitectureDraft(readRegularJson(path.resolve(options.draft), 'Architecture Draft'));
+    document = compileDraft(path.resolve(options.draft));
   } else {
     document = normalizeAuthoredDocument(
       readRegularJson(path.resolve(options.document), 'Visual Document candidate'),
     );
   }
-  if (document.version !== 2) fail('present accepts only Visual Document v2 or an Architecture Draft');
+  if (document.version !== 2) fail('present accepts only Visual Document v2 or a compiled Draft');
   const { preflightWorkspaceDocument } = require('./workspace-render-preflight.cjs');
   const elkPreflight = await preflightWorkspaceDocument(document);
 
@@ -980,8 +994,7 @@ async function validate(options) {
   }
   let document;
   if (options.draft) {
-    const { compileArchitectureDraft } = require('./architecture-draft.cjs');
-    document = compileArchitectureDraft(readRegularJson(path.resolve(options.draft), 'Architecture Draft'));
+    document = compileDraft(path.resolve(options.draft));
   } else {
     document = normalizeAuthoredDocument(
       readRegularJson(path.resolve(options.document), 'Visual Document candidate'),
@@ -1203,7 +1216,7 @@ async function main() {
       '       visual-session.cjs resume [--session-dir DIR] [--quiet]',
       '       visual-session.cjs validate (--draft FILE | --document FILE)',
       '       visual-session.cjs scaffold --output FILE [--profile technical|product|business] [--kinds anchor,flow,decision]',
-      '       visual-session.cjs scaffold --output FILE --work-id ID --workspace-kind product|architecture|research|business|review [--title TITLE]',
+      '       visual-session.cjs scaffold --output FILE --work-id ID --workspace-kind product|architecture|research|business|review|uml [--title TITLE]',
       '       visual-session.cjs publish (--draft FILE | --document FILE) [--session-dir DIR]',
       '       visual-session.cjs migrate --work-id ID --workspace-kind KIND [--session-dir DIR]',
       '       visual-session.cjs backout [--session-dir DIR]',

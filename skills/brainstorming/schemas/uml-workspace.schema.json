@@ -1,0 +1,276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nhat.dev/schemas/brainstorming/uml-workspace.schema.json",
+  "title": "UML Workspace content",
+  "type": "object",
+  "required": ["diagram_kind"],
+  "properties": {
+    "diagram_kind": { "enum": ["component", "state_machine", "activity", "sequence"] }
+  },
+  "oneOf": [
+    { "$ref": "#/$defs/graphContent" },
+    { "$ref": "#/$defs/sequenceContent" }
+  ],
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "points": {
+      "type": "array",
+      "maxItems": 6,
+      "items": { "type": "string", "minLength": 1, "maxLength": 160, "pattern": "\\S" }
+    },
+    "layoutHint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layer", "order"],
+      "properties": {
+        "layer": { "type": "integer", "minimum": 0, "maximum": 1000 },
+        "order": { "type": "integer", "minimum": 0, "maximum": 10000 }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_zoom", "max_zoom", "default_zoom", "fit_padding", "controls"],
+      "properties": {
+        "min_zoom": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "max_zoom": { "type": "number", "minimum": 1, "maximum": 8 },
+        "default_zoom": { "type": "number", "exclusiveMinimum": 0, "maximum": 4 },
+        "fit_padding": { "type": "number", "minimum": 0, "maximum": 0.5 },
+        "controls": {
+          "const": ["pan", "zoom_in", "zoom_out", "fit_view", "minimap"]
+        }
+      }
+    },
+    "container": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "component_id", "label", "container_kind", "parent_id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "component_id": { "$ref": "#/$defs/identifier" },
+        "label": { "$ref": "#/$defs/nonEmptyText" },
+        "container_kind": { "enum": ["package", "composite_state", "partition", "node", "frame"] },
+        "parent_id": {
+          "anyOf": [
+            { "$ref": "#/$defs/identifier" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "graphNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "component_id", "label", "node_kind", "container_id", "layout_hint"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "component_id": { "$ref": "#/$defs/identifier" },
+        "label": { "$ref": "#/$defs/nonEmptyText" },
+        "node_kind": {
+          "enum": [
+            "component",
+            "interface",
+            "artifact",
+            "deployment_node",
+            "actor",
+            "use_case",
+            "state",
+            "initial",
+            "final",
+            "flow_final",
+            "choice",
+            "junction",
+            "fork",
+            "join",
+            "terminate",
+            "history",
+            "action",
+            "decision",
+            "merge",
+            "object",
+            "accept_event",
+            "send_signal"
+          ]
+        },
+        "container_id": {
+          "anyOf": [
+            { "$ref": "#/$defs/identifier" },
+            { "type": "null" }
+          ]
+        },
+        "points": { "$ref": "#/$defs/points" },
+        "layout_hint": { "$ref": "#/$defs/layoutHint" }
+      }
+    },
+    "graphEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "component_id", "relation", "source", "target"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "component_id": { "$ref": "#/$defs/identifier" },
+        "label": { "$ref": "#/$defs/nonEmptyText" },
+        "relation": {
+          "enum": [
+            "dependency",
+            "assembly",
+            "delegation",
+            "realization",
+            "association",
+            "generalization",
+            "transition",
+            "control_flow",
+            "object_flow"
+          ]
+        },
+        "source": { "$ref": "#/$defs/identifier" },
+        "target": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "graphContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "diagram_kind",
+        "layout",
+        "containers",
+        "nodes",
+        "edges",
+        "camera",
+        "focus_targets",
+        "annotation_targets"
+      ],
+      "properties": {
+        "diagram_kind": { "enum": ["component", "state_machine", "activity"] },
+        "layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["contract_version", "engine", "algorithm", "direction"],
+          "properties": {
+            "contract_version": { "const": 1 },
+            "engine": { "const": "elk" },
+            "algorithm": { "const": "layered" },
+            "direction": { "enum": ["RIGHT", "DOWN"] }
+          }
+        },
+        "containers": {
+          "type": "array",
+          "maxItems": 200,
+          "items": { "$ref": "#/$defs/container" }
+        },
+        "nodes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2000,
+          "items": { "$ref": "#/$defs/graphNode" }
+        },
+        "edges": {
+          "type": "array",
+          "maxItems": 5000,
+          "items": { "$ref": "#/$defs/graphEdge" }
+        },
+        "camera": { "$ref": "#/$defs/camera" },
+        "focus_targets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" }
+        },
+        "annotation_targets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2000,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" }
+        }
+      }
+    },
+    "lifeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "component_id", "label", "lifeline_kind"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "component_id": { "$ref": "#/$defs/identifier" },
+        "label": { "$ref": "#/$defs/nonEmptyText" },
+        "lifeline_kind": {
+          "enum": ["actor", "object", "boundary", "control", "entity", "participant", "database"]
+        },
+        "points": { "$ref": "#/$defs/points" }
+      }
+    },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "component_id", "label", "message_kind", "from", "to"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "component_id": { "$ref": "#/$defs/identifier" },
+        "label": { "$ref": "#/$defs/nonEmptyText" },
+        "message_kind": { "enum": ["sync", "async", "reply", "create", "destroy", "self"] },
+        "from": { "$ref": "#/$defs/identifier" },
+        "to": { "$ref": "#/$defs/identifier" },
+        "points": { "$ref": "#/$defs/points" }
+      }
+    },
+    "fragment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "component_id", "label", "fragment_kind", "message_ids"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "component_id": { "$ref": "#/$defs/identifier" },
+        "label": { "$ref": "#/$defs/nonEmptyText" },
+        "fragment_kind": { "enum": ["alt", "opt", "loop", "par", "break", "critical", "ref"] },
+        "message_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1000,
+          "items": { "$ref": "#/$defs/identifier" }
+        }
+      }
+    },
+    "sequenceContent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["diagram_kind", "lifelines", "messages", "fragments", "annotation_targets"],
+      "properties": {
+        "diagram_kind": { "const": "sequence" },
+        "lifelines": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/lifeline" }
+        },
+        "messages": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": { "$ref": "#/$defs/message" }
+        },
+        "fragments": {
+          "type": "array",
+          "maxItems": 200,
+          "items": { "$ref": "#/$defs/fragment" }
+        },
+        "annotation_targets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2000,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/identifier" }
+        }
+      }
+    }
+  }
+}

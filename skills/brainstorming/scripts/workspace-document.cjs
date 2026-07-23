@@ -7,6 +7,7 @@ const WORKSPACE_KINDS = Object.freeze([
   'research',
   'business',
   'review',
+  'uml',
 ]);
 
 const WORKSPACE_KIND_SET = new Set(WORKSPACE_KINDS);

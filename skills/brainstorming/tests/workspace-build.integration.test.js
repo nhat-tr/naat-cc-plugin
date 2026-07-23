@@ -33,7 +33,12 @@ function stageBuild(t) {
     path.join(repositoryRoot, 'skills/brainstorming/playwright.config.ts'),
     path.join(root, 'skills/brainstorming/playwright.config.ts'),
   );
-  for (const name of ['architecture-elk-graph.cjs', 'architecture-elk-graph.d.cts']) {
+  for (const name of [
+    'architecture-elk-graph.cjs',
+    'architecture-elk-graph.d.cts',
+    'uml-elk-graph.cjs',
+    'uml-elk-graph.d.cts',
+  ]) {
     copyFile(
       path.join(repositoryRoot, 'skills/brainstorming/scripts', name),
       path.join(root, 'skills/brainstorming/scripts', name),

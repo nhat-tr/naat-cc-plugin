@@ -21,7 +21,7 @@
   "properties": {
     "version": { "const": 2 },
     "work_id": { "type": "string", "pattern": "^work-[0-9]{8}-[a-z0-9]+(?:-[a-z0-9]+)*$" },
-    "workspace_kind": { "enum": ["product", "architecture", "research", "business", "review"] },
+    "workspace_kind": { "enum": ["product", "architecture", "research", "business", "review", "uml"] },
     "title": { "type": "string", "allOf": [{ "$ref": "#/$defs/non_blank_text" }], "maxLength": 300 },
     "evidence_refs": {
       "type": "array",

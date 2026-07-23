@@ -70,6 +70,8 @@ test('the skill teaches the exact-session visual loop without a second agent', (
   assert.match(guide, /\| Research Evidence Board \| `research`/);
   assert.match(guide, /\| Business Reasoning Canvas \| `business`/);
   assert.match(guide, /\| Feature Review Workbench \| `review`/);
+  assert.match(guide, /\| UML Diagram \| `uml`/);
+  assert.match(guide, /references\/uml-visual\.md/i);
   for (const workspaceKind of ['product', 'architecture', 'research', 'business', 'review']) {
     assert.match(guide, new RegExp(`--workspace-kind ${workspaceKind}`, 'u'));
   }

@@ -56,6 +56,24 @@ function pointOwners(workspaceKind, content) {
     }));
   }
   if (workspaceKind === 'review') return reviewPointOwners(content);
+  if (workspaceKind === 'uml') {
+    if (content.diagram_kind === 'sequence') {
+      return [
+        ...records(content.lifelines).map(lifeline => ({
+          ownerId: lifeline.component_id,
+          points: strings(lifeline.points),
+        })),
+        ...records(content.messages).map(message => ({
+          ownerId: message.component_id,
+          points: strings(message.points),
+        })),
+      ];
+    }
+    return records(content.nodes).map(node => ({
+      ownerId: node.component_id,
+      points: strings(node.points),
+    }));
+  }
   return [];
 }
 

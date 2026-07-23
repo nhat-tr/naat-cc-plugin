@@ -5,6 +5,7 @@ import { BusinessReasoningCanvas } from "../workspaces/business/BusinessReasonin
 import { ProductConceptStudio } from "../workspaces/product/ProductConceptStudio";
 import { ResearchEvidenceBoard } from "../workspaces/research/ResearchEvidenceBoard";
 import { FeatureReviewWorkbench } from "../workspaces/review/FeatureReviewWorkbench";
+import { UmlWorkspace } from "../workspaces/uml/UmlWorkspace";
 import type { WorkspaceEnvelope } from "./WorkspaceHost";
 import type { Choice } from "./feedback-store";
 
@@ -50,6 +51,10 @@ export const workspaceCompositionMap = {
     onPresentedComponentIdsChange: context.onPresentedComponentIdsChange,
   }),
   review: context => createElement(FeatureReviewWorkbench, {
+    content: context.documentValue.content,
+    onPresentedComponentIdsChange: context.onPresentedComponentIdsChange,
+  }),
+  uml: context => createElement(UmlWorkspace, {
     content: context.documentValue.content,
     onPresentedComponentIdsChange: context.onPresentedComponentIdsChange,
   }),

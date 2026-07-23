@@ -177,6 +177,172 @@ function validateArchitectureSemantics(content, context) {
   }
 }
 
+const UML_LEGAL_NODE_KINDS = {
+  component: new Set(['component', 'interface', 'artifact', 'deployment_node', 'actor', 'use_case']),
+  state_machine: new Set(['state', 'initial', 'final', 'choice', 'junction', 'fork', 'join', 'terminate', 'history']),
+  activity: new Set(['action', 'initial', 'final', 'flow_final', 'decision', 'merge', 'fork', 'join', 'object', 'accept_event', 'send_signal']),
+};
+const UML_LEGAL_RELATIONS = {
+  component: new Set(['dependency', 'assembly', 'delegation', 'realization', 'association', 'generalization']),
+  state_machine: new Set(['transition']),
+  activity: new Set(['control_flow', 'object_flow']),
+};
+const UML_LEGAL_CONTAINER_KINDS = {
+  component: new Set(['package', 'node', 'frame']),
+  state_machine: new Set(['composite_state', 'frame']),
+  activity: new Set(['partition', 'frame']),
+};
+
+function umlSemanticError(message) {
+  throw new TypeError(`uml Workspace content is invalid: ${message}`);
+}
+
+function registerUmlComponents(records, umlComponents, topologyIds, kindLabel, withPoints) {
+  for (const record of records) {
+    const existingTopology = topologyIds.get(record.id);
+    if (existingTopology) {
+      umlSemanticError(`topology id ${record.id} is duplicated across ${existingTopology} and ${kindLabel}`);
+    }
+    topologyIds.set(record.id, kindLabel);
+    if (umlComponents.has(record.component_id)) {
+      umlSemanticError(`Component ${record.component_id} is duplicated`);
+    }
+    umlComponents.set(record.component_id, { id: record.id, label: kindLabel });
+    if (!withPoints) continue;
+    const points = Array.isArray(record.points) ? record.points : [];
+    for (let index = 0; index < points.length; index += 1) {
+      const pointId = `${record.component_id}-p${index + 1}`;
+      if (umlComponents.has(pointId)) umlSemanticError(`Point Component ${pointId} is duplicated`);
+      umlComponents.set(pointId, { id: pointId, label: 'point' });
+    }
+  }
+}
+
+function checkUmlEnvelopeParity(umlComponents, context) {
+  if (!Array.isArray(context.component_ids)) return;
+  const envelopeComponents = new Set(context.component_ids);
+  for (const componentId of umlComponents.keys()) {
+    if (!envelopeComponents.has(componentId)) {
+      umlSemanticError(`Component ${componentId} is missing from envelope Components`);
+    }
+  }
+  for (const componentId of envelopeComponents) {
+    if (!umlComponents.has(componentId)) {
+      umlSemanticError(`envelope Component ${componentId} has no UML content`);
+    }
+  }
+}
+
+function validateUmlGraphSemantics(content, context) {
+  const diagramKind = content.diagram_kind;
+  const umlComponents = new Map();
+  const topologyIds = new Map();
+  registerUmlComponents(content.containers, umlComponents, topologyIds, 'container', false);
+  registerUmlComponents(content.nodes, umlComponents, topologyIds, 'node', true);
+  registerUmlComponents(content.edges, umlComponents, topologyIds, 'edge', false);
+  checkUmlEnvelopeParity(umlComponents, context);
+
+  const containerById = new Map(content.containers.map(container => [container.id, container]));
+  const nodeById = new Map(content.nodes.map(node => [node.id, node]));
+
+  for (const container of content.containers) {
+    if (!UML_LEGAL_CONTAINER_KINDS[diagramKind].has(container.container_kind)) {
+      umlSemanticError(`container ${container.id} kind ${container.container_kind} is not valid for a ${diagramKind} diagram`);
+    }
+    if (container.parent_id !== null && !containerById.has(container.parent_id)) {
+      umlSemanticError(`container ${container.id} parent ${container.parent_id} does not resolve`);
+    }
+  }
+  for (const container of content.containers) {
+    const chain = new Set();
+    let current = container;
+    while (current) {
+      if (chain.has(current.id)) umlSemanticError(`container parent cycle includes ${current.id}`);
+      chain.add(current.id);
+      current = current.parent_id === null ? null : containerById.get(current.parent_id);
+    }
+  }
+
+  for (const node of content.nodes) {
+    if (!UML_LEGAL_NODE_KINDS[diagramKind].has(node.node_kind)) {
+      umlSemanticError(`node ${node.id} kind ${node.node_kind} is not valid for a ${diagramKind} diagram`);
+    }
+    if (node.container_id !== null && !containerById.has(node.container_id)) {
+      umlSemanticError(`node ${node.id} container ${node.container_id} does not resolve`);
+    }
+  }
+
+  for (const edge of content.edges) {
+    if (!UML_LEGAL_RELATIONS[diagramKind].has(edge.relation)) {
+      umlSemanticError(`edge ${edge.id} relation ${edge.relation} is not valid for a ${diagramKind} diagram`);
+    }
+    if (!nodeById.has(edge.source)) umlSemanticError(`edge ${edge.id} source ${edge.source} does not resolve to a node`);
+    if (!nodeById.has(edge.target)) umlSemanticError(`edge ${edge.id} target ${edge.target} does not resolve to a node`);
+  }
+
+  for (const targetId of content.focus_targets) {
+    if (!nodeById.has(targetId) && !containerById.has(targetId)) {
+      umlSemanticError(`focus target ${targetId} must resolve to a node or container`);
+    }
+  }
+  for (const targetId of content.annotation_targets) {
+    if (!umlComponents.has(targetId)) {
+      umlSemanticError(`annotation target ${targetId} must resolve to a UML Component`);
+    }
+  }
+}
+
+function validateUmlSequenceSemantics(content, context) {
+  const umlComponents = new Map();
+  const topologyIds = new Map();
+  registerUmlComponents(content.lifelines, umlComponents, topologyIds, 'lifeline', true);
+  registerUmlComponents(content.messages, umlComponents, topologyIds, 'message', true);
+  registerUmlComponents(content.fragments, umlComponents, topologyIds, 'fragment', false);
+  checkUmlEnvelopeParity(umlComponents, context);
+
+  const lifelineById = new Map(content.lifelines.map(lifeline => [lifeline.id, lifeline]));
+  const messageById = new Map(content.messages.map(message => [message.id, message]));
+
+  for (const message of content.messages) {
+    if (!lifelineById.has(message.from)) {
+      umlSemanticError(`message ${message.id} from ${message.from} does not resolve to a lifeline`);
+    }
+    if (!lifelineById.has(message.to)) {
+      umlSemanticError(`message ${message.id} to ${message.to} does not resolve to a lifeline`);
+    }
+    if (message.message_kind === 'self' && message.from !== message.to) {
+      umlSemanticError(`message ${message.id} is a self message but from and to differ`);
+    }
+  }
+
+  for (const fragment of content.fragments) {
+    const seen = new Set();
+    for (const messageId of fragment.message_ids) {
+      if (!messageById.has(messageId)) {
+        umlSemanticError(`fragment ${fragment.id} references message ${messageId} that does not resolve`);
+      }
+      if (seen.has(messageId)) {
+        umlSemanticError(`fragment ${fragment.id} references message ${messageId} more than once`);
+      }
+      seen.add(messageId);
+    }
+  }
+
+  for (const targetId of content.annotation_targets) {
+    if (!umlComponents.has(targetId)) {
+      umlSemanticError(`annotation target ${targetId} must resolve to a UML Component`);
+    }
+  }
+}
+
+function validateUmlSemantics(content, context) {
+  if (content.diagram_kind === 'sequence') {
+    validateUmlSequenceSemantics(content, context);
+    return;
+  }
+  validateUmlGraphSemantics(content, context);
+}
+
 function validatorFor(workspaceKind) {
   if (validators.has(workspaceKind)) return validators.get(workspaceKind);
   const schemaFile = path.join(SCHEMA_DIR, `${workspaceKind}-workspace.schema.json`);
@@ -199,6 +365,7 @@ function normalizeKnownWorkspaceContent(content, context) {
     throw new TypeError(`${context.workspace_kind} Workspace content is invalid: ${entry.ajv.errorsText(entry.validate.errors)}`);
   }
   if (context.workspace_kind === 'architecture') validateArchitectureSemantics(normalized, context);
+  if (context.workspace_kind === 'uml') validateUmlSemantics(normalized, context);
   return normalized;
 }
 

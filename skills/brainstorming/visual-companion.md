@@ -13,6 +13,7 @@ Choose the Visual Document v2 Workspace Kind from the decision the user needs to
 | Research Evidence Board | `research` | Claims must be compared with primary sources, contradictions, confidence, unknowns, and decision relevance. | An evidence-grounded conclusion that keeps unknowns and unsourced summaries explicit. |
 | Business Reasoning Canvas | `business` | Actors, outcomes, journeys, assumptions, economics, risks, or experiments need business review. | A testable business direction or experiment without developer-tool chrome. |
 | Feature Review Workbench | `review` | Approved intent must be checked against Review Slices, actual changes, verification, findings, and the Engineering Quality Contract. | A cumulative whole-feature verdict kept separate from patch-specific File Viewed progress. |
+| UML Diagram | `uml` | Behavior, structure, or interactions need a standard UML view — component, state machine, activity, or sequence. | A shared, annotatable UML model where every element and claim is feedback-addressable. |
 
 Select by purpose and decision, not technology alone. A React customer checkout concept is `product`; its component topology is `architecture`; checking the implemented feature against approved intent is `review`. A v2 Visual Document has exactly one lowercase `workspace_kind`.
 
@@ -90,6 +91,8 @@ Sessions default to `$CLAUDE_SCRATCH_DIR/<repo>-<hash>/brainstorm/<session-id>` 
 ## Architecture Normal Path
 
 For a new Architecture Canvas, stop here and read `references/architecture-visual.md`. Author the compact Architecture Draft and run one foreground `visual-session.cjs present --draft ...`; its compiler derives the v2 envelope and Revision, runs ELK render preflight, and starts directly on v2 without `start` or `migrate`.
+
+For a new UML Diagram, stop here and read `references/uml-visual.md` instead. Author one compact UML Draft — self-describing via a top-level `kind: "uml"` plus a `diagram_kind` of `component`, `state_machine`, `activity`, or `sequence` — and run one foreground `visual-session.cjs present --draft <uml-draft.json>`. The same compiler derives the v2 envelope and Revision and runs render preflight (ELK for the graph kinds; a deterministic client-side layout for `sequence`), starting directly on v2 without `start` or `migrate`. Every node, edge, container, lifeline, message, fragment, and each `points` claim is selectable and annotatable exactly like the Architecture Canvas. `publish` and `validate` accept the same `--draft`.
 
 ## Other Workspace Kinds and Canonical Compatibility
 
