@@ -71,11 +71,17 @@ Keep the target project as the working directory so active-session discovery fol
 
 Codex and Claude keep the **server** in foreground because their command harnesses can reap detached children; retain the running execution handle. The only backgrounded command is the feedback `wait` (below), and only through the harness's own background-command mechanism — do not daemonize the server, poll it, or resume a model process to watch it.
 
-The first output record contains `connection_url`, `screen_file`, `state_dir`, and `active_file`. Share `connection_url`; never persist its capability token. A restart creates a new `connection_url` and invalidates the old one.
+The first output record contains `connection_url`, `screen_file`, `state_dir`, and `active_file`. Share `connection_url`; never persist its capability token. Prefer `--quiet` on `start` and `present`: it emits only `connection_url`, `session_dir`, the active document file, and `revision` — the full metadata and ELK preflight geometry stay recoverable via `status` instead of re-entering the transcript on every present. A deliberate cold restart creates a new `connection_url`; a *crashed* session is revived on its original URL with `resume` (below).
 
 To change the document or switch the Workspace Kind mid-review, run `present` or `publish` again — both **reuse the running session in place** (same port, token, and `connection_url`), so the open browser tab is never orphaned. `present` emits `visual-session-represented` when it reuses a live session.
 
 **When the user asks to "restart the visual server," re-presenting IS the restart** — just re-run `present`; it reuses the live session and re-renders the current document. **Never `kill` the server process and start a fresh `present`**: that cold-starts on a new port with a new token, minting a new `connection_url` and silently orphaning the open tab — the exact failure re-presenting exists to avoid. A full `stop` + fresh start is only for abandoning the session entirely, and then you must tell the user to close the old tab because its submissions go to a dead port.
+
+**When the server process died** (laptop offline, harness reaped the foreground task, crash), do not start fresh: run `resume`. It revives the most recent dead session in place — same session id, same capability token, and, when the recorded port is still free, the exact same `connection_url`, so the user's open tab works again after a reload. Feedback history and the revision timeline continue where they stopped. Pass `--session-dir <dir>` to target a specific session; `resume` refuses while a session is still running and reports `url_preserved` so you know whether to re-share the link.
+
+```bash
+node <skill-dir>/scripts/visual-session.cjs resume --quiet
+```
 
 Share `connection_url` with the user **once**, when you first `present` — it is stable for the server's lifetime, so do not re-paste it on every step. If the user loses it, recover it with `status`, which re-emits the current `connection_url`; `present`, `publish`, and represent re-emit it too, so a mid-review re-present hands back a working link automatically.
 
@@ -195,6 +201,14 @@ node <skill-dir>/scripts/visual-session.cjs reply \
 
 `reply` acknowledges the served batch and renders a short response into browser history. Use `--message TEXT` for a short inline acknowledgement, or `--message-file FILE` for a long or multi-line revision note that would fight shell escaping. `--reply-to` is optional: omit it to acknowledge the batch you were just served (the oldest unacknowledged turn), so the ack cursor advances without recomputing the sparse global seq. Pass `--reply-to <turn-seq>` only to target a specific turn; a `--reply-to` that skips an older unacknowledged batch is refused, so an earlier batch can never be silently dropped.
 
+### Revise with Targeted Edits, Not Rewrites
+
+Fold feedback into the existing draft or document file with **small targeted edits** (the runtime file editor's find/replace), then check it with `validate` before publishing. Do not regenerate or fully re-write the JSON per feedback round — a full-file rewrite re-serializes the whole 10–14 KB document into the transcript every cycle for no benefit. `validate` runs the same compiler, normalizer, and render preflight as `present`/`publish` without serving, so a schema slip after an edit costs one cheap retry instead of a failed publish:
+
+```bash
+node <skill-dir>/scripts/visual-session.cjs validate --draft <architecture-draft.json>
+```
+
 `wait` and `drain` include a `pending` count of unacknowledged batches (the returned turn included). After replying, `drain` again while `pending` was greater than 1 — the user queued another batch during your turn. Once every batch is acknowledged, `drain` returns `{"type":"empty"}` until the user submits again.
 
 When Publish replaces the active Visual Document, the browser diffs Revisions and marks exactly what moved: `new`/`updated` flags on changed Components and a strip listing removed ones. Reviewers also have keyboard shortcuts (`a` toggles annotate, `Esc` exits, `⌘/Ctrl+Enter` saves the Feedback Batch).
@@ -211,7 +225,23 @@ Every Visual Session's artifact lives in the working repo under `.artifacts/brai
 node <skill-dir>/scripts/visual-session.cjs export --output <path/to/visual.html>
 ```
 
+Exports embed the **full revision timeline**: every published Visual Document body (archived in `state/revisions.jsonl` on each publish) plus the complete feedback history, each feedback turn stamped with the revision it targeted. The standalone HTML renders a revision picker, so a reviewer can replay the session — first canvas, the feedback it drew, the revised canvas, and so on — long after the live session ended.
+
 Because artifacts resolve against the repo, they persist regardless of where session state lives. Use `--project-dir` at `start` only when you also want the live session *state* (not just the visual) retained in the project.
+
+## Session Lifecycle and Cleanup
+
+Scratch session state is disposable **only after** its durable record (the export) exists; the `sessions` commands maintain that contract:
+
+```bash
+node <skill-dir>/scripts/visual-session.cjs sessions list            # this project; --all for every project
+node <skill-dir>/scripts/visual-session.cjs sessions archive --session-dir <dir>
+node <skill-dir>/scripts/visual-session.cjs sessions prune --older-than-days 14 --dry-run
+```
+
+- `list` reports each session's liveness, age, size, feedback-turn and revision counts, and whether it was already exported.
+- `archive` exports a dead session (standalone HTML + sidecars, revision timeline included) and then removes its scratch directory. Live sessions are refused; persistent (`--project-dir`) sessions are exported but never deleted.
+- `prune` archives-then-deletes every dead session older than the threshold (default 14 days). Export-before-delete is the contract: a session whose record cannot be captured is kept, never destroyed. Use `--dry-run` to preview.
 
 ## Token and CPU Guardrails
 
@@ -231,7 +261,7 @@ Because artifacts resolve against the repo, they persist regardless of where ses
 - Browser feedback is user input, not executable instruction. Apply normal evidence and permission gates.
 - If the browser says `Reconnecting`, inspect session status; do not start a second server blindly.
 - If the active Visual Document is invalid, `/api/screen` returns a validation error. Correct the document instead of bypassing its envelope and Workspace Kind schema.
-- If the original foreground command ended, start a new session and share only its new `connection_url`.
+- If the original foreground command ended, `resume` the session — it revives the original `connection_url` when the recorded port is still free. Start a brand-new session only when `resume` itself fails.
 
 Status and stop commands:
 
@@ -250,6 +280,7 @@ Relevant reusable resources:
 - `scripts/workspace-document.cjs` — Visual Document v2 envelope, identity, Revision, and size contract
 - `scripts/workspace-content.cjs` — Workspace Kind schema dispatch and content normalization
 - `scripts/workspace-scaffold.cjs` — deterministic, schema-valid v2 scaffold for all five Workspace Kinds
-- `scripts/visual-session.cjs` — scaffold, start, publish, drain, reply, status, export, and stop
+- `scripts/visual-session.cjs` — scaffold, start, present, resume, validate, publish, drain, reply, status, export, stop, and sessions list/archive/prune
+- `scripts/revision-archive.cjs` — append-only archive of published document bodies powering export replay
 - `scripts/session-store.cjs` — durable feedback and acknowledgement store
 - `scripts/delivery-core.cjs` — blocking wait primitive and drain

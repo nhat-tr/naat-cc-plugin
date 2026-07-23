@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { writeInterviewSidecars } = require('./interview-export.cjs');
+const { readRevisionSnapshots } = require('./revision-archive.cjs');
 const { SessionStore } = require('./session-store.cjs');
 const { withVisualStateLock } = require('./legacy-visual-import.cjs');
 const { renderStandalone } = require('./standalone.cjs');
@@ -329,11 +330,15 @@ function createBrainstormServer(options = {}) {
   }
 
   function currentExportState() {
-    return { screen: readScreen(), session: store.strictSnapshot() };
+    return {
+      screen: readScreen(),
+      session: store.strictSnapshot(),
+      revisions: readRevisionSnapshots(stateDir),
+    };
   }
 
   function renderCurrent(state) {
-    const { screen, session } = state ?? currentExportState();
+    const { screen, session, revisions } = state ?? currentExportState();
     return renderStandalone({
       shell,
       styles: shellStyles,
@@ -341,6 +346,7 @@ function createBrainstormServer(options = {}) {
       worker: shellWorker,
       screen,
       session,
+      revisions,
     });
   }
 

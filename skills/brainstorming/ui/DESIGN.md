@@ -34,6 +34,7 @@ A Point has the same type metrics in cards, timeline items, and Decision Options
 - `.workspace-slot` is neutral. Concrete Workspace Kind renderers mount inside it later without changing shared host tokens.
 - `.feedback-thread-gutter` shows typed, Revision-bound threads for the selected Frame. `.history` remains separate from Choices and the Summary Note Draft.
 - `.feedback-panel` is sticky on wide screens and follows the Visual Document at narrow widths.
+- A `.document-actions` toggle collapses the whole right column (`.feedback-panel` plus its canvas `PaneSeparator`), giving `.workspace-canvas` full width; the toggle stays visible and keyboard-reachable as the sole restore affordance and is never disabled by read-only or density state. A second, horizontal `PaneSeparator` sits between `.feedback-compose` and `.history`, letting the visitor trade height between drafting and Session History with a 120px floor on each side; both states persist per document identity.
 
 ## Accessibility And Reflow
 

@@ -2,31 +2,31 @@
   color-scheme: light;
 
   --vc-paper: #ffffff;
-  --vc-page: #f7f9f8;
-  --vc-surface-muted: #f1f4f3;
-  --vc-surface-selected: #e7f3f1;
-  --vc-line: #d7dfdc;
-  --vc-line-strong: #a9b7b2;
-  --vc-ink: #152521;
-  --vc-body: #34443f;
-  --vc-muted: #5c6b66;
-  --vc-faint: #606f6a;
+  --vc-page: #f4f5f5;
+  --vc-surface-muted: #ebedec;
+  --vc-surface-selected: #dcecec;
+  --vc-line: #cdd3d1;
+  --vc-line-strong: #869591;
+  --vc-ink: #0d1311;
+  --vc-body: #26302c;
+  --vc-muted: #48524d;
+  --vc-faint: #515b56;
 
-  --vc-accent: #0f766e;
-  --vc-accent-strong: #0a5c56;
-  --vc-accent-soft: #e1f1ee;
-  --vc-positive: #247a43;
-  --vc-positive-soft: #e8f5ec;
-  --vc-warning: #945f00;
-  --vc-warning-soft: #fff4d6;
-  --vc-critical: #b42318;
-  --vc-critical-soft: #fdecea;
+  --vc-accent: #0c6a68;
+  --vc-accent-strong: #084e4d;
+  --vc-accent-soft: #dcecec;
+  --vc-positive: #1c6e3a;
+  --vc-positive-soft: #e4f2e8;
+  --vc-warning: #7d4f00;
+  --vc-warning-soft: #fbeecb;
+  --vc-critical: #a51f14;
+  --vc-critical-soft: #fbe9e7;
 
-  --vc-focus: #087f73;
-  --vc-shadow-panel: 0 8px 24px rgb(21 37 33 / 8%);
-  --vc-radius-xs: 3px;
-  --vc-radius-sm: 5px;
-  --vc-radius-md: 8px;
+  --vc-focus: #0c6a68;
+  --vc-shadow-panel: 0 4px 14px rgb(13 19 17 / 10%);
+  --vc-radius-xs: 2px;
+  --vc-radius-sm: 3px;
+  --vc-radius-md: 6px;
 
   --vc-font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --vc-font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;

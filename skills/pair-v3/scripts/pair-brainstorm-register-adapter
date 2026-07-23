@@ -1,0 +1,69 @@
+#!/usr/bin/env node
+
+const childProcess = require('node:child_process');
+const fs = require('node:fs');
+
+const { ensureBrainstormingRegistration } = require('./lib/handover-state');
+
+function readInput() {
+  try {
+    return JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
+  } catch {
+    return null;
+  }
+}
+
+function repositoryRoot(cwd) {
+  const result = childProcess.spawnSync('git', ['rev-parse', '--show-toplevel'], {
+    cwd,
+    encoding: 'utf8',
+  });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+// The brainstorming Visual Companion is invoked as `node .../skills/brainstorming/scripts/visual-session.cjs`.
+// Only the brainstorming skill runs it, so its presence is an unambiguous, cross-runtime signal that this
+// Agent Conversation is a brainstorming conversation that should be registered for the Freshness Gate.
+function isVisualCompanionInvocation(command) {
+  return String(command || '')
+    .split(/(?:&&|\|\||;|\n)/u)
+    .map(segment => segment.trim())
+    .some(segment => /(?:^|\/)visual-session(?:\.cjs)?(?=\s|$)/u.test(segment)
+      || /brainstorming\/scripts\/visual-session/u.test(segment));
+}
+
+function runtimeFor(input) {
+  const configured = String(process.env.PAIR_HOOK_RUNTIME || input?.runtime || '').toLowerCase();
+  if (configured === 'codex' || configured === 'claude') return configured;
+  return process.env.CLAUDE_PROJECT_DIR || process.env.CLAUDECODE ? 'claude' : 'codex';
+}
+
+function main() {
+  const input = readInput();
+  if (
+    !input ||
+    input.hook_event_name !== 'PostToolUse' ||
+    input.tool_name !== 'Bash' ||
+    !input.session_id ||
+    !isVisualCompanionInvocation(input.tool_input?.command)
+  ) return;
+  const cwd = input.cwd || input.project_dir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const root = repositoryRoot(cwd);
+  if (!root) return;
+  try {
+    // Idempotent: a repeated invocation on an already-registered conversation is a no-op that
+    // never clobbers an existing checkpoint. Registration is best-effort and must never disrupt
+    // the user's Bash tool flow, so any failure is swallowed silently.
+    ensureBrainstormingRegistration(root, {
+      runtime: runtimeFor(input),
+      agentConversationId: input.session_id,
+      now: input.now,
+    });
+  } catch {
+    // Never surface an error to the PostToolUse boundary.
+  }
+}
+
+if (require.main === module) main();
+
+module.exports = { isVisualCompanionInvocation, runtimeFor };

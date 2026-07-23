@@ -1,5 +1,5 @@
 import { RotateCcw, Send, Trash2 } from "lucide-react";
-import { memo } from "react";
+import { memo, type CSSProperties } from "react";
 
 import {
   type Choice,
@@ -12,6 +12,7 @@ import type { BrowserDeliveryState } from "../app/session-client";
 import { AnnotationComposer } from "./AnnotationComposer";
 import { DeliveryStatus } from "./DeliveryStatus";
 import { InlineText, MessageBlocks } from "./InlineText";
+import { PaneSeparator } from "./PaneSeparator";
 
 export interface FeedbackComponentOption {
   id: string;
@@ -24,20 +25,30 @@ export interface PresentedFeedbackThread extends FeedbackThread {
 
 interface FeedbackPanelProps {
   annotationComponentId: string;
+  collapsed: boolean;
   components: FeedbackComponentOption[];
+  composeHeight: number;
   draft: FeedbackDraft;
   deliveryState: BrowserDeliveryState;
   error: string | null;
   events: SessionEvent[];
+  historyHeight: number;
+  historyMax: number;
+  historyMin: number;
+  historySeparatorEnabled: boolean;
   onClear: () => void;
   onAnnotationComponentSelect: (componentId: string) => void;
   onDraftChange: (draft: FeedbackDraft) => void;
+  onHistoryHeightChange: (value: number) => void;
+  onHistoryHeightCommit: (value: number) => void;
   onRefresh: () => void;
   onSubmit: () => void;
   readOnly: boolean;
   submitting: boolean;
   threads: PresentedFeedbackThread[];
 }
+
+type FeedbackPanelStyle = CSSProperties & { "--feedback-history-height": string };
 
 const MessageBody = memo(function MessageBody({ message }: { message: string }) {
   return <MessageBlocks value={message} />;
@@ -78,7 +89,7 @@ const ThreadItem = memo(function ThreadItem({ thread }: { thread: PresentedFeedb
 
 const FeedbackThreads = memo(function FeedbackThreads({ threads }: { threads: PresentedFeedbackThread[] }) {
   return (
-    <section className="feedback-thread-gutter" aria-labelledby="thread-heading">
+    <section className="feedback-thread-gutter" aria-labelledby="thread-heading" tabIndex={0}>
       <div className="feedback-section-heading">
         <h3 id="thread-heading">Feedback Threads</h3>
         <span>{threads.length}</span>
@@ -94,7 +105,7 @@ const FeedbackThreads = memo(function FeedbackThreads({ threads }: { threads: Pr
 
 const SessionHistory = memo(function SessionHistory({ events }: { events: SessionEvent[] }) {
   return (
-    <section className="history" aria-labelledby="history-heading">
+    <section className="history" aria-labelledby="history-heading" id="feedback-history" tabIndex={0}>
       <h3 id="history-heading">Session history</h3>
       {events.length > 0 ? events.map((event, index) => (
         <article className={`history-item ${event.role ?? "system"}`} key={event.id ?? `${event.seq ?? "event"}-${index}`}>
@@ -123,14 +134,22 @@ const SessionHistory = memo(function SessionHistory({ events }: { events: Sessio
 
 export function FeedbackPanel({
   annotationComponentId,
+  collapsed,
   components,
+  composeHeight,
   draft,
   deliveryState,
   error,
   events,
+  historyHeight,
+  historyMax,
+  historyMin,
+  historySeparatorEnabled,
   onAnnotationComponentSelect,
   onClear,
   onDraftChange,
+  onHistoryHeightChange,
+  onHistoryHeightCommit,
   onRefresh,
   onSubmit,
   readOnly,
@@ -149,8 +168,18 @@ export function FeedbackPanel({
     onDraftChange({ ...draft, choices: draft.choices.filter(item => item.componentId !== choice.componentId) });
   };
 
+  const feedbackPanelStyle: FeedbackPanelStyle = {
+    "--feedback-history-height": `${historyHeight}px`,
+  };
+
   return (
-    <aside className="feedback-panel" aria-label="Feedback batch">
+    <aside
+      className="feedback-panel"
+      aria-label="Feedback batch"
+      hidden={collapsed}
+      id="feedback-panel"
+      style={feedbackPanelStyle}
+    >
       <header className="feedback-header">
         <div>
           <div className="eyebrow">Feedback Batch</div>
@@ -176,7 +205,8 @@ export function FeedbackPanel({
           </div>
         </div>
 
-        <div className="feedback-compose-scroll">
+        {/* tabIndex keeps the region keyboard-scrollable when read-only exports disable its controls. */}
+        <div aria-labelledby="compose-heading" className="feedback-compose-scroll" role="group" tabIndex={0}>
           <AnnotationComposer
             annotationComponentId={annotationComponentId}
             components={components}
@@ -245,6 +275,21 @@ export function FeedbackPanel({
           </button>
         </div>
       </section>
+
+      {historySeparatorEnabled ? (
+        <PaneSeparator
+          aria-controls="feedback-history"
+          label="Session history height"
+          max={historyMax}
+          min={historyMin}
+          onChange={onHistoryHeightChange}
+          onCommit={onHistoryHeightCommit}
+          orientation="horizontal"
+          resizeSide="after"
+          value={historyHeight}
+          valueText={`Draft feedback ${composeHeight} pixels; Session history ${historyHeight} pixels`}
+        />
+      ) : null}
 
       <SessionHistory events={events} />
     </aside>

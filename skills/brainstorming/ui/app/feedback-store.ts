@@ -58,6 +58,8 @@ export interface SessionEvent {
   message?: string;
   annotations?: Annotation[];
   choices?: Choice[];
+  screen?: { revision?: string };
+  replyTo?: number;
 }
 
 export interface SessionSnapshot {
@@ -65,6 +67,13 @@ export interface SessionSnapshot {
   cursor?: number;
   pendingTurns?: number;
   events: SessionEvent[];
+}
+
+export interface RevisionSnapshot {
+  seq: number;
+  revision: string;
+  timestamp?: number;
+  document: unknown;
 }
 
 interface LegacyComponentEntry {
@@ -394,4 +403,34 @@ export function emptySessionSnapshot(): SessionSnapshot {
 
 export function createClientTurnId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `feedback-${Date.now()}`;
+}
+
+export function parseRevisionSnapshots(value: unknown): RevisionSnapshot[] {
+  return asArray(value).flatMap((candidate): RevisionSnapshot[] => {
+    if (!isRecord(candidate) || !Number.isInteger(candidate.seq) || typeof candidate.revision !== "string" || !isRecord(candidate.document)) {
+      return [];
+    }
+    const snapshot: RevisionSnapshot = {
+      seq: candidate.seq as number,
+      revision: candidate.revision,
+      document: candidate.document,
+    };
+    if (typeof candidate.timestamp === "number" && Number.isFinite(candidate.timestamp)) snapshot.timestamp = candidate.timestamp;
+    return [snapshot];
+  });
+}
+
+export function filterSessionEventsForRevision(events: SessionEvent[], revision: string): SessionEvent[] {
+  const keptTurnSeqs = new Set<number>();
+  return events.filter(event => {
+    if (event.type === "user.turn") {
+      const matches = event.screen?.revision === revision;
+      if (matches && Number.isInteger(event.seq)) keptTurnSeqs.add(event.seq as number);
+      return matches;
+    }
+    if (event.type === "agent.message") {
+      return Number.isInteger(event.replyTo) && keptTurnSeqs.has(event.replyTo as number);
+    }
+    return false;
+  });
 }

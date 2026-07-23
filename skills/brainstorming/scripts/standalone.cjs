@@ -87,6 +87,27 @@ function exportSession(value) {
   return exported;
 }
 
+function copyRevisionSnapshot(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (!Number.isInteger(value.seq)
+    || typeof value.revision !== 'string'
+    || value.document == null
+    || typeof value.document !== 'object') return null;
+  const snapshot = {
+    seq: value.seq,
+    revision: value.revision,
+    document: structuredClone(value.document),
+  };
+  if (typeof value.timestamp === 'number' && Number.isFinite(value.timestamp)) {
+    snapshot.timestamp = value.timestamp;
+  }
+  return snapshot;
+}
+
+function exportRevisions(value) {
+  return Array.isArray(value) ? value.map(copyRevisionSnapshot).filter(Boolean) : [];
+}
+
 // Bundle the fixed shell, the current document, and allowlisted feedback history into one
 // self-contained HTML file. The host owns read-only behavior; the Revision-bearing Visual
 // Document remains byte-for-byte semantic state rather than being rewritten for export.
@@ -102,8 +123,10 @@ function workerBootstrap(worker) {
   })();</script>`;
 }
 
-function renderStandalone({ shell, styles, script, worker, screen, session }) {
+function renderStandalone({ shell, styles, script, worker, screen, session, revisions }) {
   const state = { screen: structuredClone(screen), session: exportSession(session), readOnly: true };
+  const revisionTimeline = exportRevisions(revisions);
+  if (revisionTimeline.length > 0) state.revisions = revisionTimeline;
   const embedded = JSON.stringify(state)
     .replace(/</g, '\\u003c');
   const inlineScript = String(script).replace(/<\/script/giu, '<\\/script');
@@ -193,4 +216,4 @@ function renderStandalone({ shell, styles, script, worker, screen, session }) {
     );
 }
 
-module.exports = { RAW_STANDALONE_LIMIT_BYTES, exportSession, renderStandalone };
+module.exports = { RAW_STANDALONE_LIMIT_BYTES, exportRevisions, exportSession, renderStandalone };

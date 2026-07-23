@@ -1,4 +1,4 @@
-import { Download, RefreshCw } from "lucide-react";
+import { Download, PanelRightClose, PanelRightOpen, RefreshCw } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -17,6 +17,7 @@ import {
   type FeedbackDraft,
   type FeedbackThread,
   type FeedbackThreadStatus,
+  type RevisionSnapshot,
   type SessionEvent,
   type SessionSnapshot,
   annotationSummary,
@@ -25,9 +26,11 @@ import {
   deriveCommittedChoices,
   deriveFeedbackThreadState,
   emptySessionSnapshot,
+  filterSessionEventsForRevision,
   groupAnnotationsByComponent,
   mergeChoiceState,
   normalizeFeedbackDraft,
+  parseRevisionSnapshots,
   readResponseError,
   reconcileChoices,
 } from "./feedback-store";
@@ -68,6 +71,7 @@ interface EmbeddedVisualState {
   screen: unknown;
   session: unknown;
   readOnly?: boolean;
+  revisions?: unknown;
 }
 
 declare global {
@@ -105,6 +109,23 @@ function asVisualDocument(value: unknown): VisualDocument {
 function asSessionSnapshot(value: unknown): SessionSnapshot {
   if (!isRecord(value) || !Array.isArray(value.events)) return emptySessionSnapshot();
   return { events: value.events.filter(isRecord) as SessionEvent[] };
+}
+
+interface ValidatedRevisionSnapshot {
+  seq: number;
+  revision: string;
+  timestamp?: number;
+  document: VisualDocument;
+}
+
+function validatedRevisionTimeline(snapshots: RevisionSnapshot[]): ValidatedRevisionSnapshot[] {
+  return snapshots.flatMap((snapshot): ValidatedRevisionSnapshot[] => {
+    try {
+      return [{ ...snapshot, document: asVisualDocument(snapshot.document) }];
+    } catch {
+      return [];
+    }
+  });
 }
 
 function legacyRevision(value: LegacyVisualDocument): string {
@@ -254,7 +275,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function subscribeToViewportWidth(onChange: () => void): () => void {
+function subscribeToViewportResize(onChange: () => void): () => void {
   globalThis.window?.addEventListener("resize", onChange);
   return () => globalThis.window?.removeEventListener("resize", onChange);
 }
@@ -265,6 +286,14 @@ function viewportWidthSnapshot(): number {
 
 function serverViewportWidthSnapshot(): number {
   return 1_280;
+}
+
+function viewportHeightSnapshot(): number {
+  return globalThis.window?.innerHeight ?? 800;
+}
+
+function serverViewportHeightSnapshot(): number {
+  return 800;
 }
 
 function workspaceCanvasBounds(viewportWidth: number): WorkspaceCanvasBounds {
@@ -283,16 +312,54 @@ function workspaceCanvasBounds(viewportWidth: number): WorkspaceCanvasBounds {
   };
 }
 
+const FEEDBACK_SPLIT_PANE_MIN = 120;
+const FEEDBACK_SPLIT_SEPARATOR_HEIGHT = 12;
+// Conservative reservation for the feedback header plus the thread gutter's own
+// `min(30vh, 18rem)` cap, so the History pane's computed max never claims space that
+// content above the split could still legitimately need.
+const FEEDBACK_SPLIT_RESERVED_HEIGHT = 400;
+
+interface FeedbackHistoryBounds {
+  available: number;
+  defaultValue: number;
+  max: number;
+  min: number;
+}
+
+function feedbackHistoryBounds(viewportHeight: number): FeedbackHistoryBounds {
+  const available = Math.max(
+    FEEDBACK_SPLIT_PANE_MIN * 2 + FEEDBACK_SPLIT_SEPARATOR_HEIGHT,
+    viewportHeight - FEEDBACK_SPLIT_RESERVED_HEIGHT,
+  );
+  const max = Math.max(
+    FEEDBACK_SPLIT_PANE_MIN,
+    available - FEEDBACK_SPLIT_PANE_MIN - FEEDBACK_SPLIT_SEPARATOR_HEIGHT,
+  );
+  return {
+    available,
+    defaultValue: clamp(available * 0.4, FEEDBACK_SPLIT_PANE_MIN, max),
+    max,
+    min: FEEDBACK_SPLIT_PANE_MIN,
+  };
+}
+
 export function VisualCompanionApp() {
   const embedded = globalThis.window?.__BRAINSTORM_EMBEDDED__;
   const initialDocument = embedded ? asVisualDocument(embedded.screen) : null;
+  const revisionTimeline = validatedRevisionTimeline(parseRevisionSnapshots(embedded?.revisions));
   const basePath = document.body.dataset.basePath || "/";
   const viewportWidth = useSyncExternalStore(
-    subscribeToViewportWidth,
+    subscribeToViewportResize,
     viewportWidthSnapshot,
     serverViewportWidthSnapshot,
   );
+  const viewportHeight = useSyncExternalStore(
+    subscribeToViewportResize,
+    viewportHeightSnapshot,
+    serverViewportHeightSnapshot,
+  );
   const canvasBounds = workspaceCanvasBounds(viewportWidth);
+  const feedbackHistoryDefaults = feedbackHistoryBounds(viewportHeight);
   const [documentValue, setDocumentValue] = useState<VisualDocument | null>(initialDocument);
   const [session, setSession] = useState<SessionSnapshot>(() => embedded ? asSessionSnapshot(embedded.session) : emptySessionSnapshot());
   const [activeFrameId, setActiveFrameId] = useState(() => initialDocument ? workspaceFrames(initialDocument)[0]?.id ?? "" : "");
@@ -315,6 +382,9 @@ export function VisualCompanionApp() {
   });
   const [annotationComponentId, setAnnotationComponentId] = useState("");
   const [workspaceCanvasWidth, setWorkspaceCanvasWidth] = useState(canvasBounds.defaultValue);
+  const [feedbackHistoryHeight, setFeedbackHistoryHeight] = useState(feedbackHistoryDefaults.defaultValue);
+  const [feedbackCollapsed, setFeedbackCollapsedState] = useState(false);
+  const [selectedRevisionIndex, setSelectedRevisionIndex] = useState<number>(() => revisionTimeline.length - 1);
   const previousDocument = useRef<VisualDocument | null>(null);
   const workspaceCanvas = useRef<HTMLElement>(null);
 
@@ -324,6 +394,8 @@ export function VisualCompanionApp() {
   const densityKey = `visual-density:${identity}`;
   const feedbackKey = `visual-feedback:${identity}`;
   const workspaceSplitKey = `visual-workspace-split:${identity}`;
+  const feedbackSplitKey = `visual-feedback-split:${identity}`;
+  const feedbackCollapsedKey = `visual-feedback-collapsed:${identity}`;
   const readOnly = embedded?.readOnly === true || (documentValue?.version === 2 && documentValue.read_only);
   const frames = documentValue ? workspaceFrames(documentValue) : [];
   const effectiveFrameId = frames.some(frame => frame.id === activeFrameId)
@@ -347,6 +419,15 @@ export function VisualCompanionApp() {
   const presentedAnnotationComponentId = options.some(component => component.id === annotationComponentId)
     ? annotationComponentId
     : "";
+  const effectiveRevisionIndex = revisionTimeline.length > 0
+    ? Math.min(selectedRevisionIndex, revisionTimeline.length - 1)
+    : -1;
+  const selectedRevisionSnapshot = effectiveRevisionIndex >= 0 ? revisionTimeline[effectiveRevisionIndex] : undefined;
+  const showRevisionTimeline = Boolean(embedded) && revisionTimeline.length >= 2;
+  const viewingPriorRevision = selectedRevisionSnapshot !== undefined && effectiveRevisionIndex < revisionTimeline.length - 1;
+  const presentedEvents = viewingPriorRevision
+    ? filterSessionEventsForRevision(session.events, selectedRevisionSnapshot.revision)
+    : session.events;
   const reportPresentedComponentIds = useCallback((componentIds: string[]): void => {
     const ids = [...new Set(componentIds)];
     setPresentedComponents(current => (
@@ -415,7 +496,7 @@ export function VisualCompanionApp() {
     };
 
     clearMarkers();
-    const submitted = session.events.flatMap((event): Annotation[] => (
+    const submitted = presentedEvents.flatMap((event): Annotation[] => (
       event.role === "user" && Array.isArray(event.annotations) ? event.annotations : []
     ));
     const pendingByComponent = groupAnnotationsByComponent(draft.annotations);
@@ -462,7 +543,7 @@ export function VisualCompanionApp() {
     }
 
     return clearMarkers;
-  }, [documentValue, draft.annotations, effectiveFrameId, presentedComponents, session.events]);
+  }, [documentValue, draft.annotations, effectiveFrameId, presentedComponents, presentedEvents]);
 
   const applyDocument = useCallback((next: VisualDocument): void => {
     setChanges(computeComponentChanges(previousDocument.current, next));
@@ -523,7 +604,8 @@ export function VisualCompanionApp() {
     } catch {
       setDraftState(normalizeFeedbackDraft());
     }
-  }, [densityKey, feedbackKey]);
+    setFeedbackCollapsedState(safeStorageGet("localStorage", feedbackCollapsedKey) === "true");
+  }, [densityKey, feedbackCollapsedKey, feedbackKey]);
 
   useEffect(() => {
     const storedRatio = Number.parseFloat(safeStorageGet("localStorage", workspaceSplitKey) ?? "");
@@ -532,6 +614,15 @@ export function VisualCompanionApp() {
       : canvasBounds.defaultValue;
     setWorkspaceCanvasWidth(clamp(restored, canvasBounds.min, canvasBounds.max));
   }, [canvasBounds.defaultValue, canvasBounds.max, canvasBounds.min, viewportWidth, workspaceSplitKey]);
+
+  useEffect(() => {
+    const storedRatio = Number.parseFloat(safeStorageGet("localStorage", feedbackSplitKey) ?? "");
+    const bounds = feedbackHistoryBounds(viewportHeight);
+    const restored = Number.isFinite(storedRatio) && storedRatio > 0 && storedRatio < 1
+      ? viewportHeight * storedRatio
+      : bounds.defaultValue;
+    setFeedbackHistoryHeight(clamp(restored, bounds.min, bounds.max));
+  }, [feedbackSplitKey, viewportHeight]);
 
   useEffect(() => {
     const shortcut = (event: globalThis.KeyboardEvent): void => {
@@ -548,6 +639,11 @@ export function VisualCompanionApp() {
     setDensityState(next);
     safeStorageSet("localStorage", densityKey, next);
     safeStorageSet("sessionStorage", densityKey, next);
+  };
+
+  const setFeedbackCollapsed = (next: boolean): void => {
+    setFeedbackCollapsedState(next);
+    safeStorageSet("localStorage", feedbackCollapsedKey, next ? "true" : "false");
   };
 
   const setDraft = (next: FeedbackDraft): void => {
@@ -683,6 +779,15 @@ export function VisualCompanionApp() {
       && component.contains(interactiveDescendant)) return;
     selectAnnotationComponent(componentId);
   };
+  const selectRevision = (index: number): void => {
+    const snapshot = revisionTimeline[index];
+    if (!snapshot) return;
+    const previousSnapshotDocument = index > 0 ? revisionTimeline[index - 1]?.document ?? null : null;
+    setChanges(computeComponentChanges(previousSnapshotDocument, snapshot.document));
+    previousDocument.current = snapshot.document;
+    setDocumentValue(snapshot.document);
+    setSelectedRevisionIndex(index);
+  };
   const latestFeedbackSeq = session.events.reduce<number | null>((latest, event) => (
     event.type === "user.turn" && Number.isInteger(event.seq)
       ? Math.max(latest ?? 0, event.seq as number)
@@ -708,6 +813,19 @@ export function VisualCompanionApp() {
   const commitWorkspaceCanvasWidth = (value: number): void => {
     safeStorageSet("localStorage", workspaceSplitKey, String(value / viewportWidth));
   };
+  const commitFeedbackHistoryHeight = (value: number): void => {
+    safeStorageSet("localStorage", feedbackSplitKey, String(value / viewportHeight));
+  };
+  const feedbackHistoryBoundsValue = feedbackHistoryBounds(viewportHeight);
+  const boundedFeedbackHistoryHeight = Math.round(clamp(
+    feedbackHistoryHeight,
+    feedbackHistoryBoundsValue.min,
+    feedbackHistoryBoundsValue.max,
+  ));
+  const feedbackComposeHeight = Math.max(
+    feedbackHistoryBoundsValue.min,
+    Math.round(feedbackHistoryBoundsValue.available - boundedFeedbackHistoryHeight - FEEDBACK_SPLIT_SEPARATOR_HEIGHT),
+  );
 
   return (
     <div className="visual-shell">
@@ -724,6 +842,20 @@ export function VisualCompanionApp() {
         </div>
         <div className="title-block" aria-label="Document status">
           <span className="title-block-rev">rev {documentRevision(documentValue)}</span>
+          {showRevisionTimeline ? (
+            <select
+              aria-label="Revision timeline"
+              className="revision-timeline"
+              onChange={event => selectRevision(Number(event.target.value))}
+              value={effectiveRevisionIndex}
+            >
+              {revisionTimeline.map((snapshot, index) => (
+                <option key={snapshot.seq} value={index}>
+                  {`v${snapshot.seq} · ${snapshot.revision}${index === revisionTimeline.length - 1 ? " (current)" : ""}`}
+                </option>
+              ))}
+            </select>
+          ) : null}
           <span className="title-block-meta">{frames.length} {frames.length === 1 ? "Frame" : "Frames"}</span>
           <div className="density-control" aria-label="Reading density">
             <button aria-pressed={density === "comfortable"} className="density-button" onClick={() => setDensity("comfortable")} type="button">Comfortable</button>
@@ -743,11 +875,29 @@ export function VisualCompanionApp() {
             ) : null}
             <button className="icon-button" disabled={readOnly} onClick={() => void saveStandalone()} title="Save standalone export" type="button"><Download aria-hidden="true" size={17} /><span className="sr-only">Save standalone export</span></button>
             <button className="icon-button" disabled={Boolean(embedded)} onClick={refresh} title="Refresh Visual Session" type="button"><RefreshCw aria-hidden="true" size={17} /><span className="sr-only">Refresh Visual Session</span></button>
+            <button
+              aria-controls="feedback-panel"
+              aria-expanded={!feedbackCollapsed}
+              className="icon-button"
+              onClick={() => setFeedbackCollapsed(!feedbackCollapsed)}
+              title={feedbackCollapsed ? "Show feedback panel" : "Hide feedback panel"}
+              type="button"
+            >
+              {feedbackCollapsed
+                ? <PanelRightOpen aria-hidden="true" size={17} />
+                : <PanelRightClose aria-hidden="true" size={17} />}
+              <span className="sr-only">{feedbackCollapsed ? "Show feedback panel" : "Hide feedback panel"}</span>
+            </button>
           </div>
         </div>
       </header>
 
-      <div className="workspace" data-density={density} style={workspaceStyle}>
+      <div
+        className="workspace"
+        data-density={density}
+        data-feedback-collapsed={feedbackCollapsed ? "" : undefined}
+        style={workspaceStyle}
+      >
         <main
           aria-live="polite"
           className="workspace-canvas"
@@ -766,7 +916,7 @@ export function VisualCompanionApp() {
             readOnly={Boolean(readOnly)}
           />
         </main>
-        {desktopWorkspaceSplit ? (
+        {desktopWorkspaceSplit && !feedbackCollapsed ? (
           <PaneSeparator
             aria-controls="workspace-canvas"
             className="workspace-pane-separator"
@@ -783,14 +933,22 @@ export function VisualCompanionApp() {
         ) : null}
         <FeedbackPanel
           annotationComponentId={presentedAnnotationComponentId}
+          collapsed={feedbackCollapsed}
           components={options}
+          composeHeight={feedbackComposeHeight}
           deliveryState={deriveBrowserDeliveryState(presentedDeliveryEvidence)}
           draft={draft}
           error={error}
-          events={session.events}
+          events={presentedEvents}
+          historyHeight={boundedFeedbackHistoryHeight}
+          historyMax={feedbackHistoryBoundsValue.max}
+          historyMin={feedbackHistoryBoundsValue.min}
+          historySeparatorEnabled={desktopWorkspaceSplit}
           onAnnotationComponentSelect={selectAnnotationComponent}
           onClear={clearDraft}
           onDraftChange={setDraft}
+          onHistoryHeightChange={setFeedbackHistoryHeight}
+          onHistoryHeightCommit={commitFeedbackHistoryHeight}
           onRefresh={refresh}
           onSubmit={() => void submit()}
           readOnly={Boolean(readOnly)}

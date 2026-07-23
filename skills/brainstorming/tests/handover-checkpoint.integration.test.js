@@ -166,3 +166,11 @@ test('brainstorm checkpoint rejects legacy-only Claude identity as non-native', 
   assert.match(recorded.stderr, /requires a native Agent Conversation identity/iu);
   assert.equal(fs.existsSync(path.join(root, '.pair')), false);
 });
+
+test('brainstorming registers the Agent Conversation at activation as the mandatory first action', () => {
+  const content = fs.readFileSync(path.resolve(__dirname, '../SKILL.md'), 'utf8');
+  assert.match(content, /pair-loop --register-brainstorming/u);
+  assert.match(content, /register the Agent Conversation/u);
+  assert.match(content, /mandatory first action/u);
+  assert.match(content, /before opening the Visual Companion/u);
+});

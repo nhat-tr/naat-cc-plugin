@@ -7,6 +7,7 @@ const path = require('node:path');
 const { createBrainstormServer } = require('./server.cjs');
 const { readDeliveryState, waitForFeedback } = require('./delivery-core.cjs');
 const { writeInterviewSidecars } = require('./interview-export.cjs');
+const { appendRevisionSnapshot, readRevisionSnapshots } = require('./revision-archive.cjs');
 const { SessionStore } = require('./session-store.cjs');
 const { renderStandalone } = require('./standalone.cjs');
 const { createVisualScaffold, normalizeVisualDocument } = require('./visual-document.cjs');
@@ -16,8 +17,11 @@ const SHELL_DIR = path.resolve(__dirname, '../assets/visual-shell');
 const KNOWN_OPTIONS = new Set([
   'projectDir', 'host', 'urlHost', 'port', 'ownerPid', 'output', 'profile', 'audience',
   'title', 'summary', 'kinds', 'document', 'sessionDir', 'timeoutMs', 'replyTo', 'messageFile',
-  'message', 'workId', 'workspaceKind', 'draft',
+  'message', 'workId', 'workspaceKind', 'draft', 'olderThanDays',
+  'quiet', 'dryRun', 'all',
 ]);
+// Flags that take no value; present means true.
+const BOOLEAN_OPTIONS = new Set(['quiet', 'dryRun', 'all']);
 
 function fail(message) {
   throw new Error(message);
@@ -25,13 +29,21 @@ function fail(message) {
 
 function parseOptions(values) {
   const options = {};
-  for (let index = 0; index < values.length; index += 2) {
+  let index = 0;
+  while (index < values.length) {
     const flag = values[index];
-    const value = values[index + 1];
-    if (!flag?.startsWith('--') || value == null || value.startsWith('--')) fail(`invalid option ${flag || ''}`.trim());
+    if (!flag?.startsWith('--')) fail(`invalid option ${flag || ''}`.trim());
     const key = flag.slice(2).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
     if (!KNOWN_OPTIONS.has(key)) fail(`unknown option ${flag}`);
+    if (BOOLEAN_OPTIONS.has(key)) {
+      options[key] = true;
+      index += 1;
+      continue;
+    }
+    const value = values[index + 1];
+    if (value == null || value.startsWith('--')) fail(`invalid option ${flag}`.trim());
     options[key] = value;
+    index += 2;
   }
   return options;
 }
@@ -293,7 +305,7 @@ function readSessionSnapshot(stateDir) {
 // Bundle the document, the conversation history, and the exact rendering shell into one
 // self-contained HTML file that opens from disk (file://) with no server, so the visual
 // outlives the session and can be reviewed later or shared standalone.
-function buildStandaloneHtml(screen, session) {
+function buildStandaloneHtml(screen, session, revisions) {
   return renderStandalone({
     shell: fs.readFileSync(path.join(SHELL_DIR, 'index.html'), 'utf8'),
     styles: fs.readFileSync(path.join(SHELL_DIR, 'styles.css'), 'utf8'),
@@ -301,6 +313,7 @@ function buildStandaloneHtml(screen, session) {
     worker: fs.readFileSync(path.join(SHELL_DIR, 'elk-worker.min.js'), 'utf8'),
     screen,
     session,
+    revisions,
   });
 }
 
@@ -319,11 +332,20 @@ function writeStandaloneExport(metadata, outputOption) {
     : path.join(metadata.content_dir, 'screen.json');
   const screen = readScreenOrWaiting(activeFile, { required: format != null });
   const session = readSessionSnapshot(metadata.state_dir);
+  const revisions = readRevisionSnapshots(metadata.state_dir);
   const output = path.resolve(outputOption || defaultExportPath(metadata));
-  atomicWrite(output, buildStandaloneHtml(screen, session));
+  atomicWrite(output, buildStandaloneHtml(screen, session, revisions));
   // Emit the agent-readable sidecars next to the HTML so a later revisit re-reads the
   // interview from compact data instead of the self-contained bundle.
   const sidecars = writeInterviewSidecars(output, screen, session, atomicWrite);
+  // The marker lets session-lifecycle tooling tell exported-and-safe-to-prune sessions apart
+  // from sessions whose only copy of the interview still lives in scratch.
+  if (metadata.state_dir && fs.existsSync(metadata.state_dir)) {
+    atomicJson(path.join(metadata.state_dir, 'exported.json'), {
+      exported_at: new Date().toISOString(),
+      export_file: output,
+    });
+  }
   return { html: output, data: sidecars.json, interview: sidecars.markdown };
 }
 
@@ -365,6 +387,84 @@ async function startCodexIdleDelivery(options = {}) {
   };
 }
 
+// Bind the server for a session identity, preferring each port in order; EADDRINUSE falls
+// through to the next candidate so resume can try the recorded port before an ephemeral one.
+async function listenPreferringPorts(serverOptions, ports) {
+  for (let index = 0; index < ports.length; index += 1) {
+    const app = createBrainstormServer({ ...serverOptions, port: ports[index] });
+    try {
+      const info = await app.listen();
+      return { app, info };
+    } catch (error) {
+      await app.close();
+      if (index === ports.length - 1 || error.code !== 'EADDRINUSE') throw error;
+    }
+  }
+  fail('no candidate port to bind');
+}
+
+// Shared serve/register/shutdown wiring for start and resume: binds the server, records the
+// session pointers (active file, session-meta, capability), starts idle delivery, announces,
+// and keeps the process in the foreground until its owner or a signal stops it.
+async function serveSession(context) {
+  const { app, info } = await listenPreferringPorts({
+    sessionDir: context.sessionDir,
+    sessionId: context.sessionId,
+    host: context.host,
+    urlHost: context.urlHost,
+    token: context.token,
+    ownerPid: context.ownerPid,
+    artifactDir: context.artifactDir,
+  }, context.ports);
+  const pidFile = path.join(info.state_dir, 'server.pid');
+  fs.writeFileSync(pidFile, `${process.pid}\n`, { mode: 0o600 });
+
+  const metadata = {
+    version: 1,
+    pid: process.pid,
+    session_id: context.sessionId,
+    session_dir: context.sessionDir,
+    content_dir: info.screen_dir,
+    state_dir: info.state_dir,
+    active_file: context.activeFile,
+    url: info.url,
+    // The bound port is recorded so a later `resume` can revive the exact same URL.
+    port: info.port,
+    base_path: info.base_path,
+    artifact_dir: context.artifactDir,
+    visual_file: info.visual_file,
+    persistent: context.persistent,
+  };
+  atomicJson(context.activeFile, metadata);
+  // A copy inside the session lets --session-dir commands recover the true active_file and
+  // pid without re-deriving them from the caller's cwd.
+  atomicJson(path.join(info.state_dir, 'session-meta.json'), metadata);
+  // The capability token is kept out of the shared active pointer (server.cjs strips it) but
+  // persisted in the session's own private, owner-only state so later commands (present reuse,
+  // publish, reply, status, resume) can re-emit a working connection_url instead of relying on
+  // the user still having the first start's link. Same trust boundary as the served pages.
+  atomicJson(path.join(info.state_dir, 'capability.json'), { token: context.token }, 0o600);
+  const idleDelivery = await startCodexIdleDelivery({
+    sessionStore: app.store,
+    stateDir: info.state_dir,
+    sessionId: context.sessionId,
+  });
+  context.announce(info, metadata, idleDelivery);
+
+  let stopping = false;
+  const shutdown = async reason => {
+    if (stopping) return;
+    stopping = true;
+    await idleDelivery?.close();
+    await app.close(reason);
+    fs.rmSync(pidFile, { force: true });
+    removeActiveIfMatching(metadata);
+    process.exit(0);
+  };
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+}
+
 async function start(options) {
   const activeFile = path.resolve(options.activeFile || defaultActiveFile(options));
   if (fs.existsSync(activeFile)) {
@@ -381,6 +481,7 @@ async function start(options) {
   const initialDocument = options.initialDocument || null;
   if (initialDocument) {
     atomicJsonExclusive(path.join(sessionDir, 'content', 'workspace.json'), initialDocument);
+    appendRevisionSnapshot(path.join(sessionDir, 'state'), initialDocument);
     atomicJsonExclusive(path.join(sessionDir, 'state', 'visual-format.json'), {
       version: 1,
       active_version: 2,
@@ -396,84 +497,166 @@ async function start(options) {
   // Artifacts land in the working repo, independent of whether session state is scratch or
   // retained (--project-dir), so the visual is always a normal artifact of the repo.
   const artifactDir = path.join(repositoryRoot(options.projectDir), '.artifacts', 'brainstorm', sessionId);
-  const app = createBrainstormServer({
-    sessionDir,
+  await serveSession({
+    activeFile,
     sessionId,
-    host,
-    port: options.port ? Number(options.port) : 0,
-    urlHost: options.urlHost || (host === '127.0.0.1' ? 'localhost' : host),
+    sessionDir,
     token,
+    host,
+    urlHost: options.urlHost || (host === '127.0.0.1' ? 'localhost' : host),
+    ports: [options.port ? Number(options.port) : 0],
     ownerPid,
     artifactDir,
-  });
-  const info = await app.listen();
-  const pidFile = path.join(info.state_dir, 'server.pid');
-  fs.writeFileSync(pidFile, `${process.pid}\n`, { mode: 0o600 });
-
-  const metadata = {
-    version: 1,
-    pid: process.pid,
-    session_id: sessionId,
-    session_dir: sessionDir,
-    content_dir: info.screen_dir,
-    state_dir: info.state_dir,
-    active_file: activeFile,
-    url: info.url,
-    base_path: info.base_path,
-    artifact_dir: artifactDir,
-    visual_file: info.visual_file,
     persistent: Boolean(options.projectDir),
-  };
-  atomicJson(activeFile, metadata);
-  // A copy inside the session lets --session-dir commands recover the true active_file and
-  // pid without re-deriving them from the caller's cwd.
-  atomicJson(path.join(info.state_dir, 'session-meta.json'), metadata);
-  // The capability token is kept out of the shared active pointer (server.cjs strips it) but
-  // persisted in the session's own private, owner-only state so later commands (present reuse,
-  // publish, reply, status) can re-emit a working connection_url instead of relying on the user
-  // still having the first start's link. Same trust boundary as the served pages themselves.
-  atomicJson(path.join(info.state_dir, 'capability.json'), { token }, 0o600);
-  const idleDelivery = await startCodexIdleDelivery({
-    sessionStore: app.store,
-    stateDir: info.state_dir,
-    sessionId,
+    announce: (info, metadata, idleDelivery) => {
+      const activeFilePath = initialDocument
+        ? path.join(info.screen_dir, 'workspace.json')
+        : path.join(info.screen_dir, 'screen.json');
+      const nextAction = 'Share connection_url, then run `wait` as a background task and end your turn; you are woken automatically when the user submits feedback (Codex also auto-delivers via its idle worker).';
+      if (options.quiet) {
+        // --quiet keeps only what the agent must echo onward; the full metadata (dirs, pids,
+        // preflight geometry) stays recoverable via `status` instead of re-entering the transcript.
+        console.log(JSON.stringify({
+          type: initialDocument ? 'visual-session-presented' : 'visual-session-started',
+          connection_url: info.connection_url,
+          session_dir: sessionDir,
+          ...(initialDocument
+            ? { workspace_file: activeFilePath, revision: initialDocument.revision, next_action: nextAction }
+            : { screen_file: activeFilePath }),
+        }));
+        return;
+      }
+      const deliveryState = readDeliveryState(path.join(info.state_dir, 'delivery-state.json'));
+      console.log(JSON.stringify({
+        ...metadata,
+        type: initialDocument ? 'visual-session-presented' : 'visual-session-started',
+        connection_url: info.connection_url,
+        screen_file: activeFilePath,
+        ...(initialDocument ? {
+          workspace_file: activeFilePath,
+          work_id: initialDocument.work_id,
+          workspace_kind: initialDocument.workspace_kind,
+          revision: initialDocument.revision,
+          elk_preflight: options.elkPreflight,
+          feedback_delivery: {
+            mechanism: 'background_wait',
+            automatic: idleDelivery ? 'codex_idle_worker' : 'not_probed',
+            wait_receiver: deliveryState.listening ? 'listening' : 'not_listening',
+          },
+          next_action: nextAction,
+        } : {}),
+      }));
+    },
   });
-  const activeFilePath = initialDocument
-    ? path.join(info.screen_dir, 'workspace.json')
-    : path.join(info.screen_dir, 'screen.json');
-  const deliveryState = readDeliveryState(path.join(info.state_dir, 'delivery-state.json'));
-  console.log(JSON.stringify({
-    ...metadata,
-    type: initialDocument ? 'visual-session-presented' : 'visual-session-started',
-    connection_url: info.connection_url,
-    screen_file: activeFilePath,
-    ...(initialDocument ? {
-      workspace_file: activeFilePath,
-      work_id: initialDocument.work_id,
-      workspace_kind: initialDocument.workspace_kind,
-      revision: initialDocument.revision,
-      elk_preflight: options.elkPreflight,
-      feedback_delivery: {
-        mechanism: 'background_wait',
-        automatic: idleDelivery ? 'codex_idle_worker' : 'not_probed',
-        wait_receiver: deliveryState.listening ? 'listening' : 'not_listening',
-      },
-      next_action: 'Share connection_url, then run `wait` as a background task and end your turn; you are woken automatically when the user submits feedback (Codex also auto-delivers via its idle worker).',
-    } : {}),
-  }));
+}
 
-  let stopping = false;
-  const shutdown = async reason => {
-    if (stopping) return;
-    stopping = true;
-    await idleDelivery?.close();
-    await app.close(reason);
-    fs.rmSync(pidFile, { force: true });
-    removeActiveIfMatching(metadata);
-    process.exit(0);
-  };
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+function recordedSessionPort(metadata) {
+  if (Number.isInteger(metadata.port) && metadata.port > 0) return metadata.port;
+  // Sessions recorded before the explicit port field still carry it inside the url.
+  try {
+    const port = Number(new URL(metadata.url).port);
+    return Number.isInteger(port) && port > 0 ? port : null;
+  } catch {
+    return null;
+  }
+}
+
+// Most recent dead session in this project's brainstorm directory; resume's default target.
+function latestResumableSessionDir(options) {
+  const brainstormDir = path.dirname(path.resolve(options.activeFile || defaultActiveFile(options)));
+  let entries;
+  try {
+    entries = fs.readdirSync(brainstormDir, { withFileTypes: true });
+  } catch {
+    entries = [];
+  }
+  const candidates = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const metaFile = path.join(brainstormDir, entry.name, 'state', 'session-meta.json');
+    if (!fs.existsSync(metaFile)) continue;
+    let meta;
+    try {
+      meta = readJson(metaFile);
+    } catch {
+      continue;
+    }
+    const pidFile = path.join(brainstormDir, entry.name, 'state', 'server.pid');
+    const pid = fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8')) : meta.pid;
+    if (pid != null && processAlive(pid)) continue;
+    candidates.push({
+      sessionDir: path.join(brainstormDir, entry.name),
+      modified: fs.statSync(metaFile).mtimeMs,
+    });
+  }
+  if (candidates.length === 0) fail('no resumable visual session found; pass --session-dir DIR');
+  candidates.sort((left, right) => right.modified - left.modified);
+  return candidates[0].sessionDir;
+}
+
+// Revive a dead session in place: same session id, same capability token, and — when the
+// recorded port is still free — the exact same connection_url, so browser tabs and bookmarks
+// survive a crash or owner reap. Only the serving process is new; the content, feedback
+// history, and revision archive continue where they stopped.
+async function resume(options) {
+  const sessionDir = options.sessionDir
+    ? path.resolve(options.sessionDir)
+    : latestResumableSessionDir(options);
+  const metadata = activeMetadata({ ...options, sessionDir });
+  if (metadata.pid != null && processAlive(metadata.pid)) {
+    fail('visual session is still running; use present or publish to reuse it, or stop it first');
+  }
+  const activeFile = path.resolve(
+    options.activeFile || metadata.active_file || defaultActiveFile(options),
+  );
+  if (fs.existsSync(activeFile)) {
+    const current = readJson(activeFile);
+    if (current.session_dir !== sessionDir && processAlive(current.pid)) {
+      fail(`visual session already active at ${current.session_dir}`);
+    }
+    fs.rmSync(activeFile, { force: true });
+  }
+  let token;
+  try {
+    token = readJson(path.join(metadata.state_dir, 'capability.json')).token;
+  } catch {
+    token = null;
+  }
+  if (typeof token !== 'string' || token.length === 0) {
+    fail('cannot resume: session capability token is unavailable; start a new session');
+  }
+  const sessionId = metadata.session_id || path.basename(sessionDir);
+  const recordedPort = recordedSessionPort(metadata);
+  const host = options.host || '127.0.0.1';
+  const ownerPid = options.ownerPid ? Number(options.ownerPid) : process.ppid;
+  const artifactDir = metadata.artifact_dir
+    || path.join(repositoryRoot(options.projectDir), '.artifacts', 'brainstorm', sessionId);
+  await serveSession({
+    activeFile,
+    sessionId,
+    sessionDir,
+    token,
+    host,
+    urlHost: options.urlHost || (host === '127.0.0.1' ? 'localhost' : host),
+    ports: recordedPort ? [recordedPort, 0] : [0],
+    ownerPid,
+    artifactDir,
+    persistent: Boolean(metadata.persistent),
+    announce: (info, resumedMetadata) => {
+      const urlPreserved = recordedPort != null && info.port === recordedPort;
+      const payload = {
+        type: 'visual-session-resumed',
+        connection_url: info.connection_url,
+        session_dir: sessionDir,
+        url_preserved: urlPreserved,
+        ...(urlPreserved ? {} : {
+          note: 'The recorded port was unavailable; share the new connection_url.',
+        }),
+        next_action: 'Share connection_url if the browser tab is gone, then run `wait` as a background task and end your turn.',
+      };
+      console.log(JSON.stringify(options.quiet ? payload : { ...resumedMetadata, ...payload }));
+    },
+  });
 }
 
 // Returns the live session's metadata for this project, or null when none is running. present
@@ -514,6 +697,7 @@ function writeDocumentIntoLiveSession(metadata, document) {
       ? path.join(metadata.content_dir, 'workspace.json')
       : legacyFile;
     atomicJson(destination, document);
+    appendRevisionSnapshot(metadata.state_dir || path.join(metadata.session_dir, 'state'), document);
     return destination;
   });
 }
@@ -572,16 +756,255 @@ async function present(options) {
       work_id: document.work_id,
       workspace_kind: document.workspace_kind,
       revision: document.revision,
-      url: live.url,
-      base_path: live.base_path,
       session_dir: live.session_dir,
       connection_url: sessionConnectionUrl(live),
-      elk_preflight: elkPreflight,
+      ...(options.quiet ? {} : {
+        url: live.url,
+        base_path: live.base_path,
+        elk_preflight: elkPreflight,
+      }),
       note: 'Reused the live session — the browser URL is unchanged.',
     }));
     return;
   }
   await start({ ...options, initialDocument: document, elkPreflight });
+}
+
+function projectBrainstormDir(options) {
+  return path.dirname(path.resolve(options.activeFile || defaultActiveFile(options)));
+}
+
+function allBrainstormDirs() {
+  let entries;
+  try {
+    entries = fs.readdirSync(scratchRoot(), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter(entry => entry.isDirectory())
+    .map(entry => path.join(scratchRoot(), entry.name, 'brainstorm'))
+    .filter(directory => fs.existsSync(directory));
+}
+
+function listSessionDirs(options) {
+  const roots = options.all ? allBrainstormDirs() : [projectBrainstormDir(options)];
+  const sessionDirs = [];
+  for (const root of roots) {
+    let entries;
+    try {
+      entries = fs.readdirSync(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const sessionDir = path.join(root, entry.name);
+      if (!fs.existsSync(path.join(sessionDir, 'state'))
+        && !fs.existsSync(path.join(sessionDir, 'content'))) continue;
+      sessionDirs.push(sessionDir);
+    }
+  }
+  return sessionDirs;
+}
+
+function walkSessionFiles(directory) {
+  const stats = { sizeBytes: 0, lastModifiedMs: 0 };
+  let entries;
+  try {
+    entries = fs.readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return stats;
+  }
+  for (const entry of entries) {
+    const file = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      const nested = walkSessionFiles(file);
+      stats.sizeBytes += nested.sizeBytes;
+      stats.lastModifiedMs = Math.max(stats.lastModifiedMs, nested.lastModifiedMs);
+      continue;
+    }
+    try {
+      const stat = fs.statSync(file);
+      stats.sizeBytes += stat.size;
+      stats.lastModifiedMs = Math.max(stats.lastModifiedMs, stat.mtimeMs);
+    } catch {
+      // A file vanishing mid-walk (e.g. a temp write) only skews the totals, never fails list.
+    }
+  }
+  return stats;
+}
+
+function countMatchingLines(file, needle) {
+  if (!fs.existsSync(file)) return 0;
+  try {
+    return fs.readFileSync(file, 'utf8').split('\n').filter(line => line.includes(needle)).length;
+  } catch {
+    return 0;
+  }
+}
+
+function describeSession(sessionDir) {
+  let metadata;
+  try {
+    metadata = activeMetadata({ sessionDir });
+  } catch {
+    metadata = {
+      session_dir: sessionDir,
+      state_dir: path.join(sessionDir, 'state'),
+      content_dir: path.join(sessionDir, 'content'),
+    };
+  }
+  const stateDir = metadata.state_dir;
+  const stats = walkSessionFiles(sessionDir);
+  let exported = null;
+  try {
+    exported = readJson(path.join(stateDir, 'exported.json'));
+  } catch {
+    exported = null;
+  }
+  let stopped = null;
+  try {
+    stopped = readJson(path.join(stateDir, 'server-stopped'));
+  } catch {
+    stopped = null;
+  }
+  return {
+    session_id: metadata.session_id || path.basename(sessionDir),
+    session_dir: sessionDir,
+    live: metadata.pid != null && processAlive(metadata.pid),
+    persistent: Boolean(metadata.persistent),
+    modified: new Date(stats.lastModifiedMs || 0).toISOString(),
+    size_bytes: stats.sizeBytes,
+    feedback_turns: countMatchingLines(path.join(stateDir, 'session.jsonl'), '"user.turn"'),
+    revisions: countMatchingLines(path.join(stateDir, 'revisions.jsonl'), '"revision"'),
+    exported_at: exported?.exported_at ?? null,
+    export_file: exported?.export_file ?? null,
+    stopped_reason: stopped?.reason ?? null,
+  };
+}
+
+function sessionsList(options) {
+  const sessions = listSessionDirs(options)
+    .map(describeSession)
+    .sort((left, right) => right.modified.localeCompare(left.modified));
+  console.log(JSON.stringify({
+    type: 'visual-sessions',
+    scope: options.all ? 'all-projects' : 'project',
+    sessions,
+  }));
+}
+
+// Archive = capture the durable record (standalone HTML + sidecars, revision timeline included)
+// outside scratch, then remove the scratch session directory. Persistent (--project-dir)
+// sessions and directories outside scratch are exported but never deleted.
+function archiveSessionDir(sessionDir, outputOption) {
+  const metadata = activeMetadata({ sessionDir });
+  if (metadata.pid != null && processAlive(metadata.pid)) {
+    fail('visual session is still running; stop it before archiving');
+  }
+  const exported = writeStandaloneExport(metadata, outputOption);
+  const removable = !metadata.persistent
+    && sessionDir.startsWith(`${scratchRoot()}${path.sep}`);
+  if (removable) {
+    removeActiveIfMatching(metadata);
+    fs.rmSync(sessionDir, { recursive: true, force: true });
+  }
+  return { exported, removed: removable };
+}
+
+function sessionsArchive(options) {
+  if (!options.sessionDir) fail('sessions archive requires --session-dir DIR');
+  const sessionDir = path.resolve(options.sessionDir);
+  const { exported, removed } = archiveSessionDir(sessionDir, options.output);
+  console.log(JSON.stringify({
+    type: 'visual-session-archived',
+    session_dir: sessionDir,
+    export_file: exported.html,
+    data_file: exported.data,
+    interview_file: exported.interview,
+    removed,
+  }));
+}
+
+function sessionsPrune(options) {
+  const olderThanDays = parseNonNegativeInteger(options.olderThanDays, 'older-than-days') ?? 14;
+  const cutoff = Date.now() - olderThanDays * 86_400_000;
+  const candidates = listSessionDirs(options)
+    .map(describeSession)
+    .filter(session => !session.live && Date.parse(session.modified) < cutoff);
+  if (options.dryRun) {
+    console.log(JSON.stringify({
+      type: 'visual-sessions-prune-preview',
+      older_than_days: olderThanDays,
+      candidates,
+    }));
+    return;
+  }
+  const pruned = [];
+  const skipped = [];
+  for (const candidate of candidates) {
+    try {
+      const { exported, removed } = archiveSessionDir(candidate.session_dir);
+      if (!removed) {
+        skipped.push({ session_dir: candidate.session_dir, reason: 'persistent or outside scratch; exported only' });
+        continue;
+      }
+      pruned.push({ session_dir: candidate.session_dir, export_file: exported.html });
+    } catch {
+      // Export-before-delete is the contract: a session whose record cannot be captured is
+      // kept rather than destroyed.
+      skipped.push({ session_dir: candidate.session_dir, reason: 'export failed; session retained' });
+    }
+  }
+  console.log(JSON.stringify({
+    type: 'visual-sessions-pruned',
+    older_than_days: olderThanDays,
+    pruned,
+    skipped,
+  }));
+}
+
+function sessions(subcommand, options) {
+  if (subcommand === 'list') return sessionsList(options);
+  if (subcommand === 'archive') return sessionsArchive(options);
+  if (subcommand === 'prune') return sessionsPrune(options);
+  return fail('sessions requires one of: list, archive, prune');
+}
+
+// Schema-checks a draft or document without serving it, so feedback answers can be applied as
+// small targeted edits (Edit + validate) instead of full-file rewrites of the draft JSON.
+async function validate(options) {
+  if (Boolean(options.document) === Boolean(options.draft)) {
+    fail('validate requires exactly one of --document FILE or --draft FILE');
+  }
+  let document;
+  if (options.draft) {
+    const { compileArchitectureDraft } = require('./architecture-draft.cjs');
+    document = compileArchitectureDraft(readRegularJson(path.resolve(options.draft), 'Architecture Draft'));
+  } else {
+    document = normalizeAuthoredDocument(
+      readRegularJson(path.resolve(options.document), 'Visual Document candidate'),
+    );
+  }
+  let renderPreflight = 'not_applicable';
+  if (document.version === 2) {
+    const { preflightWorkspaceDocument } = require('./workspace-render-preflight.cjs');
+    renderPreflight = (await preflightWorkspaceDocument(document)).status;
+  }
+  console.log(JSON.stringify({
+    type: 'visual-document.validated',
+    source: options.draft ? 'draft' : 'document',
+    version: document.version ?? 1,
+    ...(document.version === 2 ? {
+      work_id: document.work_id,
+      workspace_kind: document.workspace_kind,
+      revision: document.revision,
+      frames: document.frames.length,
+      components: document.components.length,
+    } : {}),
+    render_preflight: renderPreflight,
+  }));
 }
 
 function migrate(options) {
@@ -775,8 +1198,10 @@ async function main() {
   const [command, ...values] = process.argv.slice(2);
   if (!command || ['help', '--help', '-h'].includes(command)) {
     console.log([
-      'Usage: visual-session.cjs start [--project-dir DIR] [--host HOST] [--url-host HOST]',
-      '       visual-session.cjs present (--draft FILE | --document FILE) [--project-dir DIR] [--host HOST] [--url-host HOST]',
+      'Usage: visual-session.cjs start [--project-dir DIR] [--host HOST] [--url-host HOST] [--quiet]',
+      '       visual-session.cjs present (--draft FILE | --document FILE) [--project-dir DIR] [--host HOST] [--url-host HOST] [--quiet]',
+      '       visual-session.cjs resume [--session-dir DIR] [--quiet]',
+      '       visual-session.cjs validate (--draft FILE | --document FILE)',
       '       visual-session.cjs scaffold --output FILE [--profile technical|product|business] [--kinds anchor,flow,decision]',
       '       visual-session.cjs scaffold --output FILE --work-id ID --workspace-kind product|architecture|research|business|review [--title TITLE]',
       '       visual-session.cjs publish (--draft FILE | --document FILE) [--session-dir DIR]',
@@ -788,13 +1213,23 @@ async function main() {
       '       visual-session.cjs status [--session-dir DIR]',
       '       visual-session.cjs export [--output FILE] [--session-dir DIR]',
       '       visual-session.cjs stop [--output FILE] [--session-dir DIR]',
+      '       visual-session.cjs sessions list [--all]',
+      '       visual-session.cjs sessions archive --session-dir DIR [--output FILE]',
+      '       visual-session.cjs sessions prune [--older-than-days N] [--dry-run] [--all]',
     ].join('\n'));
+    return;
+  }
+  if (command === 'sessions') {
+    const [subcommand, ...rest] = values;
+    sessions(subcommand, parseOptions(rest));
     return;
   }
   const options = parseOptions(values);
   if (command === 'start') await start(options);
   else if (command === 'present') await present(options);
+  else if (command === 'resume') await resume(options);
   else if (command === 'scaffold') scaffold(options);
+  else if (command === 'validate') await validate(options);
   else if (command === 'publish') await publish(options);
   else if (command === 'migrate') migrate(options);
   else if (command === 'backout') backout(options);

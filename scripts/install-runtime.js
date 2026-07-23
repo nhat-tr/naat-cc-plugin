@@ -397,9 +397,11 @@ function managedPairHook(entry) {
     hook.command.includes('my-claude-code/hooks/stop-gate.sh') ||
     hook.command.includes('my-claude-code/hooks/handover-gate.sh') ||
     hook.command.includes('my-claude-code/hooks/pair-owner.sh') ||
+    hook.command.includes('my-claude-code/hooks/brainstorm-register.sh') ||
     hook.command.includes('/hooks/stop-gate.sh') ||
     hook.command.includes('/hooks/handover-gate.sh') ||
-    hook.command.includes('/hooks/pair-owner.sh')
+    hook.command.includes('/hooks/pair-owner.sh') ||
+    hook.command.includes('/hooks/brainstorm-register.sh')
   ));
 }
 
@@ -427,6 +429,8 @@ function installCodexHooks(codexDir, pluginDir, dryRun, operations) {
             ? `PAIR_HOOK_RUNTIME=codex bash ${JSON.stringify(path.join(pluginDir, 'hooks', 'handover-gate.sh'))}`
           : typeof hook.command === 'string' && hook.command.includes('my-claude-code/hooks/pair-owner.sh')
             ? `PAIR_HOOK_RUNTIME=codex bash ${JSON.stringify(path.join(pluginDir, 'hooks', 'pair-owner.sh'))}`
+          : typeof hook.command === 'string' && hook.command.includes('my-claude-code/hooks/brainstorm-register.sh')
+            ? `PAIR_HOOK_RUNTIME=codex bash ${JSON.stringify(path.join(pluginDir, 'hooks', 'brainstorm-register.sh'))}`
             : hook.command,
       })),
     }));
@@ -662,4 +666,6 @@ function main() {
   console.log(`Prepared ${operations.length} operation(s) for runtime=${args.runtime} scope=${args.scope}${args.dryRun ? ' (dry-run)' : ''}`);
 }
 
-main();
+// Only run the installer when invoked directly. Requiring this module (for example to unit-test a
+// helper) must never trigger a global install.
+if (require.main === module) main();

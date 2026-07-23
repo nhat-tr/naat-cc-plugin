@@ -584,6 +584,27 @@ function updateAgentConversationCheckpoint(root, input) {
   });
 }
 
+function brainstormBootstrapCheckpoint() {
+  return {
+    currentDirection: 'Brainstorming in progress; the semantic Agent Conversation Checkpoint is pending an explicit refresh.',
+    nextAction: 'Refresh the Agent Conversation Checkpoint with the confirmed Core Anchor at the next material boundary.',
+  };
+}
+
+function ensureBrainstormingRegistration(root, input) {
+  const identity = { runtime: input.runtime, agentConversationId: input.agentConversationId, kind: 'brainstorming' };
+  if (hasAgentConversationRegistration(root, identity)) {
+    return { sourceKey: conversationIdentity(identity).sourceKey, alreadyRegistered: true };
+  }
+  registerAgentConversation(root, { ...identity, now: input.now });
+  const recorded = updateAgentConversationCheckpoint(root, {
+    ...identity,
+    now: input.now,
+    checkpoint: input.checkpoint || brainstormBootstrapCheckpoint(),
+  });
+  return { sourceKey: recorded.sourceKey, alreadyRegistered: false, revision: recorded.revision };
+}
+
 function recordAgentConversationStop(root, input) {
   const identity = conversationIdentity(input);
   if (!hasAgentConversationRegistration(root, input)) {
@@ -1472,8 +1493,10 @@ module.exports = {
   assessAgentConversationFreshness,
   adoptAgentConversationHandover,
   authorizeColdResume,
+  brainstormBootstrapCheckpoint,
   completeColdResume,
   derivePairCheckpoint,
+  ensureBrainstormingRegistration,
   formatFreshnessProjection,
   freshnessProjection,
   hasAgentConversationRegistration,
