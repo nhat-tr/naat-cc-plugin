@@ -21,15 +21,26 @@ function repositoryRoot(cwd) {
   return result.status === 0 ? result.stdout.trim() : null;
 }
 
-// The brainstorming Visual Companion is invoked as `node .../skills/brainstorming/scripts/visual-session.cjs`.
-// Only the brainstorming skill runs it, so its presence is an unambiguous, cross-runtime signal that this
-// Agent Conversation is a brainstorming conversation that should be registered for the Freshness Gate.
+// The brainstorming Visual Companion is invoked as `node .../skills/brainstorming/scripts/visual-session.cjs`
+// (or, less commonly, executed directly as `.../visual-session.cjs <subcommand>`). Matching must be anchored
+// to the actual invocation position — node's first argument, or the segment's own command word (optionally
+// after leading FOO=bar env assignments) — never a bare substring scan. A prior unanchored substring match
+// falsely registered an unrelated conversation from a `grep`/`sed` command that only *mentioned* the script
+// path as an argument (e.g. `sed -n '69,83p' .../visual-session.cjs`, `cat .../visual-session.cjs`).
+const VISUAL_COMPANION_SCRIPT_TOKEN = /^(?:\S*\/)?visual-session(?:\.cjs)?$/u;
+const LEADING_ENV_ASSIGNMENTS = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*/u;
+
 function isVisualCompanionInvocation(command) {
   return String(command || '')
     .split(/(?:&&|\|\||;|\n)/u)
     .map(segment => segment.trim())
-    .some(segment => /(?:^|\/)visual-session(?:\.cjs)?(?=\s|$)/u.test(segment)
-      || /brainstorming\/scripts\/visual-session/u.test(segment));
+    .some(segment => {
+      const tokens = segment.replace(LEADING_ENV_ASSIGNMENTS, '').split(/\s+/u).filter(Boolean);
+      if (tokens.length === 0) return false;
+      const [programToken, firstArgumentToken] = tokens;
+      if (programToken === 'node') return VISUAL_COMPANION_SCRIPT_TOKEN.test(firstArgumentToken || '');
+      return VISUAL_COMPANION_SCRIPT_TOKEN.test(programToken);
+    });
 }
 
 function runtimeFor(input) {

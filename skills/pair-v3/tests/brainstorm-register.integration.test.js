@@ -158,3 +158,32 @@ test('--register-brainstorming seeds a bootstrap without stdin and composes with
   assert.equal(conversations[0].checkpoint.core_anchor, 'Deterministic brainstorming registration closes the cold-handover gap.');
   assert.ok(conversations[0].checkpoint_revision > bootstrapRevision, 'enrichment must advance the checkpoint revision');
 });
+
+// F8: isVisualCompanionInvocation previously matched an unanchored substring anywhere in the
+// command, so a grep/sed/cat/wc invocation that merely *mentioned* the script path (as an
+// argument, never executed) falsely registered an unrelated conversation. The matcher must only
+// fire for an actual invocation: `node <path>visual-session.cjs <subcommand>`, or the script
+// itself as the segment's command word (optionally after FOO=bar env assignments).
+const { isVisualCompanionInvocation } = require(adapter);
+
+test('isVisualCompanionInvocation matches only an actual visual-session invocation, not a mention', () => {
+  const mustMatch = [
+    'node skills/brainstorming/scripts/visual-session.cjs present --draft x.json',
+    'node /abs/path/skills/brainstorming/scripts/visual-session.cjs start',
+    "cd repo && node skills/brainstorming/scripts/visual-session.cjs resume",
+    'FOO=1 node skills/brainstorming/scripts/visual-session.cjs stop',
+  ];
+  const mustNotMatch = [
+    "sed -n '69,83p' skills/brainstorming/scripts/visual-session.cjs",
+    "rg 'visual-session' skills",
+    'grep -c visual-session transcript.jsonl',
+    'cat skills/brainstorming/scripts/visual-session.cjs',
+    'wc -l skills/brainstorming/scripts/visual-session.cjs',
+  ];
+  for (const command of mustMatch) {
+    assert.equal(isVisualCompanionInvocation(command), true, `expected invocation to match: ${command}`);
+  }
+  for (const command of mustNotMatch) {
+    assert.equal(isVisualCompanionInvocation(command), false, `expected mention to NOT match: ${command}`);
+  }
+});
