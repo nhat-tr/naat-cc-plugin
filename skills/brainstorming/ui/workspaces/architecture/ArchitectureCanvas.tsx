@@ -4,7 +4,9 @@ import {
   MarkerType,
   MiniMap,
   ReactFlow,
+  type NodeChange,
   type ReactFlowInstance,
+  type XYPosition,
 } from "@xyflow/react";
 import {
   ArrowRight,
@@ -13,11 +15,13 @@ import {
   Maximize,
   Minimize,
   Minus,
+  RotateCcw,
   Route,
   Scan,
   Plus,
 } from "lucide-react";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -36,6 +40,8 @@ import {
 } from "./architecture-nodes";
 import {
   layoutArchitecture,
+  manualArchitectureEdgeGeometry,
+  type ArchitectureBox,
   type ArchitectureLayoutResult,
   type ArchitectureMode,
   type ArchitectureEdgeType,
@@ -78,6 +84,11 @@ const SCENARIO_EDGE_COLOR = "#bc7900";
 const VIEWPORT_HEIGHT_MIN = 320;
 const VIEWPORT_HEIGHT_LIMIT = 900;
 const VIEWPORT_HEIGHT_STORAGE_KEY = "visual-companion:architecture-viewport-height:v1";
+// A dragged node may travel this far beyond the boundary box ELK computed for it.
+const DRAG_ALLOWANCE = 600;
+// Mirrors the ownership-boundary padding and header height in the ELK layout options.
+const BOUNDARY_PADDING = 24;
+const BOUNDARY_HEADER_HEIGHT = 40;
 
 interface ViewportHeightBounds {
   defaultValue: number;
@@ -175,6 +186,9 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
   ));
   const [flow, setFlow] = useState<ReactFlowInstance<ArchitectureCanvasNode, ArchitectureFlowEdge> | null>(null);
   const [layout, setLayout] = useState<LayoutState>({ status: "loading", result: null, error: null });
+  // Nodes a reviewer dragged. Empty means "exactly where ELK put it", so a new layout —
+  // another mode, scenario, or Revision — starts from the computed positions again.
+  const [movedNodes, setMovedNodes] = useState<Record<string, XYPosition>>({});
   const [viewportBounds, setViewportBounds] = useState(initialViewport.bounds);
   const [viewportHeight, setViewportHeight] = useState(initialViewport.value);
   const modeTabs = useRef(new Map<ArchitectureMode, HTMLButtonElement>());
@@ -246,6 +260,7 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
     if (!layoutContent) return;
     initialViewApplied.current = false;
     let active = true;
+    setMovedNodes({});
     setLayout({ status: "loading", result: null, error: null });
     void layoutArchitecture(layoutContent).then(
       result => {
@@ -295,6 +310,61 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
     return () => cancelAnimationFrame(frame);
   }, [flow, layout.result, layout.status, parsed, presentationScope]);
 
+  // Absolute geometry of every node at its current position, with the ownership boundaries
+  // grown to keep containing the ones a reviewer dragged.
+  const liveGeometry = useMemo(() => {
+    const nodes = new Map<string, ArchitectureBox>();
+    const boundaries = new Map<string, ArchitectureBox>();
+    if (!layout.result) return { nodes, boundaries };
+    const boundaryLayout = new Map(layout.result.boundaries.map(item => [item.boundary.id, item]));
+    const originOf = (boundaryId: string | null): XYPosition => {
+      const origin = { x: 0, y: 0 };
+      const visited = new Set<string>();
+      let current = boundaryId;
+      while (current && !visited.has(current)) {
+        visited.add(current);
+        const item = boundaryLayout.get(current);
+        if (!item) break;
+        origin.x += item.position.x;
+        origin.y += item.position.y;
+        current = item.boundary.parent_id;
+      }
+      return origin;
+    };
+    for (const item of layout.result.boundaries) {
+      const origin = originOf(item.boundary.id);
+      boundaries.set(item.boundary.id, {
+        x: origin.x,
+        y: origin.y,
+        width: item.width,
+        height: item.height,
+      });
+    }
+    for (const item of layout.result.nodes) {
+      const origin = originOf(item.node.owner_id);
+      const position = movedNodes[item.node.id] ?? item.position;
+      const box = {
+        x: origin.x + position.x,
+        y: origin.y + position.y,
+        width: item.width,
+        height: item.height,
+      };
+      nodes.set(item.node.id, box);
+      let ownerId: string | null = item.node.owner_id;
+      const visited = new Set<string>();
+      while (ownerId && !visited.has(ownerId)) {
+        visited.add(ownerId);
+        const owner = boundaries.get(ownerId);
+        if (owner) {
+          owner.width = Math.max(owner.width, box.x + box.width + BOUNDARY_PADDING - owner.x);
+          owner.height = Math.max(owner.height, box.y + box.height + BOUNDARY_PADDING - owner.y);
+        }
+        ownerId = boundaryLayout.get(ownerId)?.boundary.parent_id ?? null;
+      }
+    }
+    return { nodes, boundaries };
+  }, [layout.result, movedNodes]);
+
   const visibleNodes = useMemo<ArchitectureCanvasNode[]>(() => {
     if (!layout.result) return [];
     const boundaries: ArchitectureCanvasNode[] = layout.result.boundaries.map(item => ({
@@ -310,7 +380,17 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
       focusable: false,
       selectable: true,
       draggable: false,
-      style: { width: item.width, height: item.height },
+      // `measured` is what keeps React Flow's node internals alive when a drag hands it a
+      // fresh node object: without it, handle bounds reset and every edge unmounts for a
+      // frame. It is always the size we set through `style`.
+      measured: {
+        width: liveGeometry.boundaries.get(item.boundary.id)?.width ?? item.width,
+        height: liveGeometry.boundaries.get(item.boundary.id)?.height ?? item.height,
+      },
+      style: {
+        width: liveGeometry.boundaries.get(item.boundary.id)?.width ?? item.width,
+        height: liveGeometry.boundaries.get(item.boundary.id)?.height ?? item.height,
+      },
     }));
     const nodes: ArchitectureCanvasNode[] = layout.result.nodes
       .filter(item => item.node.modes.includes(mode))
@@ -324,12 +404,21 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
             : scenarioEnd
               ? "Scenario end"
               : null;
+        const owner = liveGeometry.boundaries.get(item.node.owner_id);
         return {
           id: item.node.id,
           type: "architectureNode",
           parentId: item.node.owner_id,
-          extent: "parent",
-          position: item.position,
+          // Draggable well past the box ELK sized for its original neighbours — the
+          // boundary grows with it — but never out of the boundary that owns it.
+          extent: [
+            [BOUNDARY_PADDING, BOUNDARY_HEADER_HEIGHT],
+            [
+              (owner?.width ?? item.width) + DRAG_ALLOWANCE,
+              (owner?.height ?? item.height) + DRAG_ALLOWANCE,
+            ],
+          ],
+          position: movedNodes[item.node.id] ?? item.position,
           data: {
             node: item.node,
             focused: focusedId === item.node.id,
@@ -341,7 +430,8 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
           ariaLabel: [item.node.label, titleCaseType(item.node.type), endpointLabel].filter(Boolean).join(", "),
           focusable: false,
           selectable: true,
-          draggable: false,
+          draggable: true,
+          measured: { width: item.width, height: item.height },
           style: { width: item.width, height: item.height },
         };
       });
@@ -350,7 +440,9 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
     activeScenario?.id,
     focusedId,
     layout.result,
+    liveGeometry,
     mode,
+    movedNodes,
     scenarioEndId,
     scenarioNodeIds,
     scenarioStartId,
@@ -358,10 +450,26 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
 
   const visibleEdges = useMemo<ArchitectureFlowEdge[]>(() => {
     if (!layout.result) return [];
+    // Only edges whose endpoints left the position ELK routed them to are re-routed; the
+    // rest keep the orthogonal route the layout engine produced.
+    const displaced = new Set(layout.result.nodes
+      .filter(item => {
+        const live = liveGeometry.nodes.get(item.node.id);
+        if (!live) return false;
+        return Math.abs(live.x - item.absolutePosition.x) > 0.5
+          || Math.abs(live.y - item.absolutePosition.y) > 0.5;
+      })
+      .map(item => item.node.id));
     return layout.result.edges
       .filter(item => item.edge.modes.includes(mode))
       .map(item => {
         const scenario = scenarioEdgeIds.has(item.edge.id);
+        const source = liveGeometry.nodes.get(item.edge.source.node_id);
+        const target = liveGeometry.nodes.get(item.edge.target.node_id);
+        const moved = displaced.has(item.edge.source.node_id) || displaced.has(item.edge.target.node_id);
+        const geometry = moved && source && target
+          ? manualArchitectureEdgeGeometry(source, target)
+          : item;
         return {
           id: item.edge.id,
           type: "architectureEdge",
@@ -377,8 +485,8 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
           },
           data: {
             edge: item.edge,
-            path: item.path,
-            routePoints: item.points.length,
+            path: geometry.path,
+            routePoints: geometry.points.length,
             scenario,
             scenarioId: activeScenario?.id ?? null,
             scenarioPathIdentity: item.edge.id === scenarioPathIdentity,
@@ -388,7 +496,23 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
           selectable: true,
         };
       });
-  }, [activeScenario?.id, layout.result, mode, scenarioEdgeIds, scenarioPathIdentity]);
+  }, [activeScenario?.id, layout.result, liveGeometry, mode, scenarioEdgeIds, scenarioPathIdentity]);
+
+  const applyNodeChanges = useCallback((changes: NodeChange<ArchitectureCanvasNode>[]) => {
+    setMovedNodes(current => {
+      let next = current;
+      for (const change of changes) {
+        if (change.type !== "position" || !change.position) continue;
+        next = next === current ? { ...current } : next;
+        next[change.id] = change.position;
+      }
+      return next;
+    });
+  }, []);
+
+  const resetLayout = useCallback(() => {
+    setMovedNodes({});
+  }, []);
 
   const presentedComponentIds = useMemo(() => {
     if (!parsed) return [];
@@ -621,6 +745,16 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
             <Route aria-hidden="true" size={17} />
             <span className="sr-only">Fit scenario</span>
           </button>
+          <button
+            data-reset-layout=""
+            disabled={Object.keys(movedNodes).length === 0}
+            onClick={resetLayout}
+            title="Restore the computed layout"
+            type="button"
+          >
+            <RotateCcw aria-hidden="true" size={17} />
+            <span className="sr-only">Restore the computed layout</span>
+          </button>
         </div>
         <nav aria-label="Focus targets" className="architecture-focus-targets">
           {parsed.focus_targets.map(id => {
@@ -666,11 +800,12 @@ export function ArchitectureCanvas({ content, onPresentedComponentIdsChange }: A
                 nodeTypes={NODE_TYPES}
                 nodes={visibleNodes}
                 nodesConnectable={false}
-                nodesDraggable={false}
+                nodesDraggable
                 nodesFocusable={false}
                 onEdgeClick={(_, edge) => setFocusedId(edge.id)}
                 onInit={setFlow}
                 onNodeClick={(_, node) => setFocusedId(node.id)}
+                onNodesChange={applyNodeChanges}
                 onlyRenderVisibleElements={false}
                 panOnDrag
                 preventScrolling

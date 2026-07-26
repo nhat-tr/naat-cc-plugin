@@ -618,16 +618,72 @@ test("architecture canvas shows active Scenario Path Start and End in both modes
   await expectPathDirection("current");
 });
 
-test("architecture camera controls remain one four-button row", async ({ page }) => {
+test("architecture canvas lets a reviewer drag a node and keeps its edges attached", async ({ page }) => {
+  const viewport = page.locator("[data-architecture-viewport]");
+  const node = viewport.locator("[data-architecture-node]").first();
+  const nodeId = await node.getAttribute("data-node-id");
+  expect(nodeId, "the dragged node must be identifiable").toBeTruthy();
+  // Measured against a node nobody drags, so panning the canvas cannot pass this test.
+  const anchorNode = viewport.locator(`[data-architecture-node]:not([data-node-id="${nodeId}"])`).first();
+
+  const before = await requiredBox(node, "dragged node before the drag");
+  const anchorBefore = await requiredBox(anchorNode, "anchor node before the drag");
+  await page.mouse.move(before.x + before.width / 2, before.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(before.x + before.width / 2 + 80, before.y + 10 + 130, { steps: 12 });
+  await page.mouse.up();
+
+  const after = await requiredBox(node, "dragged node after the drag");
+  const anchorAfter = await requiredBox(anchorNode, "anchor node after the drag");
+  const shift = {
+    x: (after.x - anchorAfter.x) - (before.x - anchorBefore.x),
+    y: (after.y - anchorAfter.y) - (before.y - anchorBefore.y),
+  };
+  expect(Math.round(shift.x), "node moves relative to the nodes around it").toBeGreaterThan(50);
+  expect(Math.round(shift.y), "node moves relative to the nodes around it").toBeGreaterThan(80);
+
+  // Every edge on the dragged node re-routes to a border of its new box.
+  const endpoints = await viewport.locator(".architecture-edge-path").evaluateAll(paths => (
+    paths.map(pathElement => {
+      const box = pathElement.getBoundingClientRect();
+      return {
+        edgeId: pathElement.closest("[data-edge-id]")?.getAttribute("data-edge-id") ?? "",
+        left: box.x,
+        right: box.x + box.width,
+        top: box.y,
+        bottom: box.y + box.height,
+      };
+    })
+  ));
+  const touching = endpoints.filter(edge => (
+    edge.right >= after.x - 24
+    && edge.left <= after.x + after.width + 24
+    && edge.bottom >= after.y - 24
+    && edge.top <= after.y + after.height + 24
+  ));
+  expect(touching.length, "at least one edge still reaches the dragged node").toBeGreaterThan(0);
+
+  const resetLayout = page.locator("[data-camera-controls] [data-reset-layout]");
+  await resetLayout.click();
+  const restored = await requiredBox(node, "dragged node after restoring the layout");
+  const anchorRestored = await requiredBox(anchorNode, "anchor node after restoring the layout");
+  expect(
+    Math.round((restored.x - anchorRestored.x) - (before.x - anchorBefore.x)),
+    "restore puts the node back where the layout engine placed it",
+  ).toBeLessThanOrEqual(1);
+  await expect(resetLayout, "restore is only offered while a node sits off-layout").toBeDisabled();
+});
+
+test("architecture camera controls remain one five-button row", async ({ page }) => {
   const controls = page.locator("[data-camera-controls]");
 
-  await expect(controls.getByRole("button")).toHaveCount(4);
+  await expect(controls.getByRole("button")).toHaveCount(5);
   // The fullscreen toggle lives on the viewport, not in the camera-controls toolbar.
   await expect(controls.locator("[data-architecture-fullscreen]")).toHaveCount(0);
   const columns = await controls.evaluate(element => (
     getComputedStyle(element).gridTemplateColumns.split(" ").filter(Boolean)
   ));
-  expect(columns).toHaveLength(4);
+  expect(columns).toHaveLength(5);
 });
 
 test("architecture viewport separator resizes the graph height accessibly and persists", async ({ page }) => {

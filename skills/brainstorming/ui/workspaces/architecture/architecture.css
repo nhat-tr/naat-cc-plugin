@@ -163,7 +163,7 @@
 
 .architecture-camera-controls {
   display: inline-grid;
-  grid-template-columns: repeat(4, var(--vc-control-height));
+  grid-template-columns: repeat(5, var(--vc-control-height));
   flex: 0 0 auto;
   border: 1px solid var(--vc-line-strong);
   border-radius: var(--vc-radius-sm);
@@ -186,6 +186,15 @@
 .architecture-camera-controls button:last-child {
   border-right: 0;
 }
+
+.architecture-camera-controls button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Nodes can be dragged out of the computed layout; the cursor has to say so. */
+.react-flow__node.draggable .architecture-node { cursor: grab; }
+.react-flow__node.draggable.dragging .architecture-node { cursor: grabbing; }
 
 .architecture-camera-controls button:hover {
   background: var(--vc-surface-muted);

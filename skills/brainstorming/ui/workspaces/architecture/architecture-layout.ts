@@ -124,6 +124,13 @@ export interface LayoutArchitectureEdge {
   points: ElkPoint[];
 }
 
+export interface ArchitectureBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface ArchitectureLayoutResult {
   boundaries: LayoutBoundary[];
   nodes: LayoutArchitectureNode[];
@@ -143,6 +150,32 @@ function routePath(points: ElkPoint[]): string {
 function collectEdges(node: ElkNode, destination: ElkExtendedEdge[]): void {
   if (node.edges) destination.push(...node.edges);
   for (const child of node.children ?? []) collectEdges(child, destination);
+}
+
+// Input ports sit on a node's left edge and output ports on its right, both at mid-height,
+// so an edge leaves the source's output side and enters the target's input side. Used both
+// as the fallback for an edge ELK left unrouted and as the live route for a dragged node.
+function routeArchitectureEdge(source: ArchitectureBox, target: ArchitectureBox): ElkPoint[] {
+  const forward = target.x + target.width / 2 >= source.x + source.width / 2;
+  const start = {
+    x: forward ? source.x + source.width : source.x,
+    y: source.y + source.height / 2,
+  };
+  const end = {
+    x: forward ? target.x : target.x + target.width,
+    y: target.y + target.height / 2,
+  };
+  if (Math.abs(start.y - end.y) < 1) return [start, { x: end.x, y: start.y }];
+  const bend = (start.x + end.x) / 2;
+  return [start, { x: bend, y: start.y }, { x: bend, y: end.y }, end];
+}
+
+export function manualArchitectureEdgeGeometry(
+  source: ArchitectureBox,
+  target: ArchitectureBox,
+): { path: string; points: ElkPoint[] } {
+  const points = routeArchitectureEdge(source, target);
+  return { path: routePath(points), points };
 }
 
 function mapLayout(content: ArchitectureWorkspaceContent, graph: ElkNode): ArchitectureLayoutResult {
@@ -202,16 +235,10 @@ function mapLayout(content: ArchitectureWorkspaceContent, graph: ElkNode): Archi
       const source = positionedNodeById.get(edge.source.node_id);
       const target = positionedNodeById.get(edge.target.node_id);
       if (source && target) {
-        const start = {
-          x: source.absolutePosition.x + source.width,
-          y: source.absolutePosition.y + source.height / 2,
-        };
-        const end = {
-          x: target.absolutePosition.x,
-          y: target.absolutePosition.y + target.height / 2,
-        };
-        const midpoint = (start.x + end.x) / 2;
-        points = [start, { x: midpoint, y: start.y }, { x: midpoint, y: end.y }, end];
+        points = routeArchitectureEdge(
+          { ...source.absolutePosition, width: source.width, height: source.height },
+          { ...target.absolutePosition, width: target.width, height: target.height },
+        );
       }
     }
     return { edge, points, path: routePath(points) };
