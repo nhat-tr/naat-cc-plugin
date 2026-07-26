@@ -38,7 +38,7 @@ after final slice: cumulative verification → cumulative review ─────
 
 any active phase ── pause boundary ──→ paused ── resume ──→ exact saved phase
 in-flight request ── Cancel now ─────→ last completed checkpoint
-material decision/hard boundary ─────→ blocked (files preserved)
+verifying/reviewing ── material decision/hard boundary ──→ blocked (files preserved)
 ```
 
 One attempt ID survives CLI exits, agent exits, verification-launch failures, and Review Session failures. Those are evidence events, not terminal attempt outcomes. A later correction remains on the same attempt. Only accepted, explicitly discarded, or legacy isolated-headless work is terminal.
@@ -107,7 +107,7 @@ Events, logs, patches, reviews, status, report data, and hook output must omit r
 
 ## Review Results and Genuine Blockers
 
-Reviewers report only BLOCKER or MAJOR findings with a concrete reachable failure scenario and `origin: implementation|plan|environment`. Style, optional hardening, speculative edges, and a file merely being additional are not findings.
+Reviewers report only BLOCKER or MAJOR findings with a concrete reachable failure scenario and `origin: implementation|plan|environment`. Style, optional hardening, speculative edges, and a file merely being additional are not findings. A cross-task ordering conflict the coordinator can resolve during implementation without a plan or spec change is likewise not a material plan defect; it is not reported as a finding, though the review summary may note it.
 
 Pair has no default two-interruption, two-attempt, two-plan-review, or two-final-review stops. Each CLI invocation remains finite, unchanged rejected patches do not re-dispatch, and explicit `--max-*` options remain optional operator ceilings. Report `blocked` only for a material decision or when the same evidenced cause remains after every safe in-scope recovery action.
 

@@ -233,6 +233,25 @@ test('digest-bound plan challenge is a portable Codex and Claude CLI', () => {
   assert.deepEqual(schema.properties.findings.items.properties.origin.enum, ['plan', 'environment']);
 });
 
+test('the Canonical Lifecycle diagram names verifying/reviewing as the blocked row predecessors and keeps "any active phase" on the pause row only', () => {
+  const skill = read('skills/pair-v4/SKILL.md');
+  const diagram = skill.match(/## Canonical Lifecycle\n\n```text\n([\s\S]*?)```/)[1];
+  const lines = diagram.split('\n');
+
+  const blockedLine = lines.find(line => line.includes('blocked (files preserved)'));
+  assert.ok(blockedLine, 'diagram must contain a blocked row');
+  assert.match(blockedLine, /verifying\/reviewing/, 'blocked must name verifying/reviewing as its source phases');
+  assert.doesNotMatch(blockedLine, /any active phase/, 'blocked must not be reachable from any active phase');
+
+  const pauseLine = lines.find(line => line.includes('pause boundary'));
+  assert.ok(pauseLine, 'diagram must contain the pause row');
+  assert.match(pauseLine, /any active phase/, 'pause remains reachable from any active phase');
+  assert.doesNotMatch(pauseLine, /blocked/, 'pause row must not mention blocked');
+
+  const activeActivePhaseLines = lines.filter(line => line.includes('any active phase'));
+  assert.equal(activeActivePhaseLines.length, 1, '"any active phase" must appear on exactly one row (pause)');
+});
+
 test('visual brainstorming is explicit, authenticated, and uses the configured scratch root', () => {
   const guide = read('skills/brainstorming/visual-companion.md');
   const startServer = read('skills/brainstorming/scripts/start-server.sh');
