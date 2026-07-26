@@ -185,6 +185,36 @@ test('Pair CLI help exposes the exact handover launch adoption and one-shot reco
   assert.match(result.stdout, /--adopt-handover HANDOVER_ID/iu);
   assert.match(result.stdout, /--allow-cold-resume HANDOVER_ID --once --confirm-cost-risk/iu);
   assert.match(result.stdout, /--brainstorm-checkpoint/iu);
+  assert.match(result.stdout, /--handover-help/iu);
+});
+
+test('dedicated handover help teaches the automatic path and optional manual quality upgrade', () => {
+  const result = childProcess.spawnSync(process.execPath, [
+    path.join(root, 'skills', 'pair-v3', 'scripts', 'pair-task'),
+    '--handover-help',
+  ], { cwd: root, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Automatic path \(recommended\)/iu);
+  assert.match(result.stdout, /pair-loop --enable-general-handover/iu);
+  assert.match(result.stdout, /exactly 60 minutes idle/iu);
+  assert.match(result.stdout, /pair-loop --freshness-status/iu);
+  assert.match(result.stdout, /pair-loop --fresh-from <handover-id> --runtime auto/iu);
+  assert.match(result.stdout, /pair-loop --adopt-handover <handover-id> --runtime codex\|claude/iu);
+  assert.match(result.stdout, /Manual quality upgrade \(optional\)/iu);
+  assert.match(result.stdout, /"coreAnchor"/u);
+  assert.match(result.stdout, /pair-loop --conversation-checkpoint < checkpoint\.json/iu);
+  assert.match(result.stdout, /pair-loop --handover-now/iu);
+  assert.match(result.stdout, /pair-loop --disable-general-handover/iu);
+});
+
+test('README provides a copyable Agent Conversation Handover quick start', () => {
+  const readme = read('README.md');
+  assert.match(readme, /Agent Conversation Handover quick start/iu);
+  assert.match(readme, /pair-loop --handover-help/iu);
+  assert.match(readme, /pair-loop --enable-general-handover/iu);
+  assert.match(readme, /exactly 60 minutes idle/iu);
+  assert.match(readme, /pair-loop --freshness-status/iu);
+  assert.match(readme, /pair-loop --conversation-checkpoint < checkpoint\.json/iu);
 });
 
 test('new Decision Record supersedes DR-003 without mutation', () => {

@@ -148,6 +148,10 @@ _Domain glossary for the brainstorming skill's Visual Companion (`skills/brainst
 
 ## Session & Lifecycle
 
+**General Agent Conversation** — a registered Codex or Claude agent conversation that is not owned by Pair Work or a brainstorming Visual Companion and maintains its Agent Conversation Checkpoint from bounded semantic conversation evidence.
+- Aliases to avoid: "normal session", "plain session" — both overload session and fail to distinguish the provider conversation from other session lifecycles.
+- Relations: may be enabled once per repository or environment; is automatically checkpointed at Stop; uses provider transcripts only as a bounded recovery source; remains subject to the same Freshness Gate and Agent Conversation Handover adoption contract.
+
 **Cold Agent Conversation** — a registered Codex or Claude agent conversation whose deterministic idle age has reached the configured freshness policy; the classification does not assert that the provider actually evicted its cache.
 - Aliases to avoid: "cold session", "expired session", "cache-evicted conversation" — the first is ambiguous, and the latter two claim provider state the toolkit cannot observe.
 - Relations: stopped by the **Freshness Gate**; supplies an **Agent Conversation Handover** to a fresh agent conversation; becomes a **Retired Agent Conversation** after direct adoption or after its one authorized cold-resume turn seals a refreshed handover.

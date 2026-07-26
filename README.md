@@ -145,8 +145,11 @@ split headless lifecycle; existing `pair-loop`, `--once`, `--inline`, and
 `--complete` entry points still work against v4 state.
 
 Registered Pair and brainstorming Agent Conversations are protected by the
-Freshness Gate after 60 minutes idle. A Cold Agent Conversation is blocked before
-model processing and seals a bounded Agent Conversation Handover. Start a plain
+Freshness Gate after 60 minutes idle. General Agent Conversations can opt in once
+per repository with `pair-loop --enable-general-handover`; their Stop hook then
+maintains a bounded checkpoint automatically from the exact provider transcript.
+A Cold Agent Conversation is blocked before model processing and seals a bounded
+Agent Conversation Handover. Start a plain
 provider-affine conversation with `pair-loop --fresh-from <handover-id> --runtime auto`,
 then adopt it with `pair-loop --adopt-handover <handover-id> --runtime codex|claude`.
 Never resume or fork the source conversation. The sole explicit cost-risk recovery
@@ -154,6 +157,63 @@ is `pair-loop --allow-cold-resume <handover-id> --once --confirm-cost-risk`; its
 Stop boundary retires the source behind an exact refreshed handover, which must
 then be launched and adopted. Direct adoption is the other retirement route and
 continues in the adopter.
+
+For a manually reviewed checkpoint, pipe one JSON object to
+`pair-loop --conversation-checkpoint`, then run `pair-loop --handover-now`.
+Transcript recovery keeps bounded user direction, assistant conclusions, and
+repository artifact digests; it excludes system/developer content, thinking,
+reasoning, and raw tool results. Disable repository automation with
+`pair-loop --disable-general-handover`, or set `AGENT_CONVERSATION_HANDOVER=auto|off`
+as an environment-wide override.
+
+##### Agent Conversation Handover quick start
+
+Run the built-in guide whenever you need the full command sequence or the
+manual checkpoint schema:
+
+```bash
+pair-loop --handover-help
+```
+
+For the automatic path, enable it once in each Git repository and then work
+normally:
+
+```bash
+pair-loop --enable-general-handover
+pair-loop --freshness-status
+```
+
+The installed Stop hook maintains the Agent Conversation Checkpoint.
+At exactly 60 minutes idle, the Freshness Gate blocks the next prompt before model
+processing and prints the exact handover ID. Run its printed command from a plain
+terminal:
+
+```bash
+pair-loop --fresh-from <handover-id> --runtime auto
+```
+
+That launches a fresh provider-affine conversation with an adoption instruction;
+do not resume or fork the source conversation. If you opened a fresh Codex or
+Claude conversation yourself, adopt the handover inside it instead:
+
+```bash
+pair-loop --adopt-handover <handover-id> --runtime codex|claude
+```
+
+For an optional quality upgrade, ask the current agent to prepare the checkpoint
+JSON shown by `--handover-help`, review it (including through a JSONL-aware Neovim
+workflow), and record it inside that same agent conversation:
+
+```bash
+pair-loop --conversation-checkpoint < checkpoint.json
+```
+
+The automatic Stop recovery continues enriching it while preserving a richer
+manual Core Anchor. Seal immediately only when you intentionally want to transfer:
+
+```bash
+pair-loop --handover-now
+```
 
 ##### Pair v4 quick start
 
@@ -177,7 +237,7 @@ of rules that instructions alone under-deliver:
 | Hook | Event | Does |
 |------|-------|------|
 | `handover-gate.sh` | UserPromptSubmit | Blocks only a stale registered Agent Conversation before model processing and seals its bounded Agent Conversation Handover; it never persists submitted prompts or compaction summaries. |
-| `stop-gate.sh` | Stop | The single coordinated Stop hook: records registered activity and the latest bounded checkpoint, then continues only the Agent Conversation that owns active Pair Work. |
+| `stop-gate.sh` | Stop | The single coordinated Stop hook: records registered activity, safely recovers enabled General Agent Conversation checkpoints from the exact provider transcript, and continues only the Agent Conversation that owns active Pair Work. |
 | `delegation-nudge.sh` | PostToolUse (edits) | Once per session at the 8th main-session edit, reminds the model to batch mechanical remainders into a subagent (mech/haiku, general-purpose/sonnet). Opt-out `CLAUDE_DELEGATION_NUDGE=off`; threshold `CLAUDE_DELEGATION_NUDGE_AT` |
 | `commit-guard.sh` | PreToolUse (git commit) | Blocks commits containing attribution trailers (Co-Authored-By / Generated with Claude) before they run |
 | `scratch-guard.sh` | PreToolUse (Write) | Blocks writes to raw `/tmp` and throwaway `tmp-*.spec/test.*` files in repo trees; points to `$CLAUDE_SCRATCH_DIR` |

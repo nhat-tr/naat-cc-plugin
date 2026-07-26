@@ -5,6 +5,7 @@ const path = require('node:path');
 const { loadPairState, pairStatePaths, redactString } = require('./pair-state');
 const { takeoverWork } = require('./pair-control');
 const { deriveBrainstormingCheckpoint } = require('./brainstorm-checkpoint');
+const { recoverAgentConversationCheckpoint } = require('./conversation-checkpoint-recovery');
 
 const HANDOVER_SCHEMA = 1;
 const MAX_CHECKPOINT_BYTES = 32 * 1024;
@@ -13,15 +14,17 @@ const LOCK_WAIT_MS = 5;
 const LOCK_TIMEOUT_MS = 10_000;
 const HANDOVER_ID = /^handover-[a-f0-9-]{36}$/u;
 const RUNTIMES = new Set(['codex', 'claude']);
-const KINDS = new Set(['pair', 'brainstorming']);
+const KINDS = new Set(['pair', 'brainstorming', 'general']);
+const CHECKPOINT_ORIGINS = new Set(['bootstrap', 'derived', 'manual', 'manual-recovered', 'recovered']);
 const CONVERSATION_KEYS = new Set([
   'source_key', 'runtime', 'kind', 'status', 'registered_at', 'last_active_at',
   'checkpoint', 'checkpoint_revision', 'sealed_handover_id', 'adopted_handover_id',
-  'override',
+  'override', 'checkpoint_origin', 'checkpoint_source_digest', 'checkpoint_updated_at',
 ]);
 const HANDOVER_CLAIM_KEYS = new Set([
   'handover_id', 'source_key', 'status', 'created_at', 'override_used',
   'runtime', 'kind', 'checkpoint_revision', 'checkpoint_sha256',
+  'checkpoint_origin', 'checkpoint_source_digest', 'checkpoint_updated_at',
   'manifest_sha256', 'stage_directory', 'override_authorized_at',
   'override_completed_at', 'refreshed_handover_id', 'adopting_by',
   'adopting_at', 'adopted_by', 'adopted_at', 'adoption_transfer_status',
@@ -35,9 +38,40 @@ function handoverPaths(root) {
     directory,
     registrations: path.join(directory, 'registrations'),
     registrationIndex: path.join(directory, 'registrations', '.index-v1-complete.json'),
+    policy: path.join(directory, 'policy.json'),
     registry: path.join(directory, 'registry.json'),
     lock: path.join(directory, '.handover.lock'),
   };
+}
+
+function setGeneralHandoverPolicy(root, enabled) {
+  const paths = validateHandoverRoot(root, true);
+  const policy = {
+    schema: HANDOVER_SCHEMA,
+    general_agent_conversations: enabled ? 'auto' : 'off',
+  };
+  atomicWrite(paths.policy, `${JSON.stringify(policy, null, 2)}\n`);
+  return policy;
+}
+
+function generalHandoverEnabled(root, env = process.env) {
+  const configured = String(env.AGENT_CONVERSATION_HANDOVER || '').trim().toLowerCase();
+  if (['1', 'auto', 'on', 'true'].includes(configured)) return true;
+  if (['0', 'off', 'false'].includes(configured)) return false;
+  const candidate = handoverPaths(root).policy;
+  const candidateStat = fs.lstatSync(candidate, { throwIfNoEntry: false });
+  if (!candidateStat) return false;
+  const file = validateHandoverRoot(root).policy;
+  const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+  if (!stat || !stat.isFile() || stat.isSymbolicLink()) throw new Error('invalid Agent Conversation Handover policy');
+  const policy = readJson(file);
+  if (
+    !isPlainObject(policy) ||
+    Object.keys(policy).sort().join(',') !== 'general_agent_conversations,schema' ||
+    policy.schema !== HANDOVER_SCHEMA ||
+    !['auto', 'off'].includes(policy.general_agent_conversations)
+  ) throw new Error('invalid Agent Conversation Handover policy');
+  return policy.general_agent_conversations === 'auto';
 }
 
 function ensurePrivateDirectory(directory) {
@@ -141,12 +175,32 @@ function validRegistry(registry) {
     if (!validEventTimestamp(conversation.registered_at) || typeof conversation.last_active_at !== 'string') return false;
     if (conversation.checkpoint === null) {
       if (conversation.checkpoint_revision !== 0 || conversation.status !== 'warm') return false;
+      if (
+        (conversation.checkpoint_origin !== undefined && conversation.checkpoint_origin !== null) ||
+        (conversation.checkpoint_source_digest !== undefined && conversation.checkpoint_source_digest !== null) ||
+        (conversation.checkpoint_updated_at !== undefined && conversation.checkpoint_updated_at !== null)
+      ) return false;
     } else {
       if (
         conversation.checkpoint_revision < 1 ||
         !isPlainObject(conversation.checkpoint) ||
         Buffer.byteLength(JSON.stringify(conversation.checkpoint), 'utf8') > MAX_CHECKPOINT_BYTES ||
         JSON.stringify(conversation.checkpoint) !== JSON.stringify(normalizeCheckpoint(conversation.checkpoint))
+      ) return false;
+      if (
+        conversation.checkpoint_origin !== undefined &&
+        conversation.checkpoint_origin !== null &&
+        !CHECKPOINT_ORIGINS.has(conversation.checkpoint_origin)
+      ) return false;
+      if (
+        conversation.checkpoint_source_digest !== undefined &&
+        conversation.checkpoint_source_digest !== null &&
+        !/^[a-f0-9]{64}$/u.test(conversation.checkpoint_source_digest)
+      ) return false;
+      if (
+        conversation.checkpoint_updated_at !== undefined &&
+        conversation.checkpoint_updated_at !== null &&
+        !validEventTimestamp(conversation.checkpoint_updated_at)
       ) return false;
     }
     if (conversation.adopted_handover_id !== undefined && !HANDOVER_ID.test(conversation.adopted_handover_id || '')) return false;
@@ -197,6 +251,9 @@ function validRegistry(registry) {
     if (handover.kind !== undefined && !KINDS.has(handover.kind)) return false;
     if (handover.checkpoint_revision !== undefined && (!Number.isInteger(handover.checkpoint_revision) || handover.checkpoint_revision < 0)) return false;
     if (handover.checkpoint_sha256 !== undefined && !/^[a-f0-9]{64}$/u.test(handover.checkpoint_sha256)) return false;
+    if (handover.checkpoint_origin !== undefined && handover.checkpoint_origin !== null && !CHECKPOINT_ORIGINS.has(handover.checkpoint_origin)) return false;
+    if (handover.checkpoint_source_digest !== undefined && handover.checkpoint_source_digest !== null && !/^[a-f0-9]{64}$/u.test(handover.checkpoint_source_digest)) return false;
+    if (handover.checkpoint_updated_at !== undefined && handover.checkpoint_updated_at !== null && !validEventTimestamp(handover.checkpoint_updated_at)) return false;
     if (
       handover.adoption_transfer_status !== undefined &&
       !['pending', 'completed', 'not-applicable'].includes(handover.adoption_transfer_status)
@@ -311,7 +368,7 @@ function conversationIdentity(input) {
   const kind = String(input?.kind || '').toLowerCase();
   if (!RUNTIMES.has(runtime)) throw new Error('Agent Conversation runtime must be codex or claude');
   if (!agentConversationId || agentConversationId.length > 256) throw new Error('Agent Conversation requires an identity');
-  if (kind && !KINDS.has(kind)) throw new Error('Agent Conversation kind must be pair or brainstorming');
+  if (kind && !KINDS.has(kind)) throw new Error('Agent Conversation kind must be pair, brainstorming, or general');
   return { runtime, kind: kind || null, sourceKey: sha256(`${runtime}\0${agentConversationId}`) };
 }
 
@@ -548,6 +605,9 @@ function registerAgentConversation(root, input) {
       checkpoint_revision: existing?.checkpoint_revision || 0,
       sealed_handover_id: existing?.sealed_handover_id || null,
       override: existing?.override || null,
+      checkpoint_origin: existing?.checkpoint_origin || null,
+      checkpoint_source_digest: existing?.checkpoint_source_digest || null,
+      checkpoint_updated_at: existing?.checkpoint_updated_at || null,
     };
     return { sourceKey: identity.sourceKey, ...registry.conversations[identity.sourceKey] };
   });
@@ -567,11 +627,22 @@ function updateAgentConversationCheckpoint(root, input) {
     if (!conversation || (conversation.status !== 'warm' && !overrideRefresh)) {
       throw new Error('Agent Conversation is not warm and registered');
     }
+    const origin = input.origin || (conversation.kind === 'pair' ? 'derived' : 'manual');
+    if (!CHECKPOINT_ORIGINS.has(origin)) throw new Error('invalid Agent Conversation Checkpoint origin');
+    const sourceDigest = input.sourceDigest === undefined ? null : input.sourceDigest;
+    if (sourceDigest !== null && !/^[a-f0-9]{64}$/u.test(sourceDigest)) {
+      throw new Error('invalid Agent Conversation Checkpoint source digest');
+    }
     const unchanged = JSON.stringify(conversation.checkpoint) === JSON.stringify(checkpoint);
-    if (unchanged && !overrideRefresh) {
+    const metadataUnchanged = conversation.checkpoint_origin === origin
+      && (conversation.checkpoint_source_digest || null) === sourceDigest;
+    if (unchanged && metadataUnchanged && !overrideRefresh && !input.acknowledgeUnchanged) {
       return { sourceKey: identity.sourceKey, revision: conversation.checkpoint_revision, checkpoint, unchanged: true };
     }
     if (!unchanged) conversation.checkpoint = checkpoint;
+    conversation.checkpoint_origin = origin;
+    conversation.checkpoint_source_digest = sourceDigest;
+    conversation.checkpoint_updated_at = at;
     conversation.checkpoint_revision += 1;
     if (overrideRefresh) {
       conversation.override.refreshed_at = at;
@@ -603,8 +674,125 @@ function ensureBrainstormingRegistration(root, input) {
     ...identity,
     now: input.now,
     checkpoint: input.checkpoint || brainstormBootstrapCheckpoint(),
+    origin: input.checkpoint ? 'manual' : 'bootstrap',
   });
   return { sourceKey: recorded.sourceKey, alreadyRegistered: false, revision: recorded.revision };
+}
+
+function mergeFindings(existing, recovered) {
+  const merged = new Map();
+  for (const finding of [...(existing || []), ...(recovered || [])]) {
+    const key = finding?.digest || JSON.stringify(finding);
+    if (key) merged.set(key, finding);
+  }
+  return [...merged.values()];
+}
+
+function mergeArtifacts(existing, recovered) {
+  const merged = new Map();
+  for (const artifact of [...(existing || []), ...(recovered || [])]) {
+    if (artifact?.path) merged.set(artifact.path, artifact);
+  }
+  return [...merged.values()];
+}
+
+function mergeRecoveredCheckpoint(conversation, recovered) {
+  const existing = conversation.checkpoint || normalizeCheckpoint({});
+  const automatic = normalizeCheckpoint(recovered.checkpoint);
+  const preservesManualCheckpoint = ['manual', 'manual-recovered'].includes(conversation.checkpoint_origin);
+  if (conversation.kind === 'general' && !preservesManualCheckpoint) {
+    return { checkpoint: automatic, origin: 'recovered' };
+  }
+  const latestDirection = safeText(recovered.latestUserDirection, 2048);
+  const latestDirectionFinding = latestDirection ? {
+    finding: `Latest explicit user direction: ${latestDirection}`,
+    reference: 'Recovered from the exact provider transcript as user intent, not external evidence.',
+    digest: sha256(latestDirection),
+  } : null;
+  return {
+    checkpoint: normalizeCheckpoint({
+      core_anchor: existing.core_anchor || automatic.core_anchor,
+      findings: mergeFindings(existing.findings, [
+        ...automatic.findings,
+        ...(conversation.kind === 'general' && latestDirectionFinding ? [latestDirectionFinding] : []),
+      ]),
+      confirmed_choices: existing.confirmed_choices,
+      rejected_alternatives: existing.rejected_alternatives,
+      current_direction: conversation.kind === 'general'
+        ? automatic.current_direction || existing.current_direction
+        : existing.current_direction || automatic.current_direction,
+      unresolved_decisions: existing.unresolved_decisions,
+      next_action: conversation.kind === 'general'
+        ? automatic.next_action || existing.next_action
+        : existing.next_action || automatic.next_action,
+      artifacts: mergeArtifacts(existing.artifacts, automatic.artifacts),
+    }),
+    origin: preservesManualCheckpoint ? 'manual-recovered' : 'recovered',
+  };
+}
+
+function prepareAgentConversationStop(root, input) {
+  const identity = conversationIdentity(input);
+  const registered = hasAgentConversationRegistration(root, input);
+  if (!registered && !generalHandoverEnabled(root, input.env || process.env)) {
+    return { status: 'unregistered', sourceKey: identity.sourceKey };
+  }
+  const registry = registered ? readAgentConversationRegistry(root) : null;
+  const conversation = registry?.conversations[identity.sourceKey] || null;
+  if (conversation?.kind === 'pair') return { status: 'registered', sourceKey: identity.sourceKey };
+  if (!input.transcriptPath) {
+    const completeCheckpoint = conversation?.checkpoint?.core_anchor
+      && conversation.checkpoint.current_direction
+      && conversation.checkpoint.next_action;
+    const manualRefreshAfterLastStop = conversation
+      && ['manual', 'manual-recovered'].includes(conversation.checkpoint_origin)
+      && completeCheckpoint
+      && Date.parse(conversation.checkpoint_updated_at) > Date.parse(conversation.last_active_at);
+    const completeBrainstormingCheckpoint = conversation?.kind === 'brainstorming'
+      && completeCheckpoint;
+    if (manualRefreshAfterLastStop || completeBrainstormingCheckpoint) {
+      return { status: 'registered', sourceKey: identity.sourceKey };
+    }
+    return { status: 'recovery-unavailable', sourceKey: identity.sourceKey, registered };
+  }
+  const recovered = recoverAgentConversationCheckpoint({
+    root,
+    runtime: identity.runtime,
+    agentConversationId: input.agentConversationId,
+    transcriptPath: input.transcriptPath,
+  });
+  if (!registered) {
+    registerAgentConversation(root, {
+      runtime: identity.runtime,
+      agentConversationId: input.agentConversationId,
+      kind: 'general',
+      now: input.now,
+    });
+    const recorded = updateAgentConversationCheckpoint(root, {
+      runtime: identity.runtime,
+      agentConversationId: input.agentConversationId,
+      kind: 'general',
+      checkpoint: recovered.checkpoint,
+      origin: 'recovered',
+      sourceDigest: recovered.sourceDigest,
+      now: input.now,
+    });
+    return { status: 'registered', sourceKey: identity.sourceKey, revision: recorded.revision };
+  }
+  if (!conversation || !['brainstorming', 'general'].includes(conversation.kind)) {
+    return { status: 'registered', sourceKey: identity.sourceKey };
+  }
+  const merged = mergeRecoveredCheckpoint(conversation, recovered);
+  const recorded = updateAgentConversationCheckpoint(root, {
+    runtime: identity.runtime,
+    agentConversationId: input.agentConversationId,
+    kind: conversation.kind,
+    checkpoint: merged.checkpoint,
+    origin: merged.origin,
+    sourceDigest: recovered.sourceDigest,
+    now: input.now,
+  });
+  return { status: 'checkpointed', sourceKey: identity.sourceKey, revision: recorded.revision };
 }
 
 function recordAgentConversationStop(root, input) {
@@ -1057,7 +1245,7 @@ function derivePairCheckpoint(root) {
 }
 
 function validatePairWorkReference(root, reference, kind) {
-  if (reference === null && kind === 'brainstorming') return;
+  if (reference === null && kind !== 'pair') return;
   if (!reference || typeof reference !== 'object') throw new Error('invalid handover');
   if (reference.work_id !== null && !String(reference.work_id || '').trim()) throw new Error('invalid handover');
   if (loadPairState(root).work_id !== reference.work_id) throw new Error('invalid handover');
@@ -1071,7 +1259,7 @@ function validatePairWorkReference(root, reference, kind) {
 }
 
 function validatePairWorkManifestBinding(root, reference, kind, checkpoint) {
-  if (kind === 'brainstorming') {
+  if (kind !== 'pair') {
     if (reference !== null) throw new Error('invalid handover');
     return;
   }
@@ -1108,6 +1296,15 @@ function assertPairWorkIdleForAdoption(root, reference) {
   return state;
 }
 
+function assertCheckpointQuality(checkpoint, kind) {
+  if (!checkpoint?.current_direction || !checkpoint?.next_action) {
+    throw new Error('Agent Conversation Checkpoint requires current direction and next action before sealing');
+  }
+  if (kind !== 'pair' && !checkpoint.core_anchor) {
+    throw new Error('Agent Conversation Checkpoint requires a Core Anchor before sealing');
+  }
+}
+
 function sealConversation(root, registry, paths, identity, at) {
     const conversation = registry.conversations[identity.sourceKey];
     if (!conversation || conversation.status !== 'warm' || !conversation.checkpoint) throw new Error('Agent Conversation requires a warm checkpoint before sealing');
@@ -1125,6 +1322,7 @@ function sealConversation(root, registry, paths, identity, at) {
         conversation.checkpoint_revision += 1;
       }
     }
+    assertCheckpointQuality(conversation.checkpoint, conversation.kind);
     const handoverId = `handover-${crypto.randomUUID()}`;
     const directory = stagingDirectory(paths, handoverId);
     ensurePrivateDirectory(directory);
@@ -1141,6 +1339,9 @@ function sealConversation(root, registry, paths, identity, at) {
       checkpoint_revision: conversation.checkpoint_revision,
       checkpoint_sha256: sha256(checkpointBytes),
       checkpoint_bytes: Buffer.byteLength(checkpointBytes, 'utf8'),
+      checkpoint_origin: conversation.checkpoint_origin || null,
+      checkpoint_source_digest: conversation.checkpoint_source_digest || null,
+      checkpoint_updated_at: conversation.checkpoint_updated_at || null,
       pair_work: pairWork,
     };
     const manifestBytes = `${JSON.stringify(manifest, null, 2)}\n`;
@@ -1159,6 +1360,9 @@ function sealConversation(root, registry, paths, identity, at) {
       kind: conversation.kind,
       checkpoint_revision: conversation.checkpoint_revision,
       checkpoint_sha256: manifest.checkpoint_sha256,
+      checkpoint_origin: manifest.checkpoint_origin,
+      checkpoint_source_digest: manifest.checkpoint_source_digest,
+      checkpoint_updated_at: manifest.checkpoint_updated_at,
       manifest_sha256: sha256(manifestBytes),
       stage_directory: path.basename(directory),
     };
@@ -1260,13 +1464,19 @@ function readAgentConversationHandoverUnchecked(root, handoverId, options = {}) 
     throw new Error('invalid handover');
   }
   const checkpointBytes = readSafeFile(directory, 'checkpoint.md');
-  const expectedManifestKeys = [
+  const baseManifestKeys = [
     'checkpoint_bytes', 'checkpoint_revision', 'checkpoint_sha256', 'created_at', 'handover_id',
     'kind', 'pair_work', 'runtime', 'schema', 'source_key',
   ];
+  const checkpointMetadataKeys = ['checkpoint_origin', 'checkpoint_source_digest', 'checkpoint_updated_at'];
+  const manifestKeys = Object.keys(manifest || {});
+  const hasCheckpointMetadata = checkpointMetadataKeys.some(key => manifestKeys.includes(key));
+  const expectedManifestKeys = hasCheckpointMetadata
+    ? [...baseManifestKeys, ...checkpointMetadataKeys]
+    : baseManifestKeys;
   if (
     !isPlainObject(manifest) ||
-    Object.keys(manifest).sort().join(',') !== expectedManifestKeys.sort().join(',') ||
+    manifestKeys.sort().join(',') !== expectedManifestKeys.sort().join(',') ||
     manifest?.schema !== HANDOVER_SCHEMA ||
     manifest.handover_id !== handoverId ||
     manifest.source_key !== claim.source_key ||
@@ -1282,6 +1492,11 @@ function readAgentConversationHandoverUnchecked(root, handoverId, options = {}) 
     manifest.checkpoint_bytes !== Buffer.byteLength(checkpointBytes, 'utf8') ||
     Buffer.byteLength(checkpointBytes, 'utf8') > MAX_CHECKPOINT_BYTES
   ) throw new Error('invalid handover');
+  if (hasCheckpointMetadata && (
+    (manifest.checkpoint_origin !== null && !CHECKPOINT_ORIGINS.has(manifest.checkpoint_origin)) ||
+    (manifest.checkpoint_source_digest !== null && !/^[a-f0-9]{64}$/u.test(manifest.checkpoint_source_digest || '')) ||
+    (manifest.checkpoint_updated_at !== null && !validEventTimestamp(manifest.checkpoint_updated_at))
+  )) throw new Error('invalid handover');
   let checkpoint;
   try {
     checkpoint = JSON.parse(checkpointBytes);
@@ -1298,7 +1513,12 @@ function readAgentConversationHandoverUnchecked(root, handoverId, options = {}) 
       claim.runtime !== manifest.runtime ||
       claim.kind !== manifest.kind ||
       claim.checkpoint_revision !== manifest.checkpoint_revision ||
-      claim.checkpoint_sha256 !== manifest.checkpoint_sha256
+      claim.checkpoint_sha256 !== manifest.checkpoint_sha256 ||
+      (hasCheckpointMetadata && (
+        claim.checkpoint_origin !== manifest.checkpoint_origin ||
+        claim.checkpoint_source_digest !== manifest.checkpoint_source_digest ||
+        claim.checkpoint_updated_at !== manifest.checkpoint_updated_at
+      ))
     ) throw new Error('invalid handover');
   } else {
     const sourceCheckpointBytes = source.checkpoint ? JSON.stringify(source.checkpoint) : null;
@@ -1316,7 +1536,12 @@ function readAgentConversationHandoverUnchecked(root, handoverId, options = {}) 
     ['sealed', 'retired'].includes(source.status) &&
     (
       source.checkpoint_revision !== manifest.checkpoint_revision ||
-      JSON.stringify(source.checkpoint) !== checkpointBytes
+      JSON.stringify(source.checkpoint) !== checkpointBytes ||
+      (hasCheckpointMetadata && (
+        (source.checkpoint_origin || null) !== manifest.checkpoint_origin ||
+        (source.checkpoint_source_digest || null) !== manifest.checkpoint_source_digest ||
+        (source.checkpoint_updated_at || null) !== manifest.checkpoint_updated_at
+      ))
     )
   ) throw new Error('invalid handover');
   const manifestDigest = sha256(manifestBytes);
@@ -1466,6 +1691,9 @@ function adoptAgentConversationHandover(root, input) {
       sealed_handover_id: null,
       adopted_handover_id: handoverId,
       override: null,
+      checkpoint_origin: source.checkpoint_origin || null,
+      checkpoint_source_digest: source.checkpoint_source_digest || null,
+      checkpoint_updated_at: source.checkpoint_updated_at || null,
     };
     source.status = 'retired';
     handover.status = 'adopted';
@@ -1569,15 +1797,18 @@ module.exports = {
   ensureBrainstormingRegistration,
   formatFreshnessProjection,
   freshnessProjection,
+  generalHandoverEnabled,
   hasAgentConversationRegistration,
   handoverPaths,
   normalizeCheckpoint,
   readAgentConversationHandover,
   readAgentConversationHandoverForAdoption,
   readAgentConversationRegistry,
+  prepareAgentConversationStop,
   recordAgentConversationStop,
   registerAgentConversation,
   sealAgentConversationHandover,
   sealColdAgentConversations,
+  setGeneralHandoverPolicy,
   updateAgentConversationCheckpoint,
 };

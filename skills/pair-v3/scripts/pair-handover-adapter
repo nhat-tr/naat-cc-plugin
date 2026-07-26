@@ -57,7 +57,7 @@ function main() {
   const root = repositoryRoot(input.cwd || input.project_dir || process.env.CLAUDE_PROJECT_DIR || process.cwd());
   if (!root) return;
   const runtime = runtimeFor(input);
-  const identity = { runtime, agentConversationId: input.session_id, kind: input.agent_conversation_kind || 'pair' };
+  const identity = { runtime, agentConversationId: input.session_id, kind: input.agent_conversation_kind || null };
   if (event !== 'UserPromptSubmit') return;
   let assessment;
   try {

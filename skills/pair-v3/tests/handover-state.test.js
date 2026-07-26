@@ -138,6 +138,20 @@ test('a brainstorming conversation registered without an explicit checkpoint nev
   assert.equal(stored.checkpoint.core_anchor, '');
 });
 
+test('a brainstorming bootstrap cannot seal until the Core Anchor is recovered or explicitly recorded', t => {
+  const root = fixture(t);
+  const { ensureBrainstormingRegistration, sealAgentConversationHandover } = handoverApi();
+  const identity = {
+    runtime: 'codex', agentConversationId: 'missing-core-anchor', kind: 'brainstorming', now: 1_000,
+  };
+  ensureBrainstormingRegistration(root, identity);
+
+  assert.throws(
+    () => sealAgentConversationHandover(root, { ...identity, now: 2_000 }),
+    /requires a Core Anchor before sealing/u,
+  );
+});
+
 test('handover references canonical Work state and persists no duplicate lifecycle authority', t => {
   const root = fixture(t);
   const { registerAgentConversation, updateAgentConversationCheckpoint, sealAgentConversationHandover, handoverPaths } = handoverApi();
@@ -422,6 +436,22 @@ test('symlinked handover ancestors fail closed before registry writes', t => {
 
   assert.throws(() => handoverApi().registerAgentConversation(root, conversation()), /symlink|handover/i);
   assert.deepEqual(fs.readdirSync(outside), []);
+});
+
+test('general handover policy cannot be enabled through a symlinked private handover directory', t => {
+  const root = fixture(t);
+  const outside = fs.mkdtempSync(path.join(path.dirname(root), 'handover-policy-outside-'));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(outside, 'policy.json'), `${JSON.stringify({
+    schema: 1,
+    general_agent_conversations: 'auto',
+  })}\n`);
+  fs.symlinkSync(outside, path.join(root, '.pair', 'handovers'));
+
+  assert.throws(
+    () => handoverApi().generalHandoverEnabled(root, {}),
+    /invalid Agent Conversation Handover directory/u,
+  );
 });
 
 test('atomic sealing recovery promotes committed staging and discards an unclaimed staging directory', t => {
@@ -746,7 +776,13 @@ test('Stop on a registered brainstorming conversation enriches the checkpoint fr
 
   const identity = conversation({ kind: 'brainstorming', agentConversationId: 'brainstorm-stop-conversation' });
   const registered = registerAgentConversation(root, identity);
-  updateAgentConversationCheckpoint(root, { ...identity, checkpoint: brainstormBootstrapCheckpoint() });
+  updateAgentConversationCheckpoint(root, {
+    ...identity,
+    checkpoint: {
+      ...brainstormBootstrapCheckpoint(),
+      coreAnchor: 'Preserve the approved Checkout revamp direction.',
+    },
+  });
   const bootstrapRevision = readAgentConversationRegistry(root).conversations[registered.sourceKey].checkpoint_revision;
 
   recordAgentConversationStop(root, { ...identity, now: 2_000 });
@@ -777,7 +813,13 @@ test('sealColdAgentConversations on a cold brainstorming conversation seals a ha
 
   const identity = conversation({ kind: 'brainstorming', agentConversationId: 'brainstorm-cold-conversation', now: 1_000 });
   registerAgentConversation(root, identity);
-  updateAgentConversationCheckpoint(root, { ...identity, checkpoint: brainstormBootstrapCheckpoint() });
+  updateAgentConversationCheckpoint(root, {
+    ...identity,
+    checkpoint: {
+      ...brainstormBootstrapCheckpoint(),
+      coreAnchor: 'Preserve the approved Checkout revamp direction.',
+    },
+  });
 
   const result = sealColdAgentConversations(root, { now: 1_000 + FRESHNESS_WINDOW_MS });
   assert.equal(result.sealed.length, 1);
@@ -805,7 +847,13 @@ test('sealColdAgentConversations still derives the checkpoint when the active-se
 
   const identity = conversation({ kind: 'brainstorming', agentConversationId: 'brainstorm-unpointered-conversation', now: 1_000 });
   registerAgentConversation(root, identity);
-  updateAgentConversationCheckpoint(root, { ...identity, checkpoint: brainstormBootstrapCheckpoint() });
+  updateAgentConversationCheckpoint(root, {
+    ...identity,
+    checkpoint: {
+      ...brainstormBootstrapCheckpoint(),
+      coreAnchor: 'Preserve the approved Checkout revamp direction.',
+    },
+  });
 
   const result = sealColdAgentConversations(root, { now: 1_000 + FRESHNESS_WINDOW_MS });
   assert.equal(result.sealed.length, 1);

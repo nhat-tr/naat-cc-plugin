@@ -59,7 +59,7 @@ test('auto-registers a brainstorming conversation when the visual companion runs
   assert.equal(conversations[0].runtime, 'claude');
   assert.ok(
     conversations[0].checkpoint,
-    'a non-null bootstrap checkpoint must be seeded so the cold conversation can later seal',
+    'a non-null bootstrap checkpoint must be seeded so Stop recovery can enrich it',
   );
   assert.equal(
     handover.hasAgentConversationRegistration(root, {
@@ -78,7 +78,7 @@ test('auto-registers a Codex brainstorming conversation from the native CODEX_TH
   assert.equal(conversations.length, 1);
   assert.equal(conversations[0].runtime, 'codex');
   assert.equal(conversations[0].kind, 'brainstorming');
-  assert.ok(conversations[0].checkpoint, 'the Codex bootstrap checkpoint must be seeded so the conversation can seal');
+  assert.ok(conversations[0].checkpoint, 'the Codex bootstrap checkpoint must be seeded so Stop recovery can enrich it');
 });
 
 test('remains inert for an unrelated Bash command so unregistered conversations stay untouched', t => {
@@ -91,6 +91,17 @@ test('a cold auto-registered brainstorming conversation is sealed and blocked by
   const root = fixture(t);
   const t0 = 1_000_000;
   runAdapter(root, postToolUse(VISUAL_COMMAND, 'claude-cold-agent', t0));
+  handover.updateAgentConversationCheckpoint(root, {
+    runtime: 'claude',
+    agentConversationId: 'claude-cold-agent',
+    kind: 'brainstorming',
+    now: t0,
+    checkpoint: {
+      coreAnchor: 'Preserve the approved brainstorming direction.',
+      currentDirection: 'Continue the active brainstorming work.',
+      nextAction: 'Adopt the bounded checkpoint in a fresh Agent Conversation.',
+    },
+  });
 
   const belowBoundary = runGate(root, 'claude-cold-agent', t0 + FRESHNESS_WINDOW_MS - 1);
   assert.equal(belowBoundary, null, 'a prompt below sixty minutes must proceed');

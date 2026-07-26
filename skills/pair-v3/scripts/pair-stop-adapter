@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { loadPairState } = require('./lib/pair-state');
-const { recordAgentConversationStop } = require('./lib/handover-state');
+const { prepareAgentConversationStop, recordAgentConversationStop } = require('./lib/handover-state');
 
 function readInput() {
   try {
@@ -80,10 +80,23 @@ function main() {
   const runtime = runtimeFor(input);
   let recorded;
   try {
+    const preparation = prepareAgentConversationStop(root, {
+      runtime,
+      agentConversationId: input.session_id,
+      kind: input.agent_conversation_kind || null,
+      transcriptPath: input.transcript_path || null,
+      now: input.now,
+    });
+    if (preparation.status === 'recovery-unavailable') {
+      process.stdout.write(`${JSON.stringify(hardStopResponse(
+        'Freshness Gate could not record a complete Agent Conversation Checkpoint because this Stop event has no exact provider transcript. Record one with pair-loop --conversation-checkpoint before stopping.',
+      ))}\n`);
+      return;
+    }
     recorded = recordAgentConversationStop(root, {
       runtime,
       agentConversationId: input.session_id,
-      kind: input.agent_conversation_kind || 'pair',
+      kind: input.agent_conversation_kind || null,
       now: input.now,
     });
   } catch (error) {

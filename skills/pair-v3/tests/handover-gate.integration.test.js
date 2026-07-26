@@ -76,6 +76,10 @@ function registry(root) {
   return handover.readAgentConversationRegistry(root);
 }
 
+function writeJsonl(file, entries) {
+  fs.writeFileSync(file, `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`);
+}
+
 test('below exact and above sixty-minute boundary preserves warm continuation then blocks stale continuation', t => {
   const root = fixture(t);
   const identity = registerWarmConversation(root);
@@ -427,6 +431,231 @@ test('clean unregistered UserPromptSubmit and Stop are byte-for-byte inert', t =
   assert.deepEqual(repositorySnapshot(root), before);
 });
 
+test('enabled general Agent Conversation automatically checkpoints at Stop and seals at exactly sixty minutes', t => {
+  const root = fixture(t);
+  const sessionId = 'automatic-general-codex';
+  const transcriptPath = path.join(root, 'automatic-general.jsonl');
+  fs.writeFileSync(path.join(root, 'evidence.txt'), 'verified evidence\n');
+  writeJsonl(transcriptPath, [
+    {
+      timestamp: '2026-07-26T20:00:00.000Z',
+      type: 'session_meta',
+      payload: { id: sessionId, cwd: root },
+    },
+    {
+      timestamp: '2026-07-26T20:00:01.000Z',
+      type: 'event_msg',
+      payload: { type: 'user_message', message: 'Implement automatic handover for general Agent Conversations.' },
+    },
+    {
+      timestamp: '2026-07-26T20:00:02.000Z',
+      type: 'response_item',
+      payload: { type: 'reasoning', summary: [{ text: 'PRIVATE_GENERAL_REASONING_CANARY' }] },
+    },
+    {
+      timestamp: '2026-07-26T20:00:03.000Z',
+      type: 'response_item',
+      payload: { type: 'function_call_output', call_id: 'call-1', output: 'GENERAL_TOOL_RESULT_CANARY' },
+    },
+    {
+      timestamp: '2026-07-26T20:00:04.000Z',
+      type: 'event_msg',
+      payload: { type: 'agent_message', message: 'The automatic checkpoint path is ready for an integration test.' },
+    },
+    {
+      timestamp: '2026-07-26T20:00:05.000Z',
+      type: 'event_msg',
+      payload: { type: 'user_message', message: 'The sixty-minute Freshness Gate must remain mandatory.' },
+    },
+  ]);
+  handover.setGeneralHandoverPolicy(root, true);
+
+  assert.equal(invoke(root, 'codex', {
+    hook_event_name: 'Stop', session_id: sessionId, transcript_path: transcriptPath, now: 2_000,
+  }), null);
+
+  const afterStop = registry(root);
+  const [conversation] = Object.values(afterStop.conversations);
+  assert.equal(conversation.kind, 'general');
+  assert.equal(conversation.status, 'warm');
+  assert.equal(conversation.last_active_at, new Date(2_000).toISOString());
+  assert.match(conversation.checkpoint.core_anchor, /automatic handover for general Agent Conversations/u);
+  assert.match(conversation.checkpoint.core_anchor, /sixty-minute Freshness Gate must remain mandatory/u);
+  assert.match(conversation.checkpoint_source_digest, /^[a-f0-9]{64}$/u);
+
+  const blocked = invoke(root, 'codex', {
+    hook_event_name: 'UserPromptSubmit', session_id: sessionId,
+    now: 2_000 + FRESHNESS_WINDOW_MS,
+  });
+  assert.equal(blocked.decision, 'block');
+  const handoverId = blocked.reason.match(/handover-[a-f0-9-]{36}/u)?.[0];
+  const bundle = handover.readAgentConversationHandover(root, handoverId);
+  const serialized = JSON.stringify(bundle);
+  assert.equal(bundle.manifest.kind, 'general');
+  assert.equal(bundle.manifest.pair_work, null);
+  assert.equal(bundle.manifest.checkpoint_origin, 'recovered');
+  assert.equal(bundle.manifest.checkpoint_source_digest, conversation.checkpoint_source_digest);
+  assert.match(bundle.checkpoint.core_anchor, /automatic handover for general Agent Conversations/u);
+  assert.doesNotMatch(serialized, /PRIVATE_GENERAL_REASONING_CANARY|GENERAL_TOOL_RESULT_CANARY/u);
+
+  const adopted = handover.adoptAgentConversationHandover(root, {
+    handoverId,
+    runtime: 'codex',
+    agentConversationId: 'automatic-general-codex-fresh',
+    now: 2_000 + FRESHNESS_WINDOW_MS + 1,
+  });
+  assert.equal(adopted.status, 'adopted');
+  assert.match(adopted.checkpoint.core_anchor, /sixty-minute Freshness Gate must remain mandatory/u);
+});
+
+test('enabled general handover fails visibly when Stop has no exact provider transcript', t => {
+  const root = fixture(t);
+  handover.setGeneralHandoverPolicy(root, true);
+
+  const stopped = invoke(root, 'codex', {
+    hook_event_name: 'Stop', session_id: 'general-without-transcript', now: 2_000,
+  });
+
+  assert.equal(stopped.continue, false);
+  assert.match(stopped.stopReason, /no exact provider transcript/u);
+  assert.match(stopped.stopReason, /--conversation-checkpoint/u);
+  assert.deepEqual(Object.values(registry(root).conversations), []);
+});
+
+test('a partial manual general checkpoint cannot advance Stop activity when transcript recovery is unavailable', t => {
+  const root = fixture(t);
+  const identity = { runtime: 'codex', agentConversationId: 'partial-manual-general', kind: 'general' };
+  const registered = handover.registerAgentConversation(root, { ...identity, now: 1_000 });
+  handover.updateAgentConversationCheckpoint(root, {
+    ...identity,
+    now: 1_100,
+    origin: 'manual',
+    checkpoint: { coreAnchor: 'This checkpoint is intentionally incomplete.' },
+  });
+
+  const stopped = invoke(root, 'codex', {
+    hook_event_name: 'Stop', session_id: identity.agentConversationId, now: 2_000,
+  });
+
+  assert.equal(stopped.continue, false);
+  assert.equal(
+    registry(root).conversations[registered.sourceKey].last_active_at,
+    new Date(1_000).toISOString(),
+  );
+});
+
+test('a complete manual general checkpoint is the safe fallback for one Stop without a provider transcript', t => {
+  const root = fixture(t);
+  const identity = { runtime: 'codex', agentConversationId: 'complete-manual-general', kind: 'general' };
+  const registered = handover.registerAgentConversation(root, { ...identity, now: 1_000 });
+  handover.updateAgentConversationCheckpoint(root, {
+    ...identity,
+    now: 1_100,
+    origin: 'manual',
+    checkpoint: {
+      coreAnchor: 'Preserve the manually reviewed product intent.',
+      currentDirection: 'Continue from verified repository evidence.',
+      nextAction: 'Adopt this checkpoint if the conversation becomes cold.',
+    },
+  });
+
+  assert.equal(invoke(root, 'codex', {
+    hook_event_name: 'Stop', session_id: identity.agentConversationId, now: 2_000,
+  }), null);
+  assert.equal(
+    registry(root).conversations[registered.sourceKey].last_active_at,
+    new Date(2_000).toISOString(),
+  );
+  const staleManualStop = invoke(root, 'codex', {
+    hook_event_name: 'Stop', session_id: identity.agentConversationId, now: 3_000,
+  });
+  assert.equal(staleManualStop.continue, false);
+  assert.equal(
+    registry(root).conversations[registered.sourceKey].last_active_at,
+    new Date(2_000).toISOString(),
+  );
+});
+
+test('automatic Stop recovery enriches a manually reviewed general checkpoint without replacing its anchor or choices', t => {
+  const root = fixture(t);
+  const sessionId = 'hybrid-general-codex';
+  const identity = { runtime: 'codex', agentConversationId: sessionId, kind: 'general' };
+  const transcriptPath = path.join(root, 'hybrid-general.jsonl');
+  handover.registerAgentConversation(root, { ...identity, now: 1_000 });
+  handover.updateAgentConversationCheckpoint(root, {
+    ...identity,
+    now: 1_100,
+    origin: 'manual',
+    checkpoint: {
+      coreAnchor: 'Human-reviewed anchor: preserve the approved handover contract.',
+      confirmedChoices: ['The Freshness Gate remains exactly sixty minutes.'],
+      currentDirection: 'Implement the hybrid path.',
+      nextAction: 'Recover subsequent progress automatically.',
+    },
+  });
+  writeJsonl(transcriptPath, [
+    { type: 'session_meta', payload: { id: sessionId, cwd: root } },
+    {
+      timestamp: '2026-07-26T20:00:00.000Z',
+      type: 'event_msg',
+      payload: { type: 'user_message', message: 'Initial transcript wording must not replace the reviewed anchor.' },
+    },
+    {
+      timestamp: '2026-07-26T20:00:01.000Z',
+      type: 'event_msg',
+      payload: { type: 'agent_message', message: 'Automatic recovery found a subsequent implementation result.' },
+    },
+    {
+      timestamp: '2026-07-26T20:00:02.000Z',
+      type: 'event_msg',
+      payload: { type: 'user_message', message: 'Next, verify adoption from this enriched checkpoint.' },
+    },
+  ]);
+
+  assert.equal(invoke(root, 'codex', {
+    hook_event_name: 'Stop', session_id: sessionId, transcript_path: transcriptPath, now: 2_000,
+  }), null);
+
+  const conversation = registry(root).conversations[handover.conversationIdentity(identity).sourceKey];
+  assert.equal(conversation.checkpoint_origin, 'manual-recovered');
+  assert.equal(conversation.checkpoint.core_anchor, 'Human-reviewed anchor: preserve the approved handover contract.');
+  assert.deepEqual(conversation.checkpoint.confirmed_choices, ['The Freshness Gate remains exactly sixty minutes.']);
+  assert.match(JSON.stringify(conversation.checkpoint.findings), /subsequent implementation result/u);
+  assert.match(conversation.checkpoint.next_action, /verify adoption from this enriched checkpoint/u);
+});
+
+test('brainstorming Stop fills a missing Core Anchor from the exact provider transcript', t => {
+  const root = fixture(t);
+  const sessionId = 'brainstorm-anchor-recovery';
+  const transcriptPath = path.join(root, 'brainstorm-anchor.jsonl');
+  handover.ensureBrainstormingRegistration(root, {
+    runtime: 'claude', agentConversationId: sessionId, now: 1_000,
+  });
+  writeJsonl(transcriptPath, [
+    {
+      type: 'user', sessionId, timestamp: '2026-07-26T20:00:00.000Z',
+      message: { role: 'user', content: 'Design handover that preserves the approved product direction.' },
+    },
+    {
+      type: 'assistant', sessionId, timestamp: '2026-07-26T20:00:01.000Z',
+      message: {
+        id: 'brainstorm-answer', role: 'assistant',
+        content: [{ type: 'text', text: 'The Core Anchor must survive adoption without another interview.' }],
+      },
+    },
+  ]);
+
+  assert.equal(invoke(root, 'claude', {
+    hook_event_name: 'Stop', session_id: sessionId, transcript_path: transcriptPath, now: 2_000,
+  }), null);
+
+  const [conversation] = Object.values(registry(root).conversations);
+  assert.equal(conversation.kind, 'brainstorming');
+  assert.equal(conversation.checkpoint_origin, 'recovered');
+  assert.match(conversation.checkpoint.core_anchor, /approved product direction/u);
+  assert.match(JSON.stringify(conversation.checkpoint.findings), /Core Anchor must survive adoption/u);
+});
+
 test('exact override permits one prompt and blocks Stop until that turn refreshes its checkpoint', t => {
   const root = fixture(t);
   const identity = {
@@ -436,7 +665,7 @@ test('exact override permits one prompt and blocks Stop until that turn refreshe
   handover.updateAgentConversationCheckpoint(root, {
     ...identity,
     checkpoint: {
-      purpose: 'Preserve brainstorming state.',
+      coreAnchor: 'Preserve brainstorming state.',
       currentDirection: 'Exercise the one-shot override.',
       nextAction: 'Refresh before Stop.',
     },
@@ -506,7 +735,11 @@ test('SessionStart orientation eagerly seals an abandoned cold Agent Conversatio
   const registered = handover.registerAgentConversation(root, identity);
   handover.updateAgentConversationCheckpoint(root, {
     ...identity,
-    checkpoint: { coreAnchor: 'Abandoned brainstorming conversation.', nextAction: 'Resume brainstorming.' },
+    checkpoint: {
+      coreAnchor: 'Abandoned brainstorming conversation.',
+      currentDirection: 'Preserve the approved brainstorming direction.',
+      nextAction: 'Resume brainstorming.',
+    },
   });
 
   const orientation = childProcess.spawnSync(process.execPath, [orient], {

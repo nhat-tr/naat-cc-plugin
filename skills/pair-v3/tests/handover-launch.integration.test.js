@@ -354,6 +354,68 @@ test('brainstorming CLI adoption prints the recovered bounded checkpoint without
   assert.equal(loadPairState(root).continuation.owner_session_id, ownerBefore, 'brainstorming adoption must not take Pair ownership');
 });
 
+test('general Agent Conversation can record a manual checkpoint and seal handover now without Pair ownership', t => {
+  const root = fixture(t);
+  const executable = path.resolve(__dirname, '../scripts/pair-task');
+  const env = freshRuntimeEnv('', { CODEX_THREAD_ID: 'manual-general-source' });
+  const checkpoint = {
+    coreAnchor: 'Implement hybrid handover for general Agent Conversations.',
+    findings: [{ finding: 'The provider transcript is a recovery source, not the handover.' }],
+    confirmedChoices: ['Keep the sixty-minute Freshness Gate mandatory.'],
+    currentDirection: 'Use a manually reviewed semantic checkpoint.',
+    unresolvedDecisions: [],
+    nextAction: 'Seal and adopt the bounded checkpoint.',
+  };
+
+  const recorded = childProcess.spawnSync(process.execPath, [
+    executable, '--conversation-checkpoint', '--runtime', 'codex',
+  ], {
+    cwd: root,
+    encoding: 'utf8',
+    env,
+    input: `${JSON.stringify(checkpoint)}\n`,
+  });
+  assert.equal(recorded.status, 0, recorded.stderr);
+  assert.match(recorded.stdout, /Agent Conversation Checkpoint r1 recorded/u);
+
+  const sealed = childProcess.spawnSync(process.execPath, [
+    executable, '--handover-now', '--runtime', 'codex',
+  ], {
+    cwd: root,
+    encoding: 'utf8',
+    env,
+  });
+  assert.equal(sealed.status, 0, sealed.stderr);
+  const handoverId = sealed.stdout.match(/handover-[a-f0-9-]{36}/u)?.[0];
+  assert.ok(handoverId);
+  const bundle = handover.readAgentConversationHandover(root, handoverId);
+  assert.equal(bundle.manifest.kind, 'general');
+  assert.equal(bundle.manifest.pair_work, null);
+  assert.equal(bundle.checkpoint.core_anchor, checkpoint.coreAnchor);
+  assert.equal(loadPairState(root).continuation.owner_session_id, null);
+});
+
+test('general handover policy is enabled once per repository and can be explicitly disabled', t => {
+  const root = fixture(t);
+  const executable = path.resolve(__dirname, '../scripts/pair-task');
+  const env = { ...process.env };
+  delete env.AGENT_CONVERSATION_HANDOVER;
+
+  const enabled = childProcess.spawnSync(process.execPath, [executable, '--enable-general-handover'], {
+    cwd: root, encoding: 'utf8', env,
+  });
+  assert.equal(enabled.status, 0, enabled.stderr);
+  assert.match(enabled.stdout, /automatic general Agent Conversation handover enabled/u);
+  assert.equal(handover.generalHandoverEnabled(root, env), true);
+
+  const disabled = childProcess.spawnSync(process.execPath, [executable, '--disable-general-handover'], {
+    cwd: root, encoding: 'utf8', env,
+  });
+  assert.equal(disabled.status, 0, disabled.stderr);
+  assert.match(disabled.stdout, /automatic general Agent Conversation handover disabled/u);
+  assert.equal(handover.generalHandoverEnabled(root, env), false);
+});
+
 test('legacy-only Claude identity is rejected for handover adoption', t => {
   const root = fixture(t);
   const { sealed } = sealedHandover(root, 'claude');

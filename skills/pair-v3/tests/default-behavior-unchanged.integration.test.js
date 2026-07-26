@@ -24,6 +24,7 @@ test('unflagged defaults leave every new control off', () => {
   assert.equal(options.addVerify, undefined);
   assert.equal(options.hitl, false);
   assert.equal(options.advisoryReview, false);
+  assert.equal(options.handoverHelp, false);
 });
 
 test('an end-to-end slice with no new flags follows the pre-change transition sequence and evidence', t => {
