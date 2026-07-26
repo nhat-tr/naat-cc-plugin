@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -8,6 +9,75 @@ const test = require('node:test');
 const HANDOVER_MODULE = path.resolve(__dirname, '../scripts/lib/handover-state.js');
 const { appendPairEvent, loadPairState } = require('../scripts/lib/pair-state');
 const { takeoverWork } = require('../scripts/lib/pair-control');
+
+// Fixture Visual Companion state for the deriveBrainstormingCheckpoint integration tests below:
+// a temp CLAUDE_SCRATCH_DIR pointer (mirroring visual-session.cjs's active-session.json) plus a
+// live session directory with a workspace.json (one chosen decision, one unresolved) and the
+// session.jsonl user.turn event recording that choice. Shapes mirror workspace-document.cjs's
+// normalizeDecisions/normalizeWorkspaceDocument and session-store.cjs's normalizeChoices (see
+// skills/pair-v3/tests/brainstorm-checkpoint.test.js for exact line citations); both files are
+// untouched by the concurrent Workspace Tabs addition, and content/workspace.json itself is
+// still "the currently active document" under that feature (tabs are additive, filed separately
+// under tab-<id>.json).
+function brainstormSessionFixture(t, root, options = {}) {
+  const realScratchBase = process.env.CLAUDE_SCRATCH_DIR || path.join(os.homedir(), '.claude-scratch');
+  const fakeScratchDir = fs.mkdtempSync(path.join(realScratchBase, 'my-claude-code-handover-state-brainstorm-scratch-'));
+  const previousScratchDir = process.env.CLAUDE_SCRATCH_DIR;
+  process.env.CLAUDE_SCRATCH_DIR = fakeScratchDir;
+  t.after(() => {
+    if (previousScratchDir === undefined) delete process.env.CLAUDE_SCRATCH_DIR;
+    else process.env.CLAUDE_SCRATCH_DIR = previousScratchDir;
+    fs.rmSync(fakeScratchDir, { recursive: true, force: true });
+  });
+
+  const {
+    sessionId = 'session-handover-fixture',
+    pointer: writePointer = true,
+    decisions = [
+      { id: 'decision-a', title: 'Choose the auth strategy', multiselect: false, option_component_ids: ['opt-a1'] },
+      { id: 'decision-b', title: 'Choose the storage engine', multiselect: false, option_component_ids: ['opt-b1'] },
+    ],
+    choices = [{ groupId: 'decision-a', componentId: 'opt-a1', value: 'oauth', label: 'OAuth 2.0' }],
+    title = 'Checkout revamp',
+    revision = 'abcd1234',
+  } = options;
+
+  const digest = crypto.createHash('sha256').update(root).digest('hex').slice(0, 8);
+  const pointerDir = path.join(fakeScratchDir, `${path.basename(root)}-${digest}`, 'brainstorm');
+  // Production layout: visual-session.cjs creates scratch session directories beside the
+  // active-session.json pointer file. pointer:false models a stopped companion, which removes
+  // the pointer on stop but leaves the session directory behind.
+  const sessionDir = path.join(pointerDir, sessionId);
+  const contentDir = path.join(sessionDir, 'content');
+  const stateDir = path.join(sessionDir, 'state');
+  fs.mkdirSync(pointerDir, { recursive: true });
+  fs.mkdirSync(contentDir, { recursive: true });
+  fs.mkdirSync(stateDir, { recursive: true });
+
+  if (writePointer) {
+    fs.writeFileSync(path.join(pointerDir, 'active-session.json'), JSON.stringify({
+      version: 1, pid: process.pid, session_id: sessionId, session_dir: sessionDir, content_dir: contentDir, state_dir: stateDir,
+    }));
+  }
+  fs.writeFileSync(path.join(contentDir, 'workspace.json'), JSON.stringify({
+    version: 2, work_id: 'work-handover', workspace_kind: 'ui-screens', title, revision, decisions,
+  }));
+  fs.writeFileSync(path.join(stateDir, 'session.jsonl'), `${JSON.stringify({
+    version: 1,
+    id: 'evt-1',
+    seq: 1,
+    timestamp: new Date(1_000).toISOString(),
+    type: 'user.turn',
+    role: 'user',
+    clientTurnId: 'turn-1',
+    message: 'reviewer note',
+    annotations: [],
+    choices,
+    screen: null,
+  })}\n`);
+
+  return { sessionId, sessionDir, contentDir, stateDir };
+}
 
 function fixture(t) {
   const scratchRoot = process.env.CLAUDE_SCRATCH_DIR || path.join(os.homedir(), '.claude-scratch');
@@ -46,6 +116,27 @@ function checkpoint(overrides = {}) {
     ...overrides,
   };
 }
+
+test('normalizeCheckpoint treats a nullish field as empty text instead of the literal "undefined"', () => {
+  const { normalizeCheckpoint } = handoverApi();
+  const empty = normalizeCheckpoint({});
+  assert.equal(empty.core_anchor, '');
+  assert.equal(empty.current_direction, '');
+  assert.equal(empty.next_action, '');
+
+  const bootstrapped = normalizeCheckpoint(handoverApi().brainstormBootstrapCheckpoint());
+  assert.equal(bootstrapped.core_anchor, '');
+});
+
+test('a brainstorming conversation registered without an explicit checkpoint never persists a literal "undefined" core anchor', t => {
+  const root = fixture(t);
+  const { ensureBrainstormingRegistration, readAgentConversationRegistry } = handoverApi();
+  const registered = ensureBrainstormingRegistration(root, {
+    runtime: 'codex', agentConversationId: 'bootstrap-anchor-conversation', now: 1_000,
+  });
+  const stored = readAgentConversationRegistry(root).conversations[registered.sourceKey];
+  assert.equal(stored.checkpoint.core_anchor, '');
+});
 
 test('handover references canonical Work state and persists no duplicate lifecycle authority', t => {
   const root = fixture(t);
@@ -548,4 +639,232 @@ test('Pair Stop records an auditable override refresh when repository semantics 
   const source = readAgentConversationRegistry(root).conversations[registered.sourceKey];
   assert.ok(source.checkpoint_revision > authorizedRevision);
   assert.match(source.override.refreshed_at, /^\d{4}-\d{2}-\d{2}T/u);
+});
+
+test('sealColdAgentConversations seals an abandoned warm conversation without waiting for its own next prompt', t => {
+  const root = fixture(t);
+  const {
+    FRESHNESS_WINDOW_MS,
+    handoverPaths,
+    readAgentConversationRegistry,
+    registerAgentConversation,
+    sealColdAgentConversations,
+    updateAgentConversationCheckpoint,
+  } = handoverApi();
+
+  const staleIdentity = conversation({ kind: 'brainstorming', agentConversationId: 'abandoned-brainstorm', now: 1_000 });
+  const stale = registerAgentConversation(root, staleIdentity);
+  updateAgentConversationCheckpoint(root, { ...staleIdentity, checkpoint: checkpoint() });
+
+  const freshIdentity = conversation({
+    kind: 'brainstorming', agentConversationId: 'fresh-brainstorm', now: 1_000 + FRESHNESS_WINDOW_MS - 1,
+  });
+  const fresh = registerAgentConversation(root, freshIdentity);
+  updateAgentConversationCheckpoint(root, { ...freshIdentity, checkpoint: checkpoint() });
+
+  const emptyIdentity = conversation({
+    kind: 'brainstorming', agentConversationId: 'checkpoint-null-brainstorm', now: 1_000,
+  });
+  const empty = registerAgentConversation(root, emptyIdentity);
+
+  const now = 1_000 + FRESHNESS_WINDOW_MS;
+  const result = sealColdAgentConversations(root, { now });
+
+  assert.equal(result.sealed.length, 1);
+  assert.equal(result.sealed[0].sourceKey, stale.sourceKey);
+  assert.match(result.sealed[0].handoverId, /^handover-[a-f0-9-]{36}$/u);
+
+  const registry = readAgentConversationRegistry(root);
+  const staleConversation = registry.conversations[stale.sourceKey];
+  assert.equal(staleConversation.status, 'sealed');
+  assert.equal(staleConversation.sealed_handover_id, result.sealed[0].handoverId);
+  assert.ok(registry.handovers[result.sealed[0].handoverId]);
+  assert.equal(registry.handovers[result.sealed[0].handoverId].status, 'sealed');
+
+  const directory = path.join(handoverPaths(root).directory, result.sealed[0].handoverId);
+  assert.equal(fs.existsSync(path.join(directory, 'manifest.json')), true);
+  assert.equal(fs.existsSync(path.join(directory, 'checkpoint.md')), true);
+  assert.equal(fs.existsSync(path.join(directory, 'events.jsonl')), true);
+  assert.equal(fs.existsSync(path.join(handoverPaths(root).directory, `.staging-${result.sealed[0].handoverId}`)), false);
+
+  assert.equal(registry.conversations[fresh.sourceKey].status, 'warm', 'a warm and fresh conversation must be untouched');
+  assert.equal(registry.conversations[empty.sourceKey].status, 'warm', 'a conversation with a null checkpoint must be skipped, not thrown');
+  assert.equal(registry.conversations[empty.sourceKey].checkpoint, null);
+});
+
+test('sealColdAgentConversations tolerates a per-conversation sealing failure and still seals the others', t => {
+  const root = fixture(t);
+  const {
+    FRESHNESS_WINDOW_MS,
+    readAgentConversationRegistry,
+    registerAgentConversation,
+    sealColdAgentConversations,
+    updateAgentConversationCheckpoint,
+  } = handoverApi();
+
+  const firstIdentity = conversation({ kind: 'brainstorming', agentConversationId: 'first-stale-brainstorm', now: 1_000 });
+  const first = registerAgentConversation(root, firstIdentity);
+  updateAgentConversationCheckpoint(root, { ...firstIdentity, checkpoint: checkpoint() });
+
+  const secondIdentity = conversation({ kind: 'brainstorming', agentConversationId: 'second-stale-brainstorm', now: 1_000 });
+  const second = registerAgentConversation(root, secondIdentity);
+  updateAgentConversationCheckpoint(root, { ...secondIdentity, checkpoint: checkpoint() });
+
+  const originalMkdirSync = fs.mkdirSync;
+  let armed = true;
+  fs.mkdirSync = (targetPath, options) => {
+    if (armed && String(targetPath).includes('.staging-')) {
+      armed = false;
+      throw new Error('simulated staging directory failure');
+    }
+    return originalMkdirSync(targetPath, options);
+  };
+  let result;
+  try {
+    result = sealColdAgentConversations(root, { now: 1_000 + FRESHNESS_WINDOW_MS });
+  } finally {
+    fs.mkdirSync = originalMkdirSync;
+  }
+
+  assert.equal(result.sealed.length, 1, 'the second conversation seals even though the first failed');
+  assert.equal(result.sealed[0].sourceKey, second.sourceKey);
+  const registry = readAgentConversationRegistry(root);
+  assert.equal(registry.conversations[first.sourceKey].status, 'warm', 'a failed seal must not leave a partial mutation');
+  assert.equal(registry.conversations[second.sourceKey].status, 'sealed');
+});
+
+test('Stop on a registered brainstorming conversation enriches the checkpoint from Visual Companion state and does not bump again on a repeat Stop', t => {
+  const root = fixture(t);
+  const {
+    brainstormBootstrapCheckpoint,
+    readAgentConversationRegistry,
+    recordAgentConversationStop,
+    registerAgentConversation,
+    updateAgentConversationCheckpoint,
+  } = handoverApi();
+  brainstormSessionFixture(t, root);
+
+  const identity = conversation({ kind: 'brainstorming', agentConversationId: 'brainstorm-stop-conversation' });
+  const registered = registerAgentConversation(root, identity);
+  updateAgentConversationCheckpoint(root, { ...identity, checkpoint: brainstormBootstrapCheckpoint() });
+  const bootstrapRevision = readAgentConversationRegistry(root).conversations[registered.sourceKey].checkpoint_revision;
+
+  recordAgentConversationStop(root, { ...identity, now: 2_000 });
+  const afterFirstStop = readAgentConversationRegistry(root).conversations[registered.sourceKey];
+  assert.ok(afterFirstStop.checkpoint_revision > bootstrapRevision, 'the Stop-time derive must bump the checkpoint revision');
+  assert.deepEqual(afterFirstStop.checkpoint.confirmed_choices, ['Choose the auth strategy: OAuth 2.0']);
+  assert.deepEqual(afterFirstStop.checkpoint.unresolved_decisions, ['Choose the storage engine']);
+  assert.match(afterFirstStop.checkpoint.current_direction, /^Brainstorming 'Checkout revamp' at revision abcd1234\.$/u);
+
+  const revisionAfterFirstStop = afterFirstStop.checkpoint_revision;
+  recordAgentConversationStop(root, { ...identity, now: 3_000 });
+  const afterSecondStop = readAgentConversationRegistry(root).conversations[registered.sourceKey];
+  assert.equal(afterSecondStop.checkpoint_revision, revisionAfterFirstStop, 'a second identical Stop against unchanged Visual Companion state must not bump the revision again');
+  assert.equal(afterSecondStop.last_active_at, new Date(3_000).toISOString(), 'activity still advances even when the derived checkpoint is unchanged');
+});
+
+test('sealColdAgentConversations on a cold brainstorming conversation seals a handover whose checkpoint.md contains the derived confirmed_choices', t => {
+  const root = fixture(t);
+  const {
+    FRESHNESS_WINDOW_MS,
+    brainstormBootstrapCheckpoint,
+    handoverPaths,
+    registerAgentConversation,
+    sealColdAgentConversations,
+    updateAgentConversationCheckpoint,
+  } = handoverApi();
+  brainstormSessionFixture(t, root);
+
+  const identity = conversation({ kind: 'brainstorming', agentConversationId: 'brainstorm-cold-conversation', now: 1_000 });
+  registerAgentConversation(root, identity);
+  updateAgentConversationCheckpoint(root, { ...identity, checkpoint: brainstormBootstrapCheckpoint() });
+
+  const result = sealColdAgentConversations(root, { now: 1_000 + FRESHNESS_WINDOW_MS });
+  assert.equal(result.sealed.length, 1);
+
+  const directory = path.join(handoverPaths(root).directory, result.sealed[0].handoverId);
+  const checkpointMarkdown = fs.readFileSync(path.join(directory, 'checkpoint.md'), 'utf8');
+  assert.match(checkpointMarkdown, /Choose the auth strategy: OAuth 2\.0/u);
+
+  const sealedCheckpoint = JSON.parse(checkpointMarkdown);
+  assert.deepEqual(sealedCheckpoint.confirmed_choices, ['Choose the auth strategy: OAuth 2.0']);
+  assert.deepEqual(sealedCheckpoint.unresolved_decisions, ['Choose the storage engine']);
+});
+
+test('sealColdAgentConversations still derives the checkpoint when the active-session pointer was already removed', t => {
+  const root = fixture(t);
+  const {
+    FRESHNESS_WINDOW_MS,
+    brainstormBootstrapCheckpoint,
+    handoverPaths,
+    registerAgentConversation,
+    sealColdAgentConversations,
+    updateAgentConversationCheckpoint,
+  } = handoverApi();
+  const session = brainstormSessionFixture(t, root, { pointer: false });
+
+  const identity = conversation({ kind: 'brainstorming', agentConversationId: 'brainstorm-unpointered-conversation', now: 1_000 });
+  registerAgentConversation(root, identity);
+  updateAgentConversationCheckpoint(root, { ...identity, checkpoint: brainstormBootstrapCheckpoint() });
+
+  const result = sealColdAgentConversations(root, { now: 1_000 + FRESHNESS_WINDOW_MS });
+  assert.equal(result.sealed.length, 1);
+
+  const directory = path.join(handoverPaths(root).directory, result.sealed[0].handoverId);
+  const sealedCheckpoint = JSON.parse(fs.readFileSync(path.join(directory, 'checkpoint.md'), 'utf8'));
+  assert.deepEqual(sealedCheckpoint.confirmed_choices, ['Choose the auth strategy: OAuth 2.0']);
+  assert.match(sealedCheckpoint.next_action, /resume --session-dir /u);
+  assert.ok(sealedCheckpoint.next_action.includes(session.sessionDir), 'the sealed handover must carry the resume path');
+});
+
+test('freshnessProjection warns about the most recently active conversation requiring a handover, not the first registered', t => {
+  const root = fixture(t);
+  const { freshnessProjection, registerAgentConversation, sealAgentConversationHandover, updateAgentConversationCheckpoint } = handoverApi();
+  const older = conversation({ agentConversationId: 'stale-older-conversation', now: 1_000 });
+  const newer = conversation({ agentConversationId: 'stale-newer-conversation', now: 2_000 });
+  registerAgentConversation(root, older);
+  updateAgentConversationCheckpoint(root, { ...older, checkpoint: checkpoint() });
+  registerAgentConversation(root, newer);
+  updateAgentConversationCheckpoint(root, { ...newer, checkpoint: checkpoint() });
+  const olderSealed = sealAgentConversationHandover(root, { ...older, now: 3_000 });
+  const newerSealed = sealAgentConversationHandover(root, { ...newer, now: 3_000 });
+
+  const projection = freshnessProjection(root, 10_000);
+
+  assert.ok(projection.warning.includes(newerSealed.handoverId), 'the warning must recommend the most recently active stale conversation');
+  assert.ok(!projection.warning.includes(olderSealed.handoverId), 'the older stale conversation must not win the one-line warning');
+});
+
+test('formatFreshnessProjection scopes the banner to a provided currentSourceKey and stays byte-identical when absent', t => {
+  const root = fixture(t);
+  const { formatFreshnessProjection, freshnessProjection, registerAgentConversation, updateAgentConversationCheckpoint } = handoverApi();
+  const current = conversation({ kind: 'brainstorming', agentConversationId: 'format-current-conversation' });
+  const other = conversation({ kind: 'brainstorming', agentConversationId: 'format-other-conversation' });
+  const registeredCurrent = registerAgentConversation(root, current);
+  updateAgentConversationCheckpoint(root, { ...current, checkpoint: checkpoint() });
+  registerAgentConversation(root, other);
+  updateAgentConversationCheckpoint(root, { ...other, checkpoint: checkpoint() });
+
+  const projection = freshnessProjection(root, 1_000);
+
+  const legacy = formatFreshnessProjection(projection);
+  assert.doesNotMatch(legacy, /this Agent Conversation|Freshness Gate \(other\)/u);
+  assert.match(legacy, /^Freshness Gate codex\/brainstorming: warm\n {2}age/u);
+  assert.equal((legacy.match(/^Freshness Gate codex\/brainstorming: warm$/gmu) || []).length, 2);
+
+  const legacyCompact = formatFreshnessProjection(projection, { compact: true });
+  assert.doesNotMatch(legacyCompact, /this Agent Conversation|Freshness Gate \(other\)/u);
+  assert.match(legacyCompact, /^Freshness Gate codex\/brainstorming: warm \| age/u);
+
+  const scoped = formatFreshnessProjection(projection, { currentSourceKey: registeredCurrent.sourceKey });
+  const thisIndex = scoped.indexOf('Freshness Gate (this Agent Conversation)');
+  const otherIndex = scoped.indexOf('Freshness Gate (other)');
+  assert.equal(thisIndex, 0, 'the current conversation renders first');
+  assert.ok(thisIndex < otherIndex);
+  assert.match(scoped, / \| /u, 'the other conversation renders as one compact line');
+  assert.match(scoped, /\n {2}age /u, 'the current conversation still renders its full multi-line block');
+
+  const unregistered = formatFreshnessProjection(projection, { currentSourceKey: 'not-a-real-source-key' });
+  assert.match(unregistered, /^Freshness Gate \(this Agent Conversation\): .*not registered.*does not gate/iu);
+  assert.equal((unregistered.match(/Freshness Gate \(other\)/gu) || []).length, 2, 'both registered conversations render compactly when the current conversation is unregistered');
 });

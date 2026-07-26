@@ -500,6 +500,73 @@ test('status orientation doctor and hooks agree on the sealed Agent Conversation
   assert.match(doctor.stdout, new RegExp(handoverId));
 });
 
+test('SessionStart orientation eagerly seals an abandoned cold Agent Conversation before showing the projection', t => {
+  const root = fixture(t);
+  const identity = { runtime: 'claude', agentConversationId: 'abandoned-orient-session', kind: 'brainstorming', now: 1_000 };
+  const registered = handover.registerAgentConversation(root, identity);
+  handover.updateAgentConversationCheckpoint(root, {
+    ...identity,
+    checkpoint: { coreAnchor: 'Abandoned brainstorming conversation.', nextAction: 'Resume brainstorming.' },
+  });
+
+  const orientation = childProcess.spawnSync(process.execPath, [orient], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, PAIR_NOW_MS: String(1_000 + FRESHNESS_WINDOW_MS) },
+    input: `${JSON.stringify({ cwd: root, hook_event_name: 'SessionStart', session_id: 'unrelated-fresh-session' })}\n`,
+  });
+
+  assert.equal(orientation.status, 0, orientation.stderr);
+  assert.match(orientation.stdout, /handover-[a-f0-9-]{36}/u);
+  const sealedConversation = registry(root).conversations[registered.sourceKey];
+  assert.equal(sealedConversation.status, 'sealed', 'orientation must seal the abandoned conversation eagerly, not wait for its own next prompt');
+  assert.match(sealedConversation.sealed_handover_id, /^handover-[a-f0-9-]{36}$/u);
+});
+
+test('orientation scopes the banner to the current Agent Conversation and compacts unrelated ones', t => {
+  const root = fixture(t);
+  const current = { runtime: 'claude', agentConversationId: 'current-orient-session', kind: 'brainstorming', now: 1_000 };
+  const other = { runtime: 'claude', agentConversationId: 'other-orient-session', kind: 'brainstorming', now: 1_000 };
+  handover.registerAgentConversation(root, current);
+  handover.updateAgentConversationCheckpoint(root, { ...current, checkpoint: { coreAnchor: 'Current conversation.', nextAction: 'Continue.' } });
+  handover.registerAgentConversation(root, other);
+  handover.updateAgentConversationCheckpoint(root, { ...other, checkpoint: { coreAnchor: 'Other conversation.', nextAction: 'Continue.' } });
+
+  const orientation = childProcess.spawnSync(process.execPath, [orient], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, PAIR_HOOK_RUNTIME: 'claude', PAIR_NOW_MS: '1500' },
+    input: `${JSON.stringify({ cwd: root, hook_event_name: 'SessionStart', session_id: current.agentConversationId })}\n`,
+  });
+
+  assert.equal(orientation.status, 0, orientation.stderr);
+  assert.match(orientation.stdout, /Freshness Gate \(this Agent Conversation\) claude\/brainstorming/u);
+  assert.match(orientation.stdout, /Freshness Gate \(other\) claude\/brainstorming/u);
+  const thisIndex = orientation.stdout.indexOf('Freshness Gate (this Agent Conversation)');
+  const otherIndex = orientation.stdout.indexOf('Freshness Gate (other)');
+  assert.ok(thisIndex < otherIndex, 'this Agent Conversation renders before the other entries');
+  const otherLine = orientation.stdout.split('\n').find(line => line.includes('Freshness Gate (other)'));
+  assert.match(otherLine, / \| /u, 'unrelated conversations render as one compact line');
+  assert.doesNotMatch(otherLine, /next safe action:.*\n/u);
+});
+
+test('orientation reports an unregistered Agent Conversation is not gated and still compacts registered ones', t => {
+  const root = fixture(t);
+  const identity = registerWarmConversation(root, 'claude', 'registered-not-current');
+  const orientation = childProcess.spawnSync(process.execPath, [orient], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, PAIR_HOOK_RUNTIME: 'claude', PAIR_NOW_MS: '2000' },
+    input: `${JSON.stringify({ cwd: root, hook_event_name: 'SessionStart', session_id: 'unregistered-current-session' })}\n`,
+  });
+
+  assert.equal(orientation.status, 0, orientation.stderr);
+  assert.match(orientation.stdout, /not registered/iu);
+  assert.match(orientation.stdout, /does not gate/iu);
+  assert.match(orientation.stdout, /Freshness Gate \(other\) claude\/pair/u);
+  assert.equal(identity.agentConversationId, 'registered-not-current');
+});
+
 test('doctor treats unavailable Freshness Gate state as failure and healthy cold state as warning', t => {
   const root = fixture(t);
   registerWarmConversation(root, 'codex', 'doctor-severity-agent');

@@ -4,6 +4,7 @@ const path = require('node:path');
 
 const { loadPairState, pairStatePaths, redactString } = require('./pair-state');
 const { takeoverWork } = require('./pair-control');
+const { deriveBrainstormingCheckpoint } = require('./brainstorm-checkpoint');
 
 const HANDOVER_SCHEMA = 1;
 const MAX_CHECKPOINT_BYTES = 32 * 1024;
@@ -479,6 +480,7 @@ function truncateUtf8(value, maximum) {
 }
 
 function safeText(value, maximum = 4096) {
+  if (value === null || value === undefined) return '';
   return truncateUtf8(redactString(value), maximum).trim();
 }
 
@@ -660,6 +662,12 @@ function recordAgentConversationStop(root, input) {
         conversation.checkpoint = checkpoint;
         conversation.checkpoint_revision += 1;
       }
+    } else if (conversation.kind === 'brainstorming') {
+      const checkpoint = deriveBrainstormingCheckpoint(root, conversation.checkpoint);
+      if (JSON.stringify(conversation.checkpoint) !== JSON.stringify(checkpoint)) {
+        conversation.checkpoint = checkpoint;
+        conversation.checkpoint_revision += 1;
+      }
     }
     conversation.last_active_at = at;
     return {
@@ -749,6 +757,30 @@ function assessAgentConversationFreshness(root, input) {
   return assessment;
 }
 
+function sealColdAgentConversations(root, input = {}) {
+  const now = Number(input.now === undefined ? Date.now() : input.now);
+  if (!Number.isFinite(now) || now < 0) throw new Error('Agent Conversation timestamp must be a non-negative finite millisecond value');
+  const at = timestamp(now);
+  const sealed = withRegistry(root, (registry, paths) => {
+    const results = [];
+    for (const conversation of Object.values(registry.conversations)) {
+      if (conversation.status !== 'warm' || !conversation.checkpoint) continue;
+      const activity = activityAge(conversation.last_active_at, now);
+      if (activity.invalid || activity.ageMs < FRESHNESS_WINDOW_MS) continue;
+      try {
+        const identity = { sourceKey: conversation.source_key, runtime: conversation.runtime };
+        const result = sealConversation(root, registry, paths, identity, at);
+        results.push({ sourceKey: conversation.source_key, handoverId: result.handoverId });
+      } catch {
+        // A single conversation's failure to seal must not abort the others.
+      }
+    }
+    return results;
+  });
+  if (sealed.length) withRegistry(root, () => null);
+  return { sealed };
+}
+
 function freshnessProjection(root, now = Date.now()) {
   const observedAt = timestamp(now);
   let registry;
@@ -773,8 +805,9 @@ function freshnessProjection(root, now = Date.now()) {
     const freshStart = handoverId
       ? `From a plain terminal outside any agent conversation, run pair-loop --fresh-from ${handoverId} --runtime ${conversation.runtime}; or open a fresh ${conversation.runtime} agent conversation manually, then inside it run pair-loop --adopt-handover ${handoverId} --runtime ${conversation.runtime}.`
       : null;
+    const repairFallback = `Sealing has not produced an Agent Conversation Handover; run pair-loop --freshness-status --runtime ${conversation.runtime} and repair .pair/handovers before prompting again.`;
     const nextSafeAction = ['cold', 'sealed'].includes(projectedStatus)
-      ? freshStart || 'Submit no further prompt; repair the Agent Conversation Handover state.'
+      ? freshStart || repairFallback
       : projectedStatus === 'retired'
         ? handoverId && registry.handovers[handoverId]?.status === 'sealed'
           ? freshStart
@@ -783,10 +816,11 @@ function freshnessProjection(root, now = Date.now()) {
           ? `Continue in this ${conversation.runtime} Agent Conversation before the freshness deadline.`
           : projectedStatus === 'override-active'
             ? 'Finish the one authorized turn, refresh its Agent Conversation Checkpoint, and stop.'
-            : 'Submit no further prompt; repair the Agent Conversation Handover state.';
+            : repairFallback;
     return {
       runtime: conversation.runtime,
       kind: conversation.kind,
+      source_key: conversation.source_key,
       status: projectedStatus,
       age_ms: ageMs,
       remaining_ms: invalidActivity ? null : Math.max(0, FRESHNESS_WINDOW_MS - ageMs),
@@ -800,7 +834,12 @@ function freshnessProjection(root, now = Date.now()) {
       next_safe_action: nextSafeAction,
     };
   });
-  const requiringHandover = conversations.find(conversation => ['cold', 'sealed', 'invalid-activity', 'retired'].includes(conversation.status));
+  // The one-line warning recommends the most recently active stale conversation — registration
+  // order would surface a days-old handover ahead of the one the user actually needs next.
+  // invalid-activity rows carry a null age and rank last.
+  const requiringHandover = conversations
+    .filter(conversation => ['cold', 'sealed', 'invalid-activity', 'retired'].includes(conversation.status))
+    .sort((a, b) => (a.age_ms ?? Number.POSITIVE_INFINITY) - (b.age_ms ?? Number.POSITIVE_INFINITY))[0];
   return {
     observed_at: observedAt,
     conversations,
@@ -823,22 +862,46 @@ function formatDuration(milliseconds) {
   return `${seconds}s`;
 }
 
-function formatFreshnessProjection(projection, options = {}) {
-  const conversations = projection?.conversations || [];
-  if (conversations.length === 0) {
-    return projection?.warning || 'Freshness Gate: no registered Agent Conversations.';
-  }
-  const lines = conversations.map(conversation => [
-    `Freshness Gate ${conversation.runtime}/${conversation.kind}: ${conversation.status}`,
+function freshnessConversationFields(conversation) {
+  return [
     `age ${formatDuration(conversation.age_ms)}`,
     `remaining ${formatDuration(conversation.remaining_ms)}`,
     `deadline ${conversation.deadline_at || 'invalid'}`,
     `checkpoint r${conversation.checkpoint_revision} sha256:${conversation.checkpoint_sha256 || 'none'}`,
     `handover ${conversation.handover_id || 'none'}`,
     `next safe action: ${conversation.next_safe_action || 'none'}`,
-  ].join(options.compact ? ' | ' : '\n  '));
+  ];
+}
+
+function formatFreshnessProjection(projection, options = {}) {
+  const conversations = projection?.conversations || [];
+  if (conversations.length === 0) {
+    return projection?.warning || 'Freshness Gate: no registered Agent Conversations.';
+  }
+  if (options.currentSourceKey === undefined) {
+    const lines = conversations.map(conversation => [
+      `Freshness Gate ${conversation.runtime}/${conversation.kind}: ${conversation.status}`,
+      ...freshnessConversationFields(conversation),
+    ].join(options.compact ? ' | ' : '\n  '));
+    if (projection.warning) lines.push(projection.warning);
+    return lines.join(options.compact ? ' || ' : '\n');
+  }
+  const current = conversations.find(conversation => conversation.source_key === options.currentSourceKey);
+  const others = conversations.filter(conversation => conversation !== current);
+  const lines = [current
+    ? [
+      `Freshness Gate (this Agent Conversation) ${current.runtime}/${current.kind}: ${current.status}`,
+      ...freshnessConversationFields(current),
+    ].join('\n  ')
+    : 'Freshness Gate (this Agent Conversation): this Agent Conversation is not registered; the Freshness Gate does not gate it.'];
+  for (const conversation of others) {
+    lines.push([
+      `Freshness Gate (other) ${conversation.runtime}/${conversation.kind}: ${conversation.status}`,
+      ...freshnessConversationFields(conversation),
+    ].join(' | '));
+  }
   if (projection.warning) lines.push(projection.warning);
-  return lines.join(options.compact ? ' || ' : '\n');
+  return lines.join('\n');
 }
 
 function assertHandoverId(handoverId) {
@@ -1051,6 +1114,12 @@ function sealConversation(root, registry, paths, identity, at) {
     if (conversation.sealed_handover_id) return { handoverId: conversation.sealed_handover_id, sourceKey: identity.sourceKey, alreadySealed: true };
     if (conversation.kind === 'pair') {
       const checkpoint = derivePairCheckpoint(root);
+      if (JSON.stringify(conversation.checkpoint) !== JSON.stringify(checkpoint)) {
+        conversation.checkpoint = checkpoint;
+        conversation.checkpoint_revision += 1;
+      }
+    } else if (conversation.kind === 'brainstorming') {
+      const checkpoint = deriveBrainstormingCheckpoint(root, conversation.checkpoint);
       if (JSON.stringify(conversation.checkpoint) !== JSON.stringify(checkpoint)) {
         conversation.checkpoint = checkpoint;
         conversation.checkpoint_revision += 1;
@@ -1495,6 +1564,7 @@ module.exports = {
   authorizeColdResume,
   brainstormBootstrapCheckpoint,
   completeColdResume,
+  conversationIdentity,
   derivePairCheckpoint,
   ensureBrainstormingRegistration,
   formatFreshnessProjection,
@@ -1508,5 +1578,6 @@ module.exports = {
   recordAgentConversationStop,
   registerAgentConversation,
   sealAgentConversationHandover,
+  sealColdAgentConversations,
   updateAgentConversationCheckpoint,
 };
