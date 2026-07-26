@@ -9,9 +9,10 @@ function copyText(value) {
 function copyScreenIdentity(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const identity = {};
-  for (const key of ['id', 'revision']) {
+  for (const key of ['id', 'revision', 'tabId', 'tabLabel', 'diagramKind']) {
     const text = copyText(value[key]);
     if (text != null) identity[key] = text;
+    else if (value[key] === null) identity[key] = null;
   }
   const file = copyText(value.file);
   if (file && /^[a-zA-Z0-9._-]+$/.test(file)) identity.file = file;
@@ -21,7 +22,7 @@ function copyScreenIdentity(value) {
 function copyTarget(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const target = {};
-  for (const key of ['componentId', 'selector', 'label']) {
+  for (const key of ['componentId', 'selector', 'label', 'tabId', 'frameId', 'frameTitle', 'excerpt']) {
     const text = copyText(value[key]);
     if (text != null) target[key] = text;
     else if (value[key] === null) target[key] = null;

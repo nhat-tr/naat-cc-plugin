@@ -17,6 +17,9 @@ import { PaneSeparator } from "./PaneSeparator";
 export interface FeedbackComponentOption {
   id: string;
   label: string;
+  frameId?: string;
+  frameTitle?: string;
+  excerpt?: string;
 }
 
 export interface PresentedFeedbackThread extends FeedbackThread {
@@ -46,6 +49,7 @@ interface FeedbackPanelProps {
   readOnly: boolean;
   submitting: boolean;
   threads: PresentedFeedbackThread[];
+  viewingTabId: string;
 }
 
 type FeedbackPanelStyle = CSSProperties & { "--feedback-history-height": string };
@@ -111,6 +115,9 @@ const SessionHistory = memo(function SessionHistory({ events }: { events: Sessio
         <article className={`history-item ${event.role ?? "system"}`} key={event.id ?? `${event.seq ?? "event"}-${index}`}>
           <header className="history-head">
             <strong>{eventTitle(event)}</strong>
+            {event.screen?.tabLabel ?? event.screen?.diagramKind
+              ? <span className="history-context">{event.screen?.tabLabel ?? event.screen?.diagramKind}</span>
+              : null}
             {event.timestamp
               ? <time dateTime={new Date(event.timestamp).toISOString()}>{new Date(event.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
               : null}
@@ -118,7 +125,9 @@ const SessionHistory = memo(function SessionHistory({ events }: { events: Sessio
           <MessageBody message={historyMessage(event)} />
           {event.annotations?.map(annotation => (
             <p className="history-detail history-note" key={annotation.id}>
-              <strong>{annotation.target.label}</strong> <InlineText value={annotation.comment} />
+              <strong>{annotation.target.label}</strong>
+              {annotation.target.frameTitle ? <span className="history-frame"> · {annotation.target.frameTitle}</span> : null}
+              {" "}<InlineText value={annotation.comment} />
             </p>
           ))}
           {event.choices?.map(choice => (
@@ -155,6 +164,7 @@ export function FeedbackPanel({
   readOnly,
   submitting,
   threads,
+  viewingTabId,
 }: FeedbackPanelProps) {
   const canSubmit = !readOnly && !submitting && Boolean(
     draft.message.trim() || draft.annotations.length || draft.choices.length,
@@ -214,6 +224,7 @@ export function FeedbackPanel({
             onAnnotationComponentSelect={onAnnotationComponentSelect}
             onDraftChange={onDraftChange}
             readOnly={readOnly}
+            tabId={viewingTabId}
           />
 
           <div

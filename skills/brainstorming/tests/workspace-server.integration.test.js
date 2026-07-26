@@ -82,6 +82,28 @@ function publish(sessionDir, name, document) {
   );
 }
 
+function publishTab(sessionDir, name, document, tabId, tabLabel) {
+  const args = ['publish', '--document', writeCandidate(sessionDir, name, document), '--session-dir', sessionDir];
+  if (tabId) args.push('--tab-id', tabId);
+  if (tabLabel) args.push('--tab-label', tabLabel);
+  return runSession(...args);
+}
+
+async function readUntil(reader, expression, timeoutMs = 2_000) {
+  const decoder = new TextDecoder();
+  let value = '';
+  const timeout = new Promise((_, reject) => {
+    const handle = setTimeout(() => reject(new Error(`timed out waiting for ${expression}`)), timeoutMs);
+    handle.unref?.();
+  });
+  while (!expression.test(value)) {
+    const next = await Promise.race([reader.read(), timeout]);
+    if (next.done) break;
+    value += decoder.decode(next.value, { stream: true });
+  }
+  return value;
+}
+
 async function authenticatedCookie(address) {
   const root = await fetch(address.connection_url);
   assert.equal(root.status, 200, await root.text());
@@ -352,4 +374,144 @@ test('v2 real-server boundaries reject unauthenticated, stale-capability, cross-
   assert.match(standalone, new RegExp(`"revision":"${document.revision}"`, 'u'));
   assertSecretSafe(standalone, sessionDir);
   assertSecretSafe(loggedErrors, sessionDir);
+});
+
+test('publishing multiple Workspace Tabs keeps every one simultaneously reachable, not just the active one', async t => {
+  const { address, sessionDir } = await startServer(t, 'workspace-tabs-multi');
+  const architecture = workspaceDocument({ title: 'Architecture Canvas' });
+  const published = publishTab(sessionDir, 'architecture.json', architecture, 'architecture', 'Architecture Canvas');
+  assert.equal(published.status, 0, published.stderr);
+  const publishedTab = JSON.parse(published.stdout);
+  assert.equal(publishedTab.tab_id, 'architecture');
+  assert.equal(publishedTab.tab_label, 'Architecture Canvas');
+
+  const stateMachine = workspaceDocument({ title: 'State Machine' });
+  const publishedSecond = publishTab(sessionDir, 'state-machine.json', stateMachine, 'uml-state-machine', 'State Machine');
+  assert.equal(publishedSecond.status, 0, publishedSecond.stderr);
+
+  const cookie = await authenticatedCookie(address);
+  const state = await fetch(`${address.url}${address.base_path}api/state`, { headers: { Cookie: cookie } });
+  assert.equal(state.status, 200);
+  const stateBody = await state.json();
+  assert.equal(stateBody.activeTabId, 'uml-state-machine');
+  assert.deepEqual(stateBody.tabs.map(tab => tab.id), ['architecture', 'uml-state-machine']);
+  assert.equal(stateBody.tabs[0].label, 'Architecture Canvas');
+  assert.equal(stateBody.tabs[1].label, 'State Machine');
+  // The active document (screen) is the most recently published tab...
+  assert.equal(stateBody.screen.title, 'State Machine');
+
+  // ...but the FIRST tab's document is still fully reachable on demand, byte for byte.
+  const firstTab = await fetch(`${address.url}${address.base_path}api/tab/architecture`, { headers: { Cookie: cookie } });
+  assert.equal(firstTab.status, 200);
+  const firstTabBody = await firstTab.json();
+  assert.deepEqual(firstTabBody.document, architecture);
+});
+
+test('v2 feedback from a non-active Workspace Tab binds to that tab document, not the active one', async t => {
+  const { address, sessionDir } = await startServer(t, 'workspace-tabs-feedback');
+  const architecture = workspaceDocument({ title: 'Architecture Canvas' });
+  const first = publishTab(sessionDir, 'architecture.json', architecture, 'architecture', 'Architecture Canvas');
+  assert.equal(first.status, 0, first.stderr);
+  const stateMachine = workspaceDocument({ title: 'State Machine' });
+  const second = publishTab(sessionDir, 'state-machine.json', stateMachine, 'uml-state-machine', 'State Machine');
+  assert.equal(second.status, 0, second.stderr);
+  assert.notEqual(architecture.revision, stateMachine.revision);
+  const cookie = await authenticatedCookie(address);
+
+  function submit(screen, clientTurnId, annotations = []) {
+    return fetch(`${address.url}${address.base_path}api/feedback`, {
+      method: 'POST',
+      headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientTurnId, message: 'Tab-scoped feedback.', annotations, screen }),
+    });
+  }
+
+  // The active document is the state machine, but feedback drafted while viewing the first
+  // tab must be accepted against THAT tab's revision instead of rejected as stale.
+  const accepted = await submit({
+    id: 'product',
+    file: 'tab-architecture.json',
+    revision: architecture.revision,
+    tabId: 'architecture',
+    tabLabel: 'Architecture Canvas',
+  }, 'tab-feedback-accepted', [{
+    id: 'note-1',
+    comment: 'This boundary is unclear.',
+    target: {
+      componentId: 'concept-a',
+      label: 'Concept A',
+      tabId: 'architecture',
+      frameId: 'frame-1',
+      frameTitle: 'Concepts',
+      excerpt: 'Concept A · point 1: first claim',
+    },
+  }]);
+  assert.equal(accepted.status, 201, await accepted.clone().text());
+  const record = await accepted.json();
+  assert.equal(record.screen.tabId, 'architecture');
+  assert.equal(record.screen.tabLabel, 'Architecture Canvas');
+  assert.equal(record.annotations[0].target.tabId, 'architecture');
+  assert.equal(record.annotations[0].target.frameTitle, 'Concepts');
+  assert.match(record.annotations[0].target.excerpt, /point 1/);
+
+  const staleRevision = architecture.revision === '00000000' ? '00000001' : '00000000';
+  const stale = await submit({
+    id: 'product',
+    file: 'tab-architecture.json',
+    revision: staleRevision,
+    tabId: 'architecture',
+  }, 'tab-feedback-stale');
+  assert.equal(stale.status, 409);
+
+  // An unknown tab id falls back to the active-document revision check.
+  const unknownTabActiveRevision = await submit({
+    id: 'product',
+    file: 'workspace.json',
+    revision: stateMachine.revision,
+    tabId: 'deleted-tab',
+  }, 'tab-feedback-unknown-active');
+  assert.equal(unknownTabActiveRevision.status, 201, await unknownTabActiveRevision.clone().text());
+  const unknownTabStaleRevision = await submit({
+    id: 'product',
+    file: 'workspace.json',
+    revision: architecture.revision,
+    tabId: 'deleted-tab',
+  }, 'tab-feedback-unknown-stale');
+  assert.equal(unknownTabStaleRevision.status, 409);
+});
+
+test('api/tab rejects an unknown tab id with 404 and a malformed tab id with 400', async t => {
+  const { address, sessionDir } = await startServer(t, 'workspace-tabs-errors');
+  const published = publishTab(sessionDir, 'architecture.json', workspaceDocument(), 'architecture', 'Architecture');
+  assert.equal(published.status, 0, published.stderr);
+  const cookie = await authenticatedCookie(address);
+
+  const missing = await fetch(`${address.url}${address.base_path}api/tab/does-not-exist`, { headers: { Cookie: cookie } });
+  assert.equal(missing.status, 404);
+
+  const malformed = await fetch(`${address.url}${address.base_path}api/tab/Not%20Valid!`, { headers: { Cookie: cookie } });
+  assert.equal(malformed.status, 400);
+
+  const written = await fetch(`${address.url}${address.base_path}api/tab/architecture`, {
+    method: 'POST',
+    headers: { Cookie: cookie, 'Content-Type': 'application/json', Origin: 'http://malicious.local' },
+    body: '{}',
+  });
+  assert.equal(written.status, 405);
+});
+
+test('republishing a second Workspace Tab notifies live SSE clients so the tab bar refreshes', async t => {
+  const { address, sessionDir } = await startServer(t, 'workspace-tabs-sse');
+  const published = publishTab(sessionDir, 'architecture.json', workspaceDocument(), 'architecture', 'Architecture');
+  assert.equal(published.status, 0, published.stderr);
+  const cookie = await authenticatedCookie(address);
+
+  const events = await fetch(`${address.url}${address.base_path}api/events`, { headers: { Cookie: cookie } });
+  const reader = events.body.getReader();
+  t.after(() => reader.cancel());
+  assert.match(await readUntil(reader, /connected/), /connected/);
+
+  const second = publishTab(sessionDir, 'sequence.json', workspaceDocument({ title: 'Sequence' }), 'uml-sequence', 'Sequence');
+  assert.equal(second.status, 0, second.stderr);
+  assert.match(await readUntil(reader, /event: screen/), /event: screen/);
 });

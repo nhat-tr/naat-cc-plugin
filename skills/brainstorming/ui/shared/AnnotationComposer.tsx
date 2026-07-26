@@ -11,6 +11,7 @@ interface AnnotationComposerProps {
   onAnnotationComponentSelect: (componentId: string) => void;
   onDraftChange: (draft: FeedbackDraft) => void;
   readOnly: boolean;
+  tabId: string;
 }
 
 export function AnnotationComposer({
@@ -20,6 +21,7 @@ export function AnnotationComposer({
   onAnnotationComponentSelect,
   onDraftChange,
   readOnly,
+  tabId,
 }: AnnotationComposerProps) {
   const [annotationText, setAnnotationText] = useState("");
   const annotationInput = useRef<HTMLTextAreaElement>(null);
@@ -33,7 +35,14 @@ export function AnnotationComposer({
     const annotation: Annotation = {
       id: globalThis.crypto?.randomUUID?.() ?? `note-${Date.now()}`,
       comment,
-      target: { componentId: effectiveTarget.id, label: effectiveTarget.label },
+      target: {
+        componentId: effectiveTarget.id,
+        label: effectiveTarget.label,
+        tabId: tabId || null,
+        frameId: effectiveTarget.frameId ?? null,
+        frameTitle: effectiveTarget.frameTitle ?? null,
+        excerpt: effectiveTarget.excerpt ?? null,
+      },
     };
     onDraftChange({ ...draft, annotations: [...draft.annotations, annotation] });
     setAnnotationText("");

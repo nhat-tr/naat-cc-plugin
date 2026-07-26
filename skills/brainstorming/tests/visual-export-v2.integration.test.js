@@ -72,7 +72,15 @@ function sessionSnapshot(privatePath) {
       annotations: [{
         id: 'annotation-1',
         comment: 'Keep the compact state.',
-        target: { componentId: 'concept-a', selector: null, label: 'Device-aware triptych' },
+        target: {
+          componentId: 'concept-a',
+          selector: null,
+          label: 'Device-aware triptych',
+          tabId: 'product',
+          frameId: 'concepts',
+          frameTitle: 'Concept wall',
+          excerpt: 'Device-aware triptych · point 1: compact state first',
+        },
       }],
       choices: [{
         groupId: 'concept-choice',
@@ -80,7 +88,7 @@ function sessionSnapshot(privatePath) {
         value: 'concept-a',
         label: 'Device-aware triptych',
       }],
-      screen: { id: 'screen', file: privatePath, revision: 'a1b2c3d4' },
+      screen: { id: 'screen', file: privatePath, revision: 'a1b2c3d4', tabId: 'product', tabLabel: 'Product Concepts' },
       prompt: PROMPT,
     }],
     capability_token: CAPABILITY,
@@ -123,8 +131,13 @@ test('v2 standalone export is self-contained, secret-safe, and preserves the wor
   assert.equal(state.session.events[0].clientTurnId, 'standalone-choice-1');
   assert.equal(state.session.events[0].message, 'Use the device-aware concept.');
   assert.equal(state.session.events[0].annotations[0].id, 'annotation-1');
+  assert.equal(state.session.events[0].annotations[0].target.tabId, 'product');
+  assert.equal(state.session.events[0].annotations[0].target.frameTitle, 'Concept wall');
+  assert.match(state.session.events[0].annotations[0].target.excerpt, /point 1/);
   assert.deepEqual(state.session.events[0].choices, session.events[0].choices);
   assert.equal(state.session.events[0].screen.revision, 'a1b2c3d4');
+  assert.equal(state.session.events[0].screen.tabId, 'product');
+  assert.equal(state.session.events[0].screen.tabLabel, 'Product Concepts');
   assert.equal(Object.hasOwn(state.session.events[0], 'prompt'), false);
   assert.equal(Object.hasOwn(state.session, 'capability_token'), false);
   assert.equal(Object.hasOwn(state.session, 'connection_url'), false);

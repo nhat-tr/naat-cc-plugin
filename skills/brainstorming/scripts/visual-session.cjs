@@ -12,12 +12,13 @@ const { SessionStore } = require('./session-store.cjs');
 const { renderStandalone } = require('./standalone.cjs');
 const { createVisualScaffold, normalizeVisualDocument } = require('./visual-document.cjs');
 const { createWorkspaceScaffold } = require('./workspace-scaffold.cjs');
+const workspaceTabs = require('./workspace-tabs.cjs');
 
 const SHELL_DIR = path.resolve(__dirname, '../assets/visual-shell');
 const KNOWN_OPTIONS = new Set([
   'projectDir', 'host', 'urlHost', 'port', 'ownerPid', 'output', 'profile', 'audience',
   'title', 'summary', 'kinds', 'document', 'sessionDir', 'timeoutMs', 'replyTo', 'messageFile',
-  'message', 'workId', 'workspaceKind', 'draft', 'olderThanDays',
+  'message', 'workId', 'workspaceKind', 'draft', 'olderThanDays', 'tabId', 'tabLabel',
   'quiet', 'dryRun', 'all',
 ]);
 // Flags that take no value; present means true.
@@ -488,6 +489,11 @@ async function start(options) {
       v1_document: 'content/screen.json',
       v2_document: 'content/workspace.json',
     });
+    workspaceTabs.writeWorkspaceTab(path.join(sessionDir, 'content'), {
+      document: initialDocument,
+      tabId: options.tabId,
+      label: options.tabLabel,
+    });
   }
   const token = crypto.randomBytes(24).toString('hex');
   const host = options.host || '127.0.0.1';
@@ -674,7 +680,7 @@ function liveSessionOrNull(options) {
 
 // Atomically replace the active Visual Document of a running session, enforcing the same
 // version-compatibility guards as Publish. Shared by publish and present's in-place reuse path.
-function writeDocumentIntoLiveSession(metadata, document) {
+function writeDocumentIntoLiveSession(metadata, document, tabOptions = {}) {
   const { withVisualStateLock } = require('./legacy-visual-import.cjs');
   return withVisualStateLock(metadata.session_dir, () => {
     const format = readVisualFormat(metadata);
@@ -698,7 +704,15 @@ function writeDocumentIntoLiveSession(metadata, document) {
       : legacyFile;
     atomicJson(destination, document);
     appendRevisionSnapshot(metadata.state_dir || path.join(metadata.session_dir, 'state'), document);
-    return destination;
+    // Every Workspace Kind v2 document also becomes (or updates) a persistent Workspace Tab, so an
+    // Architecture Canvas and any number of UML diagrams stay simultaneously reachable in the same
+    // live session instead of destructively replacing one another.
+    const tab = document.version === 2
+      ? workspaceTabs.writeWorkspaceTab(metadata.content_dir, {
+        document, tabId: tabOptions.tabId, label: tabOptions.tabLabel,
+      })
+      : null;
+    return { destination, tab };
   });
 }
 
@@ -738,8 +752,15 @@ async function publish(options) {
   }
   const { preflightWorkspaceDocument } = require('./workspace-render-preflight.cjs');
   await preflightWorkspaceDocument(document);
-  const output = writeDocumentIntoLiveSession(metadata, document);
-  console.log(JSON.stringify({ type: 'screen.published', screen_file: output }));
+  const { destination, tab } = writeDocumentIntoLiveSession(metadata, document, {
+    tabId: options.tabId,
+    tabLabel: options.tabLabel,
+  });
+  console.log(JSON.stringify({
+    type: 'screen.published',
+    screen_file: destination,
+    ...(tab ? { tab_id: tab.tabId, tab_label: tab.label } : {}),
+  }));
 }
 
 async function present(options) {
@@ -763,15 +784,19 @@ async function present(options) {
   // never orphans the open browser tab. Run `stop` first to force a brand-new session.
   const live = liveSessionOrNull(options);
   if (live) {
-    const output = writeDocumentIntoLiveSession(live, document);
+    const { destination, tab } = writeDocumentIntoLiveSession(live, document, {
+      tabId: options.tabId,
+      tabLabel: options.tabLabel,
+    });
     console.log(JSON.stringify({
       type: 'visual-session-represented',
-      workspace_file: output,
+      workspace_file: destination,
       work_id: document.work_id,
       workspace_kind: document.workspace_kind,
       revision: document.revision,
       session_dir: live.session_dir,
       connection_url: sessionConnectionUrl(live),
+      ...(tab ? { tab_id: tab.tabId, tab_label: tab.label } : {}),
       ...(options.quiet ? {} : {
         url: live.url,
         base_path: live.base_path,
@@ -1212,12 +1237,12 @@ async function main() {
   if (!command || ['help', '--help', '-h'].includes(command)) {
     console.log([
       'Usage: visual-session.cjs start [--project-dir DIR] [--host HOST] [--url-host HOST] [--quiet]',
-      '       visual-session.cjs present (--draft FILE | --document FILE) [--project-dir DIR] [--host HOST] [--url-host HOST] [--quiet]',
+      '       visual-session.cjs present (--draft FILE | --document FILE) [--tab-id ID] [--tab-label TEXT] [--project-dir DIR] [--host HOST] [--url-host HOST] [--quiet]',
       '       visual-session.cjs resume [--session-dir DIR] [--quiet]',
       '       visual-session.cjs validate (--draft FILE | --document FILE)',
       '       visual-session.cjs scaffold --output FILE [--profile technical|product|business] [--kinds anchor,flow,decision]',
       '       visual-session.cjs scaffold --output FILE --work-id ID --workspace-kind product|architecture|research|business|review|uml [--title TITLE]',
-      '       visual-session.cjs publish (--draft FILE | --document FILE) [--session-dir DIR]',
+      '       visual-session.cjs publish (--draft FILE | --document FILE) [--tab-id ID] [--tab-label TEXT] [--session-dir DIR]',
       '       visual-session.cjs migrate --work-id ID --workspace-kind KIND [--session-dir DIR]',
       '       visual-session.cjs backout [--session-dir DIR]',
       '       visual-session.cjs drain [--session-dir DIR]',

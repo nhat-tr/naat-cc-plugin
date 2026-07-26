@@ -14,6 +14,13 @@ const {
   resolveReviewEvidence,
   resolveReviewSource,
 } = require('./review-workspace-data.cjs');
+const {
+  TAB_ID_PATTERN,
+  listWorkspaceTabFiles,
+  readWorkspaceTabDocument,
+  readWorkspaceTabsIndex,
+  tabsIndexPath,
+} = require('./workspace-tabs.cjs');
 
 const COOKIE_NAME = 'brainstorm_session';
 const MAX_REQUEST_BYTES = 64 * 1024;
@@ -213,6 +220,15 @@ function reviewPathId(requestUrl, relativePath) {
   return id.length <= 200 && EVIDENCE_RECORD_ID_PATTERN.test(id) ? id : '';
 }
 
+function tabPathId(requestUrl, relativePath) {
+  const prefix = 'api/tab/';
+  if (!relativePath.startsWith(prefix)) return null;
+  const id = relativePath.slice(prefix.length);
+  const keys = [...new Set(requestUrl.searchParams.keys())];
+  if (keys.some(key => key !== 'token') || requestUrl.searchParams.getAll('token').length > 1) return '';
+  return TAB_ID_PATTERN.test(id) ? id : '';
+}
+
 function createBrainstormServer(options = {}) {
   const host = options.host || '127.0.0.1';
   const port = options.port ?? 0;
@@ -297,6 +313,21 @@ function createBrainstormServer(options = {}) {
     return value == null ? WAITING_DOCUMENT : normalizeDocument(value);
   }
 
+  // Tab metadata only (no document bodies) keeps api/state small; a browser fetches a specific
+  // tab's full document on demand from api/tab/<id> only once the user actually clicks it.
+  function readWorkspaceTabs() {
+    const index = readWorkspaceTabsIndex(contentDir);
+    return {
+      activeTabId: index.active_tab_id,
+      tabs: index.tabs.map(tab => ({
+        id: tab.id,
+        label: tab.label,
+        workspace_kind: tab.workspace_kind,
+        updated_at: tab.updated_at,
+      })),
+    };
+  }
+
   function readState() {
     return withVisualStateLock(sessionDir, () => store.withSnapshotLock(session => {
       const durableSeq = session.events
@@ -305,6 +336,7 @@ function createBrainstormServer(options = {}) {
       const delivery = readDeliveryState(deliveryStatePath, durableSeq);
       return {
         screen: readScreen(),
+        ...readWorkspaceTabs(),
         session,
         deliveryEvidence: {
           connection: 'open',
@@ -511,6 +543,30 @@ function createBrainstormServer(options = {}) {
       }
       return;
     }
+    const tabId = tabPathId(requestUrl, relativePath);
+    if (tabId !== null) {
+      if (request.method !== 'GET') {
+        sendJson(response, 405, { error: 'workspace tab endpoint is read-only' }, { ...cookieHeaders, Allow: 'GET' });
+        return;
+      }
+      if (!tabId) {
+        sendJson(response, 400, { error: 'invalid workspace tab request' }, cookieHeaders);
+        return;
+      }
+      let document;
+      try {
+        document = readWorkspaceTabDocument(contentDir, tabId);
+      } catch {
+        sendJson(response, 422, { error: 'workspace tab is unavailable' }, cookieHeaders);
+        return;
+      }
+      if (document == null) {
+        sendJson(response, 404, { error: 'workspace tab was not found' }, cookieHeaders);
+        return;
+      }
+      sendJson(response, 200, { document: normalizeDocument(document) }, cookieHeaders);
+      return;
+    }
     if (request.method === 'GET' && relativePath === 'api/events') {
       response.writeHead(200, {
         ...SECURITY_HEADERS,
@@ -559,7 +615,25 @@ function createBrainstormServer(options = {}) {
               error.statusCode = 400;
               throw error;
             }
-            if (revision !== currentDocument.revision) {
+            // Feedback drafted while viewing a non-active Workspace Tab binds to that tab's
+            // document, so its Revision must be checked against the tab file — comparing it to
+            // the globally active document would reject every batch from a background tab as
+            // stale. Unknown or unreadable tab ids (pre-tab browsers, a deleted tab) fall back
+            // to the active-document check.
+            const tabId = typeof body?.screen?.tabId === 'string' && TAB_ID_PATTERN.test(body.screen.tabId)
+              ? body.screen.tabId
+              : null;
+            let boundDocument = currentDocument;
+            if (tabId) {
+              let tabDocument = null;
+              try {
+                tabDocument = readWorkspaceTabDocument(contentDir, tabId);
+              } catch {
+                tabDocument = null;
+              }
+              if (tabDocument != null) boundDocument = normalizeDocument(tabDocument);
+            }
+            if (revision !== boundDocument.revision) {
               const error = new Error('Feedback Batch Revision is stale and does not match the current Visual Document');
               error.statusCode = 409;
               throw error;
@@ -599,8 +673,10 @@ function createBrainstormServer(options = {}) {
   }
 
   function watcherSourceVersions() {
+    const tabFiles = listWorkspaceTabFiles(contentDir).sort().map(name => path.join(contentDir, name));
     return {
-      screen: [screenPath, workspacePath, formatPath].map(fileVersion).join('|'),
+      screen: [screenPath, workspacePath, formatPath, tabsIndexPath(contentDir), ...tabFiles]
+        .map(fileVersion).join('|'),
       session: [store.eventsFile, store.cursorFile].map(fileVersion).join('|'),
       delivery: fileVersion(deliveryStatePath),
     };
@@ -633,7 +709,9 @@ function createBrainstormServer(options = {}) {
 
   const contentWatcher = watch(contentDir, (_eventType, filename) => {
     // Some platforms report a null filename; fall through rather than miss the refresh.
-    if (filename != null && !['screen.json', 'workspace.json'].includes(String(filename))) return;
+    const name = filename == null ? null : String(filename);
+    const isTabFile = name != null && (name === 'tabs-index.json' || (name.startsWith('tab-') && name.endsWith('.json')));
+    if (name != null && !['screen.json', 'workspace.json'].includes(name) && !isTabFile) return;
     if (debounceTimers.has('screen')) clearTimeout(debounceTimers.get('screen'));
     debounceTimers.set('screen', setTimeout(() => {
       debounceTimers.delete('screen');

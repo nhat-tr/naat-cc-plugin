@@ -197,6 +197,8 @@ node <skill-dir>/scripts/visual-session.cjs drain
 
 Treat the returned message, annotations, choices, and screen identity as one user response. Update the Core Anchor when intent changed. Revise the active Visual Document (`workspace.json` for v2; `screen.json` only for v1 compatibility) if spatial feedback helps, and mirror a concise reply into browser history:
 
+**Resolve every annotation before answering it.** Each `annotations[].target` carries the clicked Component's full address: `componentId`, `label`, the Workspace Tab it lives on (`tabId`), its Frame (`frameId`, `frameTitle`), and — for Components that own Points — an `excerpt` of the claim texts. The batch-level `screen` block carries `tabId`, `tabLabel`, `diagramKind`, and the file to read (`content/tab-<tabId>.json`, or `content/workspace.json` when no tabs exist). Never answer from the `label` string alone: open the referenced tab document, find the Component by `componentId`, and quote what it actually claims back in your reply so the user can see you resolved the right element. For a chat-only note with no annotations, `screen.tabId`/`diagramKind` still tells you which document the user was looking at while typing — start resolution there. Batches recorded before this context existed (or from a v1 document) carry `null` for these fields; fall back to matching the `label` across every `content/tab-*.json`.
+
 ```bash
 node <skill-dir>/scripts/visual-session.cjs reply \
   --message-file <scratch-response-file>
@@ -214,7 +216,7 @@ node <skill-dir>/scripts/visual-session.cjs validate --draft <architecture-draft
 
 `wait` and `drain` include a `pending` count of unacknowledged batches (the returned turn included). After replying, `drain` again while `pending` was greater than 1 — the user queued another batch during your turn. Once every batch is acknowledged, `drain` returns `{"type":"empty"}` until the user submits again.
 
-When Publish replaces the active Visual Document, the browser diffs Revisions and marks exactly what moved: `new`/`updated` flags on changed Components and a strip listing removed ones. Reviewers also have keyboard shortcuts (`a` toggles annotate, `Esc` exits, `⌘/Ctrl+Enter` saves the Feedback Batch).
+When Publish replaces the active Visual Document, the browser diffs Revisions and marks exactly what moved: `new`/`updated` flags on changed Components and a strip listing removed ones. Reviewers also have keyboard shortcuts (`a` toggles annotate, `Esc` exits, `⌘/Ctrl+Enter` saves the Feedback Batch). On an Architecture Canvas or a UML graph diagram they can also drag any node to untangle a dense area — the enclosing boundary or package grows with it, edges re-route to the moved node, and "Restore the computed layout" in the camera toolbar puts everything back. UML edge labels drag independently, for the case where two labels land on each other. Dragging is a viewing aid: it never changes the Visual Document, so a Publish returns the diagram to its computed layout.
 
 ## The Visual Is a Normal Repo Artifact
 

@@ -134,6 +134,69 @@ test('SessionStore persists a structured browser turn and exposes it to the acti
   assert.equal(fs.readFileSync(path.join(stateDir, 'session.jsonl'), 'utf8').trim(), JSON.stringify(record));
 });
 
+test('SessionStore preserves Workspace Tab and Frame context on annotation targets and the screen stamp', t => {
+  const stateDir = createScratchDirectory(t, 'store-tab-context');
+  const store = new SessionStore(stateDir);
+
+  const record = store.appendBrowserTurn(browserTurn({
+    annotations: [{
+      id: 'note-context',
+      comment: 'Why is this state only reachable from Implementing?',
+      target: {
+        componentId: 'material-decision',
+        label: 'material decision / hard boundary (any active phase)',
+        tabId: 'uml-state-machine',
+        frameId: 'phases',
+        frameTitle: 'Pair v4 phases',
+        excerpt: 'material decision / hard boundary · point 1: reachable from any active phase',
+      },
+    }],
+    screen: {
+      id: 'uml',
+      file: 'tab-uml-state-machine.json',
+      revision: 'a1b2c3d4',
+      tabId: 'uml-state-machine',
+      tabLabel: 'State Machine',
+      diagramKind: 'state_machine',
+    },
+  }));
+
+  const target = record.annotations[0].target;
+  assert.equal(target.tabId, 'uml-state-machine');
+  assert.equal(target.frameId, 'phases');
+  assert.equal(target.frameTitle, 'Pair v4 phases');
+  assert.match(target.excerpt, /point 1/);
+  assert.equal(record.screen.tabId, 'uml-state-machine');
+  assert.equal(record.screen.tabLabel, 'State Machine');
+  assert.equal(record.screen.diagramKind, 'state_machine');
+
+  const legacy = store.appendBrowserTurn(browserTurn({ clientTurnId: 'legacy-turn' }));
+  assert.equal(legacy.annotations[0].target.tabId, null);
+  assert.equal(legacy.screen.tabId, null);
+});
+
+test('SessionStore bounds Workspace Tab and Frame context fields', t => {
+  const stateDir = createScratchDirectory(t, 'store-tab-context-bounds');
+  const store = new SessionStore(stateDir);
+
+  assert.throws(
+    () => store.appendBrowserTurn(browserTurn({
+      annotations: [{
+        id: 'note-oversized',
+        comment: 'excerpt too large',
+        target: { componentId: 'component', excerpt: 'e'.repeat(1_001) },
+      }],
+    })),
+    RangeError,
+  );
+  assert.throws(
+    () => store.appendBrowserTurn(browserTurn({
+      screen: { id: 'uml', file: 'workspace.json', revision: 'a1b2c3d4', tabLabel: 'l'.repeat(121) },
+    })),
+    RangeError,
+  );
+});
+
 test('SessionStore publishes a reply and acknowledges only the browser turn it answers', t => {
   const stateDir = createScratchDirectory(t, 'reply');
   let id = 0;

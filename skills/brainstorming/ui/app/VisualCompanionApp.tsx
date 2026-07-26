@@ -12,6 +12,7 @@ import {
 
 import { FeedbackPanel, type FeedbackComponentOption, type PresentedFeedbackThread } from "../shared/FeedbackPanel";
 import { PaneSeparator } from "../shared/PaneSeparator";
+import { WorkspaceTabBar } from "../shared/WorkspaceTabBar";
 import {
   type Annotation,
   type FeedbackDraft,
@@ -37,8 +38,10 @@ import {
 import {
   type DeliveryConnection,
   type DeliveryEvidence,
+  type WorkspaceTabMeta,
   connectVisualSessionEvents,
   deriveBrowserDeliveryState,
+  fetchWorkspaceTabDocument,
   loadVisualSessionState,
 } from "./session-client";
 import {
@@ -156,7 +159,28 @@ function workspaceFrames(value: VisualDocument): Array<{ id: string; title: stri
 }
 
 function componentOptions(value: VisualDocument): FeedbackComponentOption[] {
-  if (value.version === 2) return value.components.map(component => ({ id: component.id, label: component.label }));
+  if (value.version === 2) {
+    const frameTitles = new Map(value.frames.map(frame => [frame.id, frame.title]));
+    // Point Components (`<owner>-pN`) carry their claim text in the label; collecting them under
+    // their owner gives the owner's annotation target a content excerpt the agent can read
+    // without resolving the document.
+    const componentIds = new Set(value.components.map(component => component.id));
+    const pointLabels = new Map<string, string[]>();
+    for (const component of value.components) {
+      const match = /^(.+)-p\d+$/.exec(component.id);
+      if (!match || !componentIds.has(match[1]!)) continue;
+      const list = pointLabels.get(match[1]!) ?? [];
+      list.push(component.label);
+      pointLabels.set(match[1]!, list);
+    }
+    return value.components.map(component => ({
+      id: component.id,
+      label: component.label,
+      frameId: component.frame_id,
+      frameTitle: frameTitles.get(component.frame_id),
+      excerpt: pointLabels.get(component.id)?.join(" • ").slice(0, 1_000),
+    }));
+  }
   const result: FeedbackComponentOption[] = [];
   for (const section of value.sections) {
     const sectionId = typeof section.id === "string" ? section.id : "";
@@ -275,6 +299,19 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
+// A Component may be drawn as several elements — a sequence message owns both its arrow and
+// the activation bar it opens. Every one of them is clickable, but the selection outline and
+// the annotation badge belong on the primary element, so secondary hit-areas are skipped
+// unless they are all the workspace drew.
+function findComponentElement<T extends HTMLElement | SVGGraphicsElement>(
+  root: ParentNode,
+  componentId: string,
+): T | undefined {
+  const matches = [...root.querySelectorAll<T>("[data-brainstorm-id]")]
+    .filter(element => element.dataset.brainstormId === componentId && !element.closest("[hidden]"));
+  return matches.find(element => element.dataset.brainstormSecondary === undefined) ?? matches[0];
+}
+
 function subscribeToViewportResize(onChange: () => void): () => void {
   globalThis.window?.addEventListener("resize", onChange);
   return () => globalThis.window?.removeEventListener("resize", onChange);
@@ -385,8 +422,20 @@ export function VisualCompanionApp() {
   const [feedbackHistoryHeight, setFeedbackHistoryHeight] = useState(feedbackHistoryDefaults.defaultValue);
   const [feedbackCollapsed, setFeedbackCollapsedState] = useState(false);
   const [selectedRevisionIndex, setSelectedRevisionIndex] = useState<number>(() => revisionTimeline.length - 1);
+  const [tabs, setTabs] = useState<WorkspaceTabMeta[]>([]);
+  // "" is the not-yet-set sentinel (matches the activeFrameId convention above); it never
+  // collides with a real tab id since TAB_ID_PATTERN on the server requires at least one char.
+  const [viewingTabId, setViewingTabId] = useState<string>("");
   const previousDocument = useRef<VisualDocument | null>(null);
   const workspaceCanvas = useRef<HTMLElement>(null);
+  const tabDocumentCache = useRef<Map<string, VisualDocument>>(new Map());
+  // Shadows viewingTabId for reads inside loadState/refresh so those callbacks stay stable
+  // across tab switches — putting viewingTabId directly in their dependency array would
+  // recreate `refresh` on every click and tear down/reconnect the SSE subscription.
+  const viewingTabIdRef = useRef(viewingTabId);
+  useEffect(() => {
+    viewingTabIdRef.current = viewingTabId;
+  }, [viewingTabId]);
 
   const identity = documentValue?.version === 2
     ? `${documentValue.work_id}:${location.origin}${basePath}`
@@ -456,11 +505,7 @@ export function VisualCompanionApp() {
       root.querySelectorAll<HTMLElement>("[data-annotation-selected]")
         .forEach(element => element.removeAttribute("data-annotation-selected"));
       if (!presentedAnnotationComponentId) return;
-      const selected = [...root.querySelectorAll<HTMLElement>("[data-brainstorm-id]")]
-        .find(element => (
-          element.dataset.brainstormId === presentedAnnotationComponentId
-          && !element.closest("[hidden]")
-        ));
+      const selected = findComponentElement<HTMLElement>(root, presentedAnnotationComponentId);
       selected?.setAttribute("data-annotation-selected", "true");
     };
     applySelection();
@@ -504,8 +549,7 @@ export function VisualCompanionApp() {
     const componentIds = new Set([...submittedByComponent.keys(), ...pendingByComponent.keys()]);
 
     for (const componentId of componentIds) {
-      const target = [...root.querySelectorAll<HTMLElement | SVGGraphicsElement>("[data-brainstorm-id]")]
-        .find(element => element.dataset.brainstormId === componentId && !element.closest("[hidden]"));
+      const target = findComponentElement<HTMLElement | SVGGraphicsElement>(root, componentId);
       if (!target) continue;
       const pending = pendingByComponent.get(componentId) ?? [];
       const combined = [...(submittedByComponent.get(componentId) ?? []), ...pending];
@@ -555,12 +599,26 @@ export function VisualCompanionApp() {
   const loadState = useCallback(async (): Promise<void> => {
     if (embedded) return;
     const state = await loadVisualSessionState(basePath);
-    applyDocument(asVisualDocument(state.screen));
+    setTabs(state.tabs);
+    // "" mirrors the null "no active tab" case (see the viewingTabId sentinel note above).
+    const activeTabKey = state.activeTabId ?? "";
+    const activeDocument = asVisualDocument(state.screen);
+    // Always cache the tab the agent just published, even when the user is looking elsewhere,
+    // so that switching to it later is instant and never re-fetches stale content.
+    tabDocumentCache.current.set(activeTabKey, activeDocument);
     setSession(asSessionSnapshot(state.session));
     setDeliveryEvidence(current => ({
       ...state.deliveryEvidence,
       connection: current.connection,
     }));
+    // Only follow the update onto the currently displayed document when the user hasn't
+    // navigated to a different tab (or hasn't picked one yet) — otherwise leave documentValue
+    // untouched so publishing a second tab never yanks the view out from under the reviewer.
+    if (!viewingTabIdRef.current || viewingTabIdRef.current === activeTabKey) {
+      applyDocument(activeDocument);
+      viewingTabIdRef.current = activeTabKey;
+      setViewingTabId(activeTabKey);
+    }
   }, [applyDocument, basePath, embedded]);
 
   const refresh = useCallback((): void => {
@@ -693,11 +751,16 @@ export function VisualCompanionApp() {
           message: draft.message.trim(),
           annotations: draft.annotations,
           choices: draft.choices,
-          screen: {
-            id: documentValue.version === 2 ? documentValue.workspace_kind : "screen",
-            file: documentValue.version === 2 ? "workspace.json" : "screen.json",
-            revision: documentRevision(documentValue),
-          },
+          screen: documentValue.version === 2
+            ? {
+              id: documentValue.workspace_kind,
+              file: viewingTabId ? `tab-${viewingTabId}.json` : "workspace.json",
+              revision: documentRevision(documentValue),
+              tabId: viewingTabId || null,
+              tabLabel: tabs.find(tab => tab.id === viewingTabId)?.label ?? null,
+              diagramKind: typeof documentValue.content.diagram_kind === "string" ? documentValue.content.diagram_kind : null,
+            }
+            : { id: "screen", file: "screen.json", revision: documentRevision(documentValue) },
         }),
       });
       if (!response.ok) throw new Error(await readResponseError(response, `feedback request failed: ${response.status}`));
@@ -787,6 +850,24 @@ export function VisualCompanionApp() {
     previousDocument.current = snapshot.document;
     setDocumentValue(snapshot.document);
     setSelectedRevisionIndex(index);
+  };
+  const selectWorkspaceTab = (tabId: string): void => {
+    if (tabId === viewingTabId) return;
+    setViewingTabId(tabId);
+    const cached = tabDocumentCache.current.get(tabId);
+    if (cached) {
+      applyDocument(cached);
+      return;
+    }
+    void (async () => {
+      try {
+        const validated = asVisualDocument(await fetchWorkspaceTabDocument(basePath, tabId));
+        tabDocumentCache.current.set(tabId, validated);
+        applyDocument(validated);
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : "Workspace tab could not be loaded");
+      }
+    })();
   };
   const latestFeedbackSeq = session.events.reduce<number | null>((latest, event) => (
     event.type === "user.turn" && Number.isInteger(event.seq)
@@ -892,6 +973,10 @@ export function VisualCompanionApp() {
         </div>
       </header>
 
+      {tabs.length > 1 ? (
+        <WorkspaceTabBar activeTabId={viewingTabId} onSelect={selectWorkspaceTab} tabs={tabs} />
+      ) : null}
+
       <div
         className="workspace"
         data-density={density}
@@ -954,6 +1039,7 @@ export function VisualCompanionApp() {
           readOnly={Boolean(readOnly)}
           submitting={submitting}
           threads={presentedThreads}
+          viewingTabId={viewingTabId}
         />
       </div>
     </div>

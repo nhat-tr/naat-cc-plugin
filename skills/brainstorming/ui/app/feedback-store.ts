@@ -27,6 +27,10 @@ export interface AnnotationTarget {
   componentId: string;
   label: string;
   selector?: string | null;
+  tabId?: string | null;
+  frameId?: string | null;
+  frameTitle?: string | null;
+  excerpt?: string | null;
 }
 
 export interface Annotation {
@@ -58,7 +62,7 @@ export interface SessionEvent {
   message?: string;
   annotations?: Annotation[];
   choices?: Choice[];
-  screen?: { revision?: string };
+  screen?: { revision?: string; tabId?: string | null; tabLabel?: string | null; diagramKind?: string | null };
   replyTo?: number;
 }
 

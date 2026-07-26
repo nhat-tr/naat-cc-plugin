@@ -42,10 +42,24 @@ function normalizeTarget(value) {
   const componentId = optionalText(value.componentId, 200, 'componentId');
   const selector = optionalText(value.selector, 1_000, 'selector');
   const label = optionalText(value.label, 500, 'target label');
+  // Workspace Tab and Frame context makes the drained record self-describing for an agent
+  // that never authored the document (a cold conversation adopting a handover).
+  const tabId = optionalText(value.tabId, 64, 'target tabId');
+  const frameId = optionalText(value.frameId, 200, 'target frameId');
+  const frameTitle = optionalText(value.frameTitle, 200, 'target frameTitle');
+  const excerpt = optionalText(value.excerpt, 1_000, 'target excerpt');
   if (!componentId && !selector) {
     throw new TypeError('annotation target must include componentId or selector');
   }
-  return { componentId: componentId || null, selector: selector || null, label: label || componentId || selector };
+  return {
+    componentId: componentId || null,
+    selector: selector || null,
+    label: label || componentId || selector,
+    tabId: tabId || null,
+    frameId: frameId || null,
+    frameTitle: frameTitle || null,
+    excerpt: excerpt || null,
+  };
 }
 
 function normalizeAnnotations(value) {
@@ -93,8 +107,18 @@ function normalizeScreen(value) {
   const id = optionalText(value.id, 200, 'screen id');
   const file = optionalText(value.file, 500, 'screen file');
   const revision = optionalText(value.revision, 200, 'screen revision');
-  return id || file || revision
-    ? { id: id || null, file: file || null, revision: revision || null }
+  const tabId = optionalText(value.tabId, 64, 'screen tabId');
+  const tabLabel = optionalText(value.tabLabel, 120, 'screen tabLabel');
+  const diagramKind = optionalText(value.diagramKind, 40, 'screen diagramKind');
+  return id || file || revision || tabId
+    ? {
+      id: id || null,
+      file: file || null,
+      revision: revision || null,
+      tabId: tabId || null,
+      tabLabel: tabLabel || null,
+      diagramKind: diagramKind || null,
+    }
     : null;
 }
 

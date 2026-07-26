@@ -9,10 +9,19 @@ export interface DeliveryEvidence {
   acknowledgedThrough: number;
 }
 
+export interface WorkspaceTabMeta {
+  id: string;
+  label: string;
+  workspace_kind: string;
+  updated_at: string;
+}
+
 export interface VisualSessionState {
   screen: unknown;
   session: unknown;
   deliveryEvidence: DeliveryEvidence;
+  tabs: WorkspaceTabMeta[];
+  activeTabId: string | null;
 }
 
 interface SessionEventHandlers {
@@ -49,6 +58,34 @@ function normalizeDeliveryEvidence(value: unknown): DeliveryEvidence {
   };
 }
 
+function normalizeWorkspaceTabMeta(value: unknown): WorkspaceTabMeta {
+  if (!isRecord(value)) throw new TypeError("workspace tab must be an object");
+  if (typeof value.id !== "string" || !value.id) throw new TypeError("workspace tab id must be a non-empty string");
+  if (typeof value.label !== "string") throw new TypeError("workspace tab label must be a string");
+  if (typeof value.workspace_kind !== "string") throw new TypeError("workspace tab workspace_kind must be a string");
+  if (typeof value.updated_at !== "string") throw new TypeError("workspace tab updated_at must be a string");
+  return {
+    id: value.id,
+    label: value.label,
+    workspace_kind: value.workspace_kind,
+    updated_at: value.updated_at,
+  };
+}
+
+// Older exported/embedded snapshots captured before workspace tabs shipped won't include
+// `tabs`/`activeTabId` at all, so both are treated as optional/defaultable on the wire.
+function normalizeWorkspaceTabs(value: unknown): WorkspaceTabMeta[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new TypeError("tabs must be an array");
+  return value.map(normalizeWorkspaceTabMeta);
+}
+
+function normalizeActiveTabId(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") throw new TypeError("activeTabId must be a string or null");
+  return value;
+}
+
 export function deriveBrowserDeliveryState(evidence: DeliveryEvidence): BrowserDeliveryState {
   if (evidence.connection === "closed") return "closed";
   if (evidence.connection === "reconnecting") return "reconnecting";
@@ -80,7 +117,28 @@ export async function loadVisualSessionState(basePath: string): Promise<VisualSe
     screen: value.screen,
     session: value.session,
     deliveryEvidence: normalizeDeliveryEvidence(value.deliveryEvidence),
+    tabs: normalizeWorkspaceTabs(value.tabs),
+    activeTabId: normalizeActiveTabId(value.activeTabId),
   };
+}
+
+export async function fetchWorkspaceTabDocument(basePath: string, tabId: string): Promise<unknown> {
+  const response = await fetch(`${basePath}api/tab/${encodeURIComponent(tabId)}`);
+  if (!response.ok) {
+    let message = `Workspace tab request failed: ${response.status}`;
+    try {
+      const body = await response.json() as unknown;
+      if (isRecord(body) && typeof body.error === "string" && body.error) message = body.error;
+    } catch {
+      // Keep the status-based message when an error response is not JSON.
+    }
+    throw new Error(message);
+  }
+  const value = await response.json() as unknown;
+  if (!isRecord(value) || !("document" in value)) {
+    throw new TypeError("Workspace tab response is invalid");
+  }
+  return value.document;
 }
 
 export function connectVisualSessionEvents(basePath: string, handlers: SessionEventHandlers): () => void {
