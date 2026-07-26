@@ -14,8 +14,12 @@ const MAX_EXPLICIT_CORE_ANCHOR_BYTES = 2600;
 const MAX_EXPLICIT_ANCHOR_DIRECTION_BYTES = 640;
 const MAX_EXPLICIT_ANCHOR_DIRECTIONS = 2;
 const SYSTEM_INJECTED_BLOCK = /(?:<permissions instructions>|<environment_context>|<system-reminder>|<local-command|<command-name>|<user-prompt-submit-hook>)/iu;
-const CORE_ANCHOR_HEADING = /(?:^|\n)\s*(?:#{1,6}\s*)?\*{0,2}Core Anchor\*{0,2}\s*:?\s*(?:\n|$)/iu;
-const CORE_ANCHOR_SECTIONS = ['Purpose', 'Rejection Criteria', 'Contrasts'];
+const CORE_ANCHOR_HEADING = /(?:^|\n)\s*(?:#{1,6}\s*)?\*{0,2}Core Anchor(?:\s+for\b[^\n:]*)?\*{0,2}\s*:?\s*(?:\n|$)/iu;
+const CORE_ANCHOR_SECTION_GROUPS = [
+  ['Purpose', 'Goal'],
+  ['Rejection Criteria', 'Constraints', 'Evidence Rule'],
+  ['Contrasts', 'Non-goals', 'Non goals'],
+];
 
 function truncateUtf8(value, maximum) {
   let result = '';
@@ -208,22 +212,34 @@ function explicitCoreAnchorFrom(messages) {
     const heading = message.text.match(CORE_ANCHOR_HEADING);
     if (!heading) continue;
     const candidate = message.text.slice((heading.index || 0) + (heading[0].startsWith('\n') ? 1 : 0));
-    const hasAllSections = CORE_ANCHOR_SECTIONS.every(section => new RegExp(
-      `(?:^|\\n)\\s*(?:#{1,6}\\s*)?\\*{0,2}${section}\\*{0,2}\\s*:?\\s*(?:\\n|$)`,
+    const hasAllSections = CORE_ANCHOR_SECTION_GROUPS.every(group => group.some(section => new RegExp(
+      `(?:^|\\n)\\s*(?:[-*]\\s*)?(?:#{1,6}\\s*)?\\*{0,2}${section}\\*{0,2}\\s*(?::|\\n|$)`,
       'iu',
-    ).test(candidate));
+    ).test(candidate)));
     if (hasAllSections) return truncateUtf8(candidate, MAX_EXPLICIT_CORE_ANCHOR_BYTES).trim();
   }
   return '';
 }
 
+function isPathOnlyUserMessage(message) {
+  const value = String(message?.text || '').trim();
+  if (!value || /\s/u.test(value)) return false;
+  return value.endsWith('/') ||
+    value.startsWith('./') ||
+    value.startsWith('../') ||
+    value.startsWith('~/') ||
+    value.includes('/');
+}
+
 function coreAnchorFrom(messages) {
   const userMessages = messages.filter(message => message.role === 'user');
-  const initial = userMessages[0];
+  const semanticUserMessages = userMessages.filter(message => !isPathOnlyUserMessage(message));
+  const anchorUserMessages = semanticUserMessages.length ? semanticUserMessages : userMessages;
+  const initial = anchorUserMessages[0];
   if (!initial) return '';
   const explicit = explicitCoreAnchorFrom(messages);
   if (explicit) {
-    const recent = userMessages
+    const recent = anchorUserMessages
       .slice(-MAX_EXPLICIT_ANCHOR_DIRECTIONS)
       .map(message => truncateUtf8(message.text, MAX_EXPLICIT_ANCHOR_DIRECTION_BYTES));
     return truncateUtf8([
@@ -231,7 +247,7 @@ function coreAnchorFrom(messages) {
       `Recent explicit user direction:\n${recent.map(text => `- ${text}`).join('\n')}`,
     ].join('\n\n'), MAX_MESSAGE_BYTES).trim();
   }
-  const recent = userMessages
+  const recent = anchorUserMessages
     .slice(1)
     .slice(-MAX_RECENT_USER_DIRECTIONS)
     .map(message => truncateUtf8(message.text, MAX_RECENT_DIRECTION_BYTES));
@@ -245,6 +261,17 @@ function checkpointFromMessages(messages, artifacts) {
   const userMessages = messages.filter(message => message.role === 'user');
   const latestAssistant = assistantMessages.at(-1)?.text || '';
   const latestUser = userMessages.at(-1)?.text || '';
+  const latestMessage = messages.at(-1);
+  const assistantHasLatestState = latestMessage?.role === 'assistant' && latestAssistant;
+  let nextAction = 'Review the recovered checkpoint before continuing.';
+  if (assistantHasLatestState) {
+    nextAction = [
+      `Continue from the latest recorded assistant state: ${latestAssistant}`,
+      ...(latestUser ? [`Latest explicit user direction being handled: ${latestUser}`] : []),
+    ].join('\n');
+  } else if (latestUser) {
+    nextAction = `Continue from the latest explicit user direction: ${latestUser}`;
+  }
   const findings = assistantMessages.slice(-MAX_ASSISTANT_FINDINGS).map(message => ({
     finding: message.text,
     reference: message.timestamp
@@ -257,13 +284,13 @@ function checkpointFromMessages(messages, artifacts) {
     findings,
     confirmedChoices: [],
     rejectedAlternatives: [],
-    currentDirection: latestAssistant
+    currentDirection: assistantHasLatestState
       ? `Latest recorded assistant state:\n${latestAssistant}`
       : `Latest explicit user direction:\n${latestUser}`,
-    unresolvedDecisions: [],
-    nextAction: latestUser
-      ? `Continue from the latest explicit user direction: ${latestUser}`
-      : 'Review the recovered checkpoint before continuing.',
+    unresolvedDecisions: latestMessage?.role === 'user' && latestUser
+      ? [`Latest unanswered user direction: ${latestUser}`]
+      : [],
+    nextAction,
     artifacts,
   };
 }

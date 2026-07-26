@@ -51,6 +51,9 @@ const SCHEMA_PATH = path.join(
   "schemas",
   "plan-review-result.json",
 );
+const DEFAULT_MAX_PLAN_REVIEWS = 2;
+const TWO_TURN_APPROVAL_REASON =
+  "Pair's two-turn plan-review policy accepted this exact plan after the second reviewer verdict; the coordinator must resolve the retained findings during implementation.";
 
 function fail(message) {
   throw new Error(message);
@@ -68,7 +71,7 @@ function parseArgs(argv) {
     reason: null,
     maxPlanReviews: process.env.PAIR_MAX_PLAN_REVIEWS
       ? Number(process.env.PAIR_MAX_PLAN_REVIEWS)
-      : null,
+      : DEFAULT_MAX_PLAN_REVIEWS,
   };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
@@ -747,6 +750,9 @@ function writePlanReviewSummary(root, workId) {
       `- **Tokens:** input ${usage.inputTokens ?? "unknown"}, cached ${usage.cachedInputTokens ?? "unknown"}, output ${usage.outputTokens ?? "unknown"}, reasoning ${usage.reasoningTokens ?? "unknown"}`,
       `- **Resolution patch:** ${review.resolution_patch || `.pair/plan.md at \`${review.planDigest || "unknown"}\``}`,
       `- **Final reason:** ${review.reason || review.summary || "not recorded"}`,
+      ...(review.approval_reason
+        ? [`- **Approval reason:** ${review.approval_reason}`]
+        : []),
       "",
       "### Findings and resolutions",
       "",
@@ -757,7 +763,9 @@ function writePlanReviewSummary(root, workId) {
     } else {
       for (const [findingIndex, finding] of findings.entries()) {
         const findingId = finding.id || `${finding.severity || "finding"}-${findingIndex + 1}`;
-        const resolution = laterApproval
+        const resolution = review.classification === "human-override"
+          ? "accepted at the plan-review cap; retained for coordinator implementation"
+          : laterApproval
           ? `closed by Review ${reviews.indexOf(laterApproval) + 1} on digest \`${laterApproval.planDigest}\``
           : "open; revise the plan and run closure review";
         lines.push(
@@ -795,7 +803,7 @@ function recordPlanApproval(workFile, digest, reviewer) {
   return work.plan;
 }
 
-function recordManualPlanApproval(root, workFile, digest, reason) {
+function recordManualPlanApproval(root, workFile, digest, reason, reviewedVerdict = null) {
   const rawReason = String(reason || "").trim();
   const normalizedReason = redactString(rawReason);
   if (normalizedReason.length < 10) {
@@ -818,15 +826,24 @@ function recordManualPlanApproval(root, workFile, digest, reason) {
 
   const pairDirectory = path.join(root, ".pair");
   fs.mkdirSync(pairDirectory, { recursive: true });
+  const preservedReview = reviewedVerdict?.review && reviewIsSchemaShaped(reviewedVerdict.review)
+    ? sanitizeValue(reviewedVerdict.review)
+    : null;
+  const reviewer = preservedReview
+    ? String(reviewedVerdict.reviewer || "unknown")
+    : "human/user";
   const evidence = {
     schema: 1,
     approval_kind: "human-override",
     plan_digest: digest,
-    reviewer: "human/user",
+    reviewer,
+    ...(preservedReview || {
+      verdict: "approve",
+      summary: "The user manually approved this exact plan digest and accepted the stated residual risk.",
+      findings: [],
+    }),
+    approved_by: "human/user",
     reason: normalizedReason,
-    verdict: "approve",
-    summary: "The user manually approved this exact plan digest and accepted the stated residual risk.",
-    findings: [],
   };
   fs.writeFileSync(
     path.join(pairDirectory, "plan-review.json"),
@@ -835,7 +852,7 @@ function recordManualPlanApproval(root, workFile, digest, reason) {
   );
   fs.writeFileSync(
     path.join(pairDirectory, "plan-review.md"),
-    redactString(`# Pair v4 Plan Approval\n\nDigest: \`${digest}\`\n\nApproval: \`human-override\`\n\nReviewer: \`human/user\`\n\nReason: ${normalizedReason}\n`),
+    redactString(`# Pair v4 Plan Approval\n\nDigest: \`${digest}\`\n\nApproval: \`human-override\`\n\nReviewer: \`human/user\`\n\nPlan reviewer: \`${reviewer}\`\n\nReason: ${normalizedReason}\n\n## Retained plan review\n\nSummary: ${evidence.summary}\n\nFindings:\n\n${evidence.findings.length === 0 ? "- None." : evidence.findings.map((finding) => `- **${finding.severity} ${finding.category} (${finding.origin})** — ${finding.title}\n  - Failure: ${finding.failure_scenario}\n  - Fix: ${finding.suggestion}`).join("\n")}\n`),
     { mode: 0o600 },
   );
   return work.plan;
@@ -902,22 +919,30 @@ async function main() {
   }
   const priorReviewFile = path.join(root, ".pair", "plan-review.json");
   const priorReviewCandidate = readJsonIfPresent(priorReviewFile);
-  if (
+  const independentApproval =
     work.plan?.sha256 === digest &&
     String(work.plan.independent_review || "").startsWith(
       `no-blockers:${digest}:`,
     ) &&
     priorReviewCandidate?.plan_digest === digest &&
-    reviewIsClean(priorReviewCandidate)
-  ) {
+    reviewIsClean(priorReviewCandidate);
+  const humanOverride =
+    work.plan?.sha256 === digest &&
+    String(work.plan.independent_review || "").startsWith(
+      `human-override:${digest}:user:`,
+    ) &&
+    priorReviewCandidate?.plan_digest === digest &&
+    priorReviewCandidate?.approval_kind === "human-override";
+  if (independentApproval || humanOverride) {
     console.log(
-      `pair-plan-challenge: current digest ${digest} is already independently approved; no reviewer started`,
+      `pair-plan-challenge: current digest ${digest} is already ${humanOverride ? "approved with retained findings" : "independently approved"}; no reviewer started`,
     );
     return;
   }
   const planReviewCount = () => readPairEvents(root).filter((record) =>
     record.event === "plan-review.completed" &&
-    record.workId === work.work_id,
+    record.workId === work.work_id &&
+    record.classification !== "human-override",
   ).length;
   if (options.maxPlanReviews !== null && (!Number.isInteger(options.maxPlanReviews) || options.maxPlanReviews < 1)) {
     fail("--max-plan-reviews must be a positive integer");
@@ -978,6 +1003,7 @@ async function main() {
         `Work ${work.work_id} reached its ${options.maxPlanReviews}-verdict plan-review budget across plan digests; no additional reviewer was started`,
       );
     }
+    const challengeNumber = planReviewCount() + 1;
     assertPlanDigest(planPath, digest);
     const runtime = runtimes[index];
     const externalSandbox = runtime === "codex" && isNestedCodexSandbox(process.env);
@@ -997,6 +1023,10 @@ async function main() {
       externalSandbox,
       workId: work.work_id,
     });
+    const approveWithRetainedFindings =
+      attempt.classification.kind === "plan-findings" &&
+      options.maxPlanReviews !== null &&
+      challengeNumber === options.maxPlanReviews;
     appendPairEvent(root, {
       event: "plan-review.completed",
       workId: work.work_id,
@@ -1005,8 +1035,14 @@ async function main() {
       reviewerSessionId: readReviewSession(root, runtime)?.session_id || null,
       model,
       effort: options.effort,
-      classification: attempt.classification.kind,
+      classification: approveWithRetainedFindings
+        ? "human-override"
+        : attempt.classification.kind,
+      review_classification: attempt.classification.kind,
       reason: attempt.classification.reason,
+      approval_reason: approveWithRetainedFindings
+        ? TWO_TURN_APPROVAL_REASON
+        : null,
       summary: attempt.review?.summary || null,
       findings: attempt.review?.findings || [],
       usage: attempt.usage,
@@ -1021,6 +1057,18 @@ async function main() {
       fail(
         `challenge interrupted; digest ${digest} unchanged; attempts preserved at ${runDirectory}`,
       );
+    }
+
+    if (approveWithRetainedFindings) {
+      recordManualPlanApproval(root, workFile, digest, TWO_TURN_APPROVAL_REASON, {
+        reviewer: attempt.reviewer,
+        review: attempt.review,
+      });
+      validateWorkDirectory(workDirectory);
+      console.log(
+        `pair-plan-challenge: approved ${digest} for Work ${work.work_id} after ${challengeNumber} plan-review verdicts; retained findings are required coordinator work`,
+      );
+      return;
     }
 
     if (attempt.classification.kind === "environment-failure") {

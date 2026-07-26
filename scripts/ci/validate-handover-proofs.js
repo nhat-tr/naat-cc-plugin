@@ -29,7 +29,7 @@ const proofs = [
     clauses: [
       [files.state, 'only a completed Stop advances activity and Pair Stop checkpoints final repository authority'],
       [files.brainstorm, 'brainstorming registers the documented Claude identity and refreshes a bounded semantic checkpoint'],
-      [files.launch, 'brainstorming CLI adoption prints the recovered bounded checkpoint without secret or transcript fields'],
+      [files.launch, 'brainstorming CLI adoption redacts secrets inside accepted checkpoint fields'],
       [files.state, 'sealed checkpoint bytes stay within the 32 KiB persistence limit'],
     ],
   },
@@ -109,7 +109,7 @@ const proofs = [
       [files.gate, 'submitted prompt is never persisted'],
       [files.gate, 'PreCompact and PostCompact cannot bypass freshness and compact summary is never persisted'],
       [files.launch, 'known event with an extra secret field makes the handover fail closed before launch or adoption'],
-      [files.launch, 'brainstorming CLI adoption prints the recovered bounded checkpoint without secret or transcript fields'],
+      [files.launch, 'brainstorming CLI adoption redacts secrets inside accepted checkpoint fields'],
       [files.modes, 'Pair-authored logs, patches, reviews, reports, and status redact credential canaries'],
     ],
   },

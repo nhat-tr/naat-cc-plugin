@@ -151,7 +151,8 @@ test('Pair v4 runbook is visible, resumable, repository-local, and portable acro
   assert.match(hooks, /pair-owner\.sh/);
   assert.match(ownerAdapter, /native-post-tool-owner-capture/);
   assert.match(skill, /Resume Checkpoint capped at 8,192 UTF-8 bytes/i);
-  assert.match(skill, /no default two-interruption, two-attempt, two-plan-review, or two-final-review stops/i);
+  assert.match(skill, /challenges a plan at most twice across plan digests by default/i);
+  assert.match(skill, /retains the reviewer findings.*visible coordinator/i);
   assert.match(skill, /omit raw prompts, transcripts, private reasoning/i);
   assert.match(skill, /--legacy-v3/);
   assert.doesNotMatch(skill, /AskUserQuestion/);
@@ -203,6 +204,8 @@ test('dedicated handover help teaches the automatic path and optional manual qua
   assert.match(result.stdout, /Manual quality upgrade \(optional\)/iu);
   assert.match(result.stdout, /"coreAnchor"/u);
   assert.match(result.stdout, /pair-loop --conversation-checkpoint < checkpoint\.json/iu);
+  assert.match(result.stdout, /reject interactive TTY stdin/iu);
+  assert.match(result.stdout, /here-document/iu);
   assert.match(result.stdout, /pair-loop --handover-now/iu);
   assert.match(result.stdout, /pair-loop --disable-general-handover/iu);
 });
@@ -215,6 +218,7 @@ test('README provides a copyable Agent Conversation Handover quick start', () =>
   assert.match(readme, /exactly 60 minutes idle/iu);
   assert.match(readme, /pair-loop --freshness-status/iu);
   assert.match(readme, /pair-loop --conversation-checkpoint < checkpoint\.json/iu);
+  assert.match(readme, /reject interactive TTY stdin/iu);
 });
 
 test('new Decision Record supersedes DR-003 without mutation', () => {

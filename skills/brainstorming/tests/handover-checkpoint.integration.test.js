@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -15,6 +16,47 @@ function fixture(t) {
   childProcess.spawnSync('git', ['init', '-q'], { cwd: root });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
+}
+
+function waitForDeadTmuxPane(socket, paneId, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  let status = null;
+  while (Date.now() < deadline) {
+    status = childProcess.spawnSync('tmux', [
+      '-S', socket, 'display-message', '-p', '-t', paneId, '#{pane_dead}\t#{pane_dead_status}',
+    ], { encoding: 'utf8' });
+    if (status.status === 0 && status.stdout.startsWith('1\t')) return status.stdout.trim().split('\t');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+  return status?.stdout?.trim().split('\t') || [];
+}
+
+function runCheckpointInTmux(t, root, checkpointFlag) {
+  const socket = path.join(path.dirname(root), `checkpoint-tty-${crypto.randomUUID().slice(0, 8)}.sock`);
+  const session = 'checkpoint-input';
+  t.after(() => {
+    childProcess.spawnSync('tmux', ['-S', socket, 'kill-server']);
+    fs.rmSync(socket, { force: true });
+  });
+  const created = childProcess.spawnSync('tmux', ['-S', socket, 'new-session', '-d', '-s', session, '-c', root], { encoding: 'utf8' });
+  assert.equal(created.status, 0, created.stderr);
+  const listed = childProcess.spawnSync('tmux', ['-S', socket, 'list-panes', '-t', `=${session}`, '-F', '#{pane_id}'], { encoding: 'utf8' });
+  assert.equal(listed.status, 0, listed.stderr);
+  const paneId = listed.stdout.trim();
+  assert.match(paneId, /^%\d+$/u);
+  const retained = childProcess.spawnSync('tmux', ['-S', socket, 'set-option', '-w', '-t', paneId, 'remain-on-exit', 'on'], { encoding: 'utf8' });
+  assert.equal(retained.status, 0, retained.stderr);
+  const launched = childProcess.spawnSync('tmux', [
+    '-S', socket, 'respawn-pane', '-k', '-t', paneId,
+    '-c', root,
+    '-e', 'CODEX_THREAD_ID=',
+    '-e', `CLAUDE_CODE_SESSION_ID=claude-${session}`,
+    process.execPath, pairTask, checkpointFlag, '--runtime', 'claude',
+  ], { encoding: 'utf8' });
+  assert.equal(launched.status, 0, launched.stderr);
+  const [dead, exitStatus] = waitForDeadTmuxPane(socket, paneId);
+  const captured = childProcess.spawnSync('tmux', ['-S', socket, 'capture-pane', '-p', '-S', '-', '-E', '-', '-t', paneId], { encoding: 'utf8' });
+  return { dead, exitStatus, output: captured.stdout };
 }
 
 function checkpoint(root, nextAction) {
@@ -37,8 +79,6 @@ function checkpoint(root, nextAction) {
       currentDirection: 'Keep the checkpoint semantic and bounded.',
       unresolvedDecisions: ['None.'],
       nextAction,
-      prompt: 'RAW_BRAINSTORM_PROMPT_MUST_NOT_PERSIST',
-      transcript: 'RAW_BRAINSTORM_TRANSCRIPT_MUST_NOT_PERSIST',
     })}\n`,
   });
 }
@@ -59,8 +99,119 @@ test('brainstorming registers the documented Claude identity and refreshes a bou
   assert.equal(conversations[0].checkpoint.core_anchor, 'Design deterministic cold-session handover.');
   assert.equal(conversations[0].checkpoint.findings[0].finding, 'The installed Claude runtime exposes the same native identity used by hooks.');
   assert.equal(conversations[0].checkpoint.next_action, 'Write the approved specification.');
-  const persisted = fs.readFileSync(handover.handoverPaths(root).registry, 'utf8');
-  assert.doesNotMatch(persisted, /RAW_BRAINSTORM_(?:PROMPT|TRANSCRIPT)_MUST_NOT_PERSIST/u);
+});
+
+test('brainstorm checkpoint rejects unknown top-level and nested fields before registration', t => {
+  const cases = [
+    {
+      name: 'top-level artifactDigests',
+      checkpoint: {
+        coreAnchor: 'Preserve the approved direction.',
+        currentDirection: 'Validate strict checkpoint input.',
+        nextAction: 'Reject the unsupported field.',
+        artifactDigests: ['docs/spec.md sha256:deadbeef'],
+      },
+      expected: /unsupported.*artifactDigests/iu,
+    },
+    {
+      name: 'live top-level artifact_digests',
+      checkpoint: {
+        coreAnchor: 'Preserve the approved direction.',
+        currentDirection: 'Validate strict checkpoint input.',
+        nextAction: 'Reject the unsupported field.',
+        artifact_digests: ['docs/spec.md sha256:deadbeef'],
+      },
+      expected: /unsupported.*artifact_digests/iu,
+    },
+    {
+      name: 'nested finding evidence',
+      checkpoint: {
+        coreAnchor: 'Preserve the approved direction.',
+        findings: [{ finding: 'Observed behavior.', evidence: ['src/file.js:10'] }],
+        currentDirection: 'Validate strict checkpoint input.',
+        nextAction: 'Reject the unsupported field.',
+      },
+      expected: /unsupported.*evidence/iu,
+    },
+  ];
+
+  for (const candidate of cases) {
+    const root = fixture(t);
+    const env = { ...process.env, CLAUDE_CODE_SESSION_ID: `strict-${candidate.name.replaceAll(' ', '-')}` };
+    delete env.CODEX_THREAD_ID;
+    const result = childProcess.spawnSync(process.execPath, [pairTask, '--brainstorm-checkpoint', '--runtime', 'claude'], {
+      cwd: root,
+      encoding: 'utf8',
+      env,
+      input: `${JSON.stringify(candidate.checkpoint)}\n`,
+    });
+
+    assert.notEqual(result.status, 0, candidate.name);
+    assert.match(result.stderr, candidate.expected);
+    assert.equal(fs.existsSync(path.join(root, '.pair')), false, `${candidate.name} must not register or mutate state`);
+  }
+});
+
+test('brainstorm checkpoint rejects the live object-shaped Core Anchor before registration', t => {
+  const root = fixture(t);
+  const env = { ...process.env, CLAUDE_CODE_SESSION_ID: 'strict-live-core-anchor' };
+  delete env.CODEX_THREAD_ID;
+  const result = childProcess.spawnSync(process.execPath, [pairTask, '--brainstorm-checkpoint', '--runtime', 'claude'], {
+    cwd: root,
+    encoding: 'utf8',
+    env,
+    input: `${JSON.stringify({
+      core_anchor: { goal: 'Preserve this goal.', success: 'A fresh agent can continue.' },
+      currentDirection: 'Validate the captured live payload.',
+      nextAction: 'Reject it before registration.',
+    })}\n`,
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /core_anchor must be a string/u);
+  assert.equal(fs.existsSync(path.join(root, '.pair')), false);
+});
+
+test('checkpoint commands fail fast on a real interactive PTY instead of waiting for JSON', { timeout: 10_000 }, t => {
+  if (childProcess.spawnSync('tmux', ['-V']).status !== 0) return t.skip('tmux unavailable');
+  for (const checkpointFlag of ['--brainstorm-checkpoint', '--conversation-checkpoint']) {
+    const root = fixture(t);
+    const result = runCheckpointInTmux(t, root, checkpointFlag);
+
+    assert.equal(result.dead, '1', `${checkpointFlag} remained blocked on PTY stdin`);
+    assert.equal(result.exitStatus, '1', result.output);
+    assert.match(result.output, /does not accept interactive TTY stdin.*checkpoint\.json/isu);
+    assert.equal(fs.existsSync(path.join(root, '.pair')), false, `${checkpointFlag} must not mutate state`);
+  }
+});
+
+test('brainstorm checkpoint accepts and preserves the documented artifact shape', t => {
+  const root = fixture(t);
+  const artifactPath = 'docs/approved-design.md';
+  const absoluteArtifact = path.join(root, artifactPath);
+  fs.mkdirSync(path.dirname(absoluteArtifact), { recursive: true });
+  fs.writeFileSync(absoluteArtifact, 'approved design\n');
+  const digest = crypto.createHash('sha256').update(fs.readFileSync(absoluteArtifact)).digest('hex');
+  const env = { ...process.env, CLAUDE_CODE_SESSION_ID: 'strict-artifact-shape' };
+  delete env.CODEX_THREAD_ID;
+
+  const result = childProcess.spawnSync(process.execPath, [pairTask, '--brainstorm-checkpoint', '--runtime', 'claude'], {
+    cwd: root,
+    encoding: 'utf8',
+    env,
+    input: `${JSON.stringify({
+      coreAnchor: 'Preserve the approved direction.',
+      findings: [{ finding: 'The design is approved.', reference: `${artifactPath}:1`, digest }],
+      currentDirection: 'Prepare the bounded handover.',
+      nextAction: 'Adopt from the approved design.',
+      artifacts: [{ path: artifactPath, sha256: digest }],
+    })}\n`,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const [conversation] = Object.values(handover.readAgentConversationRegistry(root).conversations);
+  assert.deepEqual(conversation.checkpoint.artifacts, [{ path: artifactPath, sha256: digest }]);
+  assert.equal(conversation.checkpoint.findings[0].reference, `${artifactPath}:1`);
 });
 
 test('an identical brainstorming checkpoint is an auditable refresh during the one-shot override', t => {
@@ -92,6 +243,10 @@ test('brainstorming skill requires the executable checkpoint command at material
   assert.match(content, /material research or decision boundary/u);
   assert.match(content, /confirmed Core Anchor/u);
   assert.match(content, /bounded finding statements.*evidence references and digests/iu);
+  assert.match(content, /unknown top-level or nested fields fail/iu);
+  assert.match(content, /artifacts.*path.*sha256/iu);
+  assert.match(content, /interactive TTY stdin.*here-document.*redirect/isu);
+  assert.match(content, /refreshes the volatile current direction, unresolved decisions, and next action/iu);
   assert.match(content, /never persist.*prompt.*transcript.*private reasoning/isu);
 });
 

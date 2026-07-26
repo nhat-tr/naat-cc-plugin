@@ -29,6 +29,29 @@ const HANDOVER_CLAIM_KEYS = new Set([
   'override_completed_at', 'refreshed_handover_id', 'adopting_by',
   'adopting_at', 'adopted_by', 'adopted_at', 'adoption_transfer_status',
 ]);
+const CHECKPOINT_INPUT_KEYS = new Set([
+  'schema', 'coreAnchor', 'core_anchor', 'findings', 'confirmedChoices', 'confirmed_choices',
+  'rejectedAlternatives', 'rejected_alternatives', 'currentDirection', 'current_direction',
+  'unresolvedDecisions', 'unresolved_decisions', 'nextAction', 'next_action', 'artifacts',
+]);
+const CHECKPOINT_FINDING_INPUT_KEYS = new Set(['finding', 'statement', 'reference', 'digest']);
+const CHECKPOINT_ARTIFACT_INPUT_KEYS = new Set(['path', 'sha256']);
+const CHECKPOINT_TEXT_KEYS = [
+  'coreAnchor', 'core_anchor', 'currentDirection', 'current_direction', 'nextAction', 'next_action',
+];
+const CHECKPOINT_STRING_LIST_KEYS = [
+  'confirmedChoices', 'confirmed_choices', 'rejectedAlternatives', 'rejected_alternatives',
+  'unresolvedDecisions', 'unresolved_decisions',
+];
+const CHECKPOINT_ALIAS_PAIRS = [
+  ['coreAnchor', 'core_anchor'],
+  ['confirmedChoices', 'confirmed_choices'],
+  ['rejectedAlternatives', 'rejected_alternatives'],
+  ['currentDirection', 'current_direction'],
+  ['unresolvedDecisions', 'unresolved_decisions'],
+  ['nextAction', 'next_action'],
+];
+const SHA256_DIGEST = /^[a-f0-9]{64}$/u;
 
 function handoverPaths(root) {
   const pairDirectory = path.join(root, '.pair');
@@ -553,6 +576,84 @@ function safeArtifact(value) {
   return { path: artifactPath, sha256: value.sha256 };
 }
 
+function unsupportedCheckpointFields(value, allowed) {
+  return Object.keys(value).filter(key => !allowed.has(key));
+}
+
+function validateAgentConversationCheckpointInput(input) {
+  if (!isPlainObject(input)) throw new Error('Agent Conversation Checkpoint must be one JSON object');
+  const unsupported = unsupportedCheckpointFields(input, CHECKPOINT_INPUT_KEYS);
+  if (unsupported.length) {
+    throw new Error(`Agent Conversation Checkpoint has unsupported field(s): ${unsupported.join(', ')}`);
+  }
+  if (input.schema !== undefined && input.schema !== HANDOVER_SCHEMA) {
+    throw new Error(`Agent Conversation Checkpoint schema must be ${HANDOVER_SCHEMA}`);
+  }
+  for (const [camelCase, snakeCase] of CHECKPOINT_ALIAS_PAIRS) {
+    if (input[camelCase] !== undefined && input[snakeCase] !== undefined) {
+      throw new Error(`Agent Conversation Checkpoint must not include both ${camelCase} and ${snakeCase}`);
+    }
+  }
+  for (const key of CHECKPOINT_TEXT_KEYS) {
+    if (input[key] !== undefined && typeof input[key] !== 'string') {
+      throw new Error(`Agent Conversation Checkpoint ${key} must be a string`);
+    }
+  }
+  for (const key of CHECKPOINT_STRING_LIST_KEYS) {
+    if (input[key] !== undefined && (!Array.isArray(input[key]) || input[key].some(value => typeof value !== 'string'))) {
+      throw new Error(`Agent Conversation Checkpoint ${key} must contain only strings`);
+    }
+  }
+  if (input.findings !== undefined && !Array.isArray(input.findings)) {
+    throw new Error('Agent Conversation Checkpoint findings must be an array');
+  }
+  for (const finding of input.findings || []) {
+    if (!isPlainObject(finding)) throw new Error('Agent Conversation Checkpoint findings must contain objects');
+    const findingUnsupported = unsupportedCheckpointFields(finding, CHECKPOINT_FINDING_INPUT_KEYS);
+    if (findingUnsupported.length) {
+      throw new Error(`Agent Conversation Checkpoint finding has unsupported field(s): ${findingUnsupported.join(', ')}`);
+    }
+    if (finding.finding !== undefined && finding.statement !== undefined) {
+      throw new Error('Agent Conversation Checkpoint finding must not include both finding and statement');
+    }
+    for (const key of ['finding', 'statement', 'reference']) {
+      if (finding[key] !== undefined && typeof finding[key] !== 'string') {
+        throw new Error(`Agent Conversation Checkpoint finding ${key} must be a string`);
+      }
+    }
+    if (finding.finding === undefined && finding.statement === undefined && finding.reference === undefined) {
+      throw new Error('Agent Conversation Checkpoint finding must include finding, statement, or reference');
+    }
+    if (finding.digest !== undefined && finding.digest !== null && !SHA256_DIGEST.test(finding.digest)) {
+      throw new Error('Agent Conversation Checkpoint finding digest must be null or 64 lowercase hexadecimal characters');
+    }
+  }
+  if (input.artifacts !== undefined && !Array.isArray(input.artifacts)) {
+    throw new Error('Agent Conversation Checkpoint artifacts must be an array');
+  }
+  for (const artifact of input.artifacts || []) {
+    if (!isPlainObject(artifact)) throw new Error('Agent Conversation Checkpoint artifacts must contain objects');
+    const artifactUnsupported = unsupportedCheckpointFields(artifact, CHECKPOINT_ARTIFACT_INPUT_KEYS);
+    if (artifactUnsupported.length) {
+      throw new Error(`Agent Conversation Checkpoint artifact has unsupported field(s): ${artifactUnsupported.join(', ')}`);
+    }
+    if (
+      typeof artifact.path !== 'string' ||
+      !artifact.path ||
+      artifact.path.includes('\\') ||
+      artifact.path.startsWith('/') ||
+      artifact.path.split('/').includes('..') ||
+      redactString(artifact.path) !== artifact.path
+    ) {
+      throw new Error('Agent Conversation Checkpoint artifact path must be a repository-relative string');
+    }
+    if (!SHA256_DIGEST.test(artifact.sha256 || '')) {
+      throw new Error('Agent Conversation Checkpoint artifact sha256 must be 64 lowercase hexadecimal characters');
+    }
+  }
+  return input;
+}
+
 function normalizeCheckpoint(input) {
   const checkpoint = {
     schema: HANDOVER_SCHEMA,
@@ -615,6 +716,7 @@ function registerAgentConversation(root, input) {
 
 function updateAgentConversationCheckpoint(root, input) {
   const identity = conversationIdentity(input);
+  validateAgentConversationCheckpointInput(input.checkpoint);
   const checkpoint = normalizeCheckpoint(input.checkpoint);
   const at = timestamp(input.now);
   if (!hasAgentConversationRegistration(root, input)) {
@@ -709,6 +811,12 @@ function mergeRecoveredCheckpoint(conversation, recovered) {
     reference: 'Recovered from the exact provider transcript as user intent, not external evidence.',
     digest: sha256(latestDirection),
   } : null;
+  const recoveredMessageAt = Date.parse(recovered.lastMessageAt);
+  const checkpointUpdatedAt = Date.parse(conversation.checkpoint_updated_at);
+  const transcriptAdvanced = Number.isFinite(recoveredMessageAt) && (
+    !Number.isFinite(checkpointUpdatedAt) || recoveredMessageAt > checkpointUpdatedAt
+  );
+  const refreshVolatileFields = conversation.kind === 'general' || !preservesManualCheckpoint || transcriptAdvanced;
   return {
     checkpoint: normalizeCheckpoint({
       core_anchor: existing.core_anchor || automatic.core_anchor,
@@ -718,11 +826,13 @@ function mergeRecoveredCheckpoint(conversation, recovered) {
       ]),
       confirmed_choices: existing.confirmed_choices,
       rejected_alternatives: existing.rejected_alternatives,
-      current_direction: conversation.kind === 'general'
+      current_direction: refreshVolatileFields
         ? automatic.current_direction || existing.current_direction
         : existing.current_direction || automatic.current_direction,
-      unresolved_decisions: existing.unresolved_decisions,
-      next_action: conversation.kind === 'general'
+      unresolved_decisions: refreshVolatileFields
+        ? automatic.unresolved_decisions
+        : existing.unresolved_decisions,
+      next_action: refreshVolatileFields
         ? automatic.next_action || existing.next_action
         : existing.next_action || automatic.next_action,
       artifacts: mergeArtifacts(existing.artifacts, automatic.artifacts),
@@ -1275,6 +1385,33 @@ function validatePairWorkManifestBinding(root, reference, kind, checkpoint) {
   if (!artifact) throw new Error('invalid handover');
 }
 
+function validateNonPairArtifactDigests(root, checkpoint, kind) {
+  if (kind === 'pair') return;
+  const rootReal = fs.realpathSync(root);
+  for (const artifact of checkpoint.artifacts || []) {
+    const absolute = path.resolve(root, artifact.path);
+    const relative = path.relative(root, absolute).split(path.sep).join('/');
+    const stat = fs.lstatSync(absolute, { throwIfNoEntry: false });
+    if (
+      relative !== artifact.path ||
+      relative === '..' ||
+      relative.startsWith('../') ||
+      !stat ||
+      !stat.isFile() ||
+      stat.isSymbolicLink()
+    ) {
+      throw new Error(`Agent Conversation Checkpoint artifact is missing or changed: ${artifact.path}`);
+    }
+    const real = fs.realpathSync(absolute);
+    if (real !== rootReal && !real.startsWith(`${rootReal}${path.sep}`)) {
+      throw new Error(`Agent Conversation Checkpoint artifact is missing or changed: ${artifact.path}`);
+    }
+    if (sha256(fs.readFileSync(real)) !== artifact.sha256) {
+      throw new Error(`Agent Conversation Checkpoint artifact is missing or changed: ${artifact.path}`);
+    }
+  }
+}
+
 function expectedPairOwnershipExists(root, identity, agentConversationId, expectedWorkId) {
   const current = loadPairState(root);
   if (current.work_id !== expectedWorkId) return false;
@@ -1323,6 +1460,7 @@ function sealConversation(root, registry, paths, identity, at) {
       }
     }
     assertCheckpointQuality(conversation.checkpoint, conversation.kind);
+    validateNonPairArtifactDigests(root, conversation.checkpoint, conversation.kind);
     const handoverId = `handover-${crypto.randomUUID()}`;
     const directory = stagingDirectory(paths, handoverId);
     ensurePrivateDirectory(directory);
@@ -1506,6 +1644,7 @@ function readAgentConversationHandoverUnchecked(root, handoverId, options = {}) 
   if (!isPlainObject(checkpoint) || checkpointBytes !== JSON.stringify(checkpoint)) throw new Error('invalid handover');
   if (checkpointBytes !== JSON.stringify(normalizeCheckpoint(checkpoint))) throw new Error('invalid handover');
   validatePairWorkManifestBinding(root, manifest.pair_work, manifest.kind, checkpoint);
+  validateNonPairArtifactDigests(root, checkpoint, manifest.kind);
   const modernClaim = claim.runtime !== undefined || claim.kind !== undefined ||
     claim.checkpoint_revision !== undefined || claim.checkpoint_sha256 !== undefined;
   if (modernClaim) {
@@ -1801,6 +1940,7 @@ module.exports = {
   hasAgentConversationRegistration,
   handoverPaths,
   normalizeCheckpoint,
+  validateAgentConversationCheckpointInput,
   readAgentConversationHandover,
   readAgentConversationHandoverForAdoption,
   readAgentConversationRegistry,

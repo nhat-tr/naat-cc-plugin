@@ -304,7 +304,7 @@ test('Claude adoption uses CLAUDE_CODE_SESSION_ID and transfers Pair ownership i
   assert.equal(loadPairState(root).continuation.owner_session_id, 'documented-claude-session');
 });
 
-test('brainstorming CLI adoption prints the recovered bounded checkpoint without secret or transcript fields', t => {
+test('brainstorming CLI adoption redacts secrets inside accepted checkpoint fields', t => {
   const root = fixture(t);
   const source = {
     runtime: 'claude', agentConversationId: 'brainstorm-recovery-source', kind: 'brainstorming', now: 1_000,
@@ -315,18 +315,14 @@ test('brainstorming CLI adoption prints the recovered bounded checkpoint without
     checkpoint: {
       coreAnchor: 'Design deterministic cold Agent Conversation recovery.',
       findings: [{
-        finding: 'Claude hook evidence confirms the native session identity is provider-affine.',
+        finding: 'Claude hook evidence confirms the native session identity is provider-affine; token=FINDING_SECRET_CANARY.',
         reference: 'official Claude hook runtime inspection',
         digest: 'd'.repeat(64),
-        token: 'FINDING_SECRET_CANARY',
       }],
       confirmedChoices: ['Use a sixty-minute deterministic pre-prompt hard gate.'],
       currentDirection: 'Recover expensive research from a bounded semantic checkpoint.',
       unresolvedDecisions: ['Choose no cache reconstruction path.'],
       nextAction: 'Continue the approved design from the recovered evidence.',
-      transcript: 'RAW_TRANSCRIPT_RECOVERY_CANARY',
-      privateReasoning: 'PRIVATE_REASONING_RECOVERY_CANARY',
-      environment: { API_TOKEN: 'ENVIRONMENT_SECRET_RECOVERY_CANARY' },
     },
   });
   const sealed = handover.sealAgentConversationHandover(root, { ...source, now: 2_000 });
@@ -345,12 +341,12 @@ test('brainstorming CLI adoption prints the recovered bounded checkpoint without
   const output = JSON.parse(adopted.stdout);
   assert.equal(output.status, 'adopted');
   assert.equal(output.handover_id, sealed.handoverId);
-  assert.equal(output.checkpoint.findings[0].finding, 'Claude hook evidence confirms the native session identity is provider-affine.');
+  assert.equal(output.checkpoint.findings[0].finding, 'Claude hook evidence confirms the native session identity is provider-affine; token=[REDACTED]');
   assert.equal(output.checkpoint.findings[0].reference, 'official Claude hook runtime inspection');
   assert.deepEqual(output.checkpoint.confirmed_choices, ['Use a sixty-minute deterministic pre-prompt hard gate.']);
   assert.equal(output.checkpoint.next_action, 'Continue the approved design from the recovered evidence.');
   assert.match(output.recovery_instruction, /Continue directly.*next_action/iu);
-  assert.doesNotMatch(adopted.stdout, /FINDING_SECRET_CANARY|RAW_TRANSCRIPT_RECOVERY_CANARY|PRIVATE_REASONING_RECOVERY_CANARY|ENVIRONMENT_SECRET_RECOVERY_CANARY/u);
+  assert.doesNotMatch(adopted.stdout, /FINDING_SECRET_CANARY/u);
   assert.equal(loadPairState(root).continuation.owner_session_id, ownerBefore, 'brainstorming adoption must not take Pair ownership');
 });
 
@@ -590,7 +586,7 @@ test('exact one-shot cost-risk override allows one prompt and requires a semanti
     ...source,
     now: 3_750,
     checkpoint: {
-      purpose: 'Protect the bounded handover.',
+      coreAnchor: 'Protect the bounded handover.',
       currentDirection: 'Record the one permitted cold turn.',
       nextAction: 'Continue only from the refreshed handover.',
     },

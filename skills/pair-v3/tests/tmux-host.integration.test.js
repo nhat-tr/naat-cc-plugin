@@ -80,7 +80,7 @@ test('creates exactly three persistent panes idempotently', t => {
   });
   handover.updateAgentConversationCheckpoint(root, {
     runtime: 'codex', agentConversationId: 'tmux-live-warm', kind: 'pair', now,
-    checkpoint: { purpose: 'Render warm status.', currentDirection: 'Approach the deadline.', nextAction: 'Finish or hand over.' },
+    checkpoint: { coreAnchor: 'Render warm status.', currentDirection: 'Approach the deadline.', nextAction: 'Finish or hand over.' },
   });
 
   const first = ensureHost(root);
@@ -106,6 +106,42 @@ test('creates exactly three persistent panes idempotently', t => {
   assert.equal(fs.statSync(stateFile).mode & 0o077, 0);
 });
 
+test('repairs an idle pane whose working directory disappeared', t => {
+  if (childProcess.spawnSync('tmux', ['-V']).status !== 0) return t.skip('tmux unavailable');
+  const { root } = fixture(t);
+  const host = ensureHost(root);
+  const paneId = host.panes.reviewer;
+  const staleDirectory = path.join(root, 'removed-working-directory');
+  fs.mkdirSync(staleDirectory);
+
+  const changedDirectory = childProcess.spawnSync(
+    'tmux', ['send-keys', '-t', paneId, '-l', `cd -- ${JSON.stringify(staleDirectory)}`], { encoding: 'utf8' },
+  );
+  assert.equal(changedDirectory.status, 0, changedDirectory.stderr);
+  const submittedDirectoryChange = childProcess.spawnSync(
+    'tmux', ['send-keys', '-t', paneId, 'Enter'], { encoding: 'utf8' },
+  );
+  assert.equal(submittedDirectoryChange.status, 0, submittedDirectoryChange.stderr);
+  waitForPaneReady(host.session, paneId, 'reviewer', (args, options = {}) => childProcess.spawnSync(
+    'tmux', args, { encoding: 'utf8', ...options },
+  ));
+
+  fs.rmSync(staleDirectory, { recursive: true, force: true });
+  const stalePath = childProcess.spawnSync(
+    'tmux', ['display-message', '-p', '-t', paneId, '#{pane_current_path}'], { encoding: 'utf8' },
+  );
+  assert.equal(stalePath.status, 0, stalePath.stderr);
+  assert.equal(fs.existsSync(stalePath.stdout.trim()), false, 'the pane CWD is no longer usable');
+
+  ensureHost(root);
+
+  const repairedPath = childProcess.spawnSync(
+    'tmux', ['display-message', '-p', '-t', paneId, '#{pane_current_path}'], { encoding: 'utf8' },
+  );
+  assert.equal(repairedPath.status, 0, repairedPath.stderr);
+  assert.equal(repairedPath.stdout.trim(), root, 'the persistent pane returns to the repository root');
+});
+
 test('host refuses a conflicting fourth pane without deleting it', t => {
   if (childProcess.spawnSync('tmux', ['-V']).status !== 0) return t.skip('tmux unavailable');
   const { root, session } = fixture(t);
@@ -128,7 +164,7 @@ test('tmux warns before stale prompt while absent tmux preserves headless status
   });
   handover.updateAgentConversationCheckpoint(root, {
     runtime: 'codex', agentConversationId: 'tmux-warning-agent', kind: 'pair', now: 1_000,
-    checkpoint: { purpose: 'Warn early.', currentDirection: 'Observe freshness.', nextAction: 'Open a fresh Agent Conversation.' },
+    checkpoint: { coreAnchor: 'Warn early.', currentDirection: 'Observe freshness.', nextAction: 'Open a fresh Agent Conversation.' },
   });
   const status = hostStatus(root, { execute: () => ({ status: 1, stdout: '', stderr: '' }), now: 1_000 + 60 * 60 * 1000 });
   assert.equal(status.exists, false);
@@ -144,7 +180,7 @@ test('multiple handovers do not replace panes', t => {
     handover.registerAgentConversation(root, { runtime: 'codex', agentConversationId, kind: 'pair', now: 1_000 });
     handover.updateAgentConversationCheckpoint(root, {
       runtime: 'codex', agentConversationId, kind: 'pair', now: 1_000,
-      checkpoint: { purpose: 'Preserve panes.', currentDirection: 'Seal.', nextAction: 'Adopt.' },
+      checkpoint: { coreAnchor: 'Preserve panes.', currentDirection: 'Seal.', nextAction: 'Adopt.' },
     });
     handover.sealAgentConversationHandover(root, { runtime: 'codex', agentConversationId, kind: 'pair', now: 2_000 });
   }

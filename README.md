@@ -162,7 +162,11 @@ For a manually reviewed checkpoint, pipe one JSON object to
 `pair-loop --conversation-checkpoint`, then run `pair-loop --handover-now`.
 Transcript recovery keeps bounded user direction, assistant conclusions, and
 repository artifact digests; it excludes system/developer content, thinking,
-reasoning, and raw tool results. Disable repository automation with
+reasoning, and raw tool results. Manual checkpoint JSON is strict: unknown fields
+or wrong types fail, findings use `finding`/`reference`/`digest`, and artifacts use
+`path`/`sha256`. Both checkpoint commands reject interactive TTY stdin; provide the
+JSON with file redirection or a here-document in the same shell invocation.
+Disable repository automation with
 `pair-loop --disable-general-handover`, or set `AGENT_CONVERSATION_HANDOVER=auto|off`
 as an environment-wide override.
 
@@ -208,8 +212,13 @@ workflow), and record it inside that same agent conversation:
 pair-loop --conversation-checkpoint < checkpoint.json
 ```
 
-The automatic Stop recovery continues enriching it while preserving a richer
-manual Core Anchor. Seal immediately only when you intentionally want to transfer:
+Both checkpoint commands reject interactive TTY stdin. Use that file redirection
+or a here-document in the same shell invocation; do not start the command and then
+paste or stream JSON into its terminal.
+
+The automatic Stop recovery preserves the manual Core Anchor and stable choices,
+while later transcript progress refreshes current direction, unresolved decisions,
+and next action. Seal immediately only when you intentionally want to transfer:
 
 ```bash
 pair-loop --handover-now

@@ -962,7 +962,7 @@ test('manual plan approval is exact-digest, reasoned, and recorded as a human ov
   assert.match(summary, /I reviewed the plan and accept the residual risk/);
 });
 
-test('plan challenge records usage and stops after one closure verdict across plan digests', t => {
+test('plan challenge approves the second verdict with retained findings and gives them to the coordinator', t => {
   const fixture = challengeFixture(t, 'finite-plan-review-budget');
   const dataDir = path.join(fixture.root, 'pair-data');
   const runtimeLog = path.join(fixture.root, 'runtime.log');
@@ -971,7 +971,21 @@ const fs = require('node:fs');
 const args = process.argv.slice(2);
 const output = args[args.indexOf('--output-last-message') + 1];
 fs.appendFileSync(process.env.PAIR_TEST_RUNTIME_LOG, 'review\\n');
-fs.writeFileSync(output, JSON.stringify({ verdict: 'approve', summary: 'bounded approval', findings: [] }));
+fs.writeFileSync(output, JSON.stringify({
+  verdict: 'fix-needed',
+  summary: 'The first greeting slice lacks the contract the plan names.',
+  findings: [{
+    severity: 'BLOCKER',
+    origin: 'plan',
+    category: 'interfaces',
+    task_id: '1.1',
+    line: 1,
+    title: 'Greeting contract is incomplete',
+    detail: 'The first slice does not establish the contract its later integration consumes.',
+    failure_scenario: 'The coordinator cannot complete the named integration behavior from the written plan alone.',
+    suggestion: 'Establish the contract while completing the first Review Slice.',
+  }],
+}));
 process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: '01900000-0000-7000-8000-000000000099' }) + '\\n');
 process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: {
   input_tokens: 100, cached_input_tokens: 20, output_tokens: 30, reasoning_output_tokens: 10,
@@ -989,7 +1003,7 @@ process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: {
         PATH: `${fixture.fakeBin}${path.delimiter}${process.env.PATH || ''}`,
         CLAUDE_SCRATCH_DIR: fixture.scratchRoot,
         PAIR_DATA_DIR: dataDir,
-        PAIR_MAX_PLAN_REVIEWS: '2',
+        PAIR_MAX_PLAN_REVIEWS: '',
         PAIR_TEST_RUNTIME_LOG: runtimeLog,
         CODEX_THREAD_ID: '',
         CODEX_SANDBOX: '',
@@ -999,22 +1013,15 @@ process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: {
   );
 
   const first = run();
-  assert.equal(first.status, 0, first.stdout + first.stderr);
+  assert.equal(first.status, 2, first.stdout + first.stderr);
   const planPath = path.join(fixture.root, '.pair', 'plan.md');
   fs.writeFileSync(planPath, fs.readFileSync(planPath, 'utf8').replace(
     'Add one observable greeting behavior',
     'Add one observable greeting behavior with bounded review',
   ));
-  const closure = run();
-  assert.equal(closure.status, 0, closure.stdout + closure.stderr);
-
-  fs.writeFileSync(planPath, fs.readFileSync(planPath, 'utf8').replace(
-    'without introducing a new framework layer.',
-    'without introducing a new framework or review layer.',
-  ));
-  const blocked = run();
-  assert.equal(blocked.status, 1, blocked.stdout + blocked.stderr);
-  assert.match(blocked.stderr, /2-verdict plan-review budget|plan-review budget.*2/i);
+  const second = run();
+  assert.equal(second.status, 0, second.stdout + second.stderr);
+  assert.match(second.stdout, /approved .* after 2 plan-review verdicts/i);
   assert.equal(fs.readFileSync(runtimeLog, 'utf8'), 'review\nreview\n');
 
   const ledger = fs.readFileSync(
@@ -1024,6 +1031,10 @@ process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: {
     .trim().split('\n').map(line => JSON.parse(line));
   const reviews = ledger.filter(record => record.event === 'plan-review.completed');
   assert.equal(reviews.length, 2);
+  assert.equal(reviews[0].classification, 'plan-findings');
+  assert.equal(reviews[1].classification, 'human-override');
+  assert.equal(reviews[1].review_classification, 'plan-findings');
+  assert.equal(reviews[1].findings[0].title, 'Greeting contract is incomplete');
   assert.deepEqual(reviews[0].usage, {
     inputTokens: 100,
     cachedInputTokens: 20,
@@ -1033,12 +1044,47 @@ process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: {
   });
   assert.equal(reviews[0].reviewerSessionId, '01900000-0000-7000-8000-000000000099');
   assert.equal(reviews[1].reviewerSessionId, reviews[0].reviewerSessionId);
+  const work = JSON.parse(fs.readFileSync(
+    path.join(fixture.root, 'docs', 'work', fixture.workId, 'work.json'),
+    'utf8',
+  ));
+  assert.match(work.plan.independent_review, /^human-override:[a-f0-9]{64}:user:[a-f0-9]{12}$/);
+  const evidence = JSON.parse(fs.readFileSync(path.join(fixture.root, '.pair', 'plan-review.json'), 'utf8'));
+  assert.equal(evidence.approval_kind, 'human-override');
+  assert.equal(evidence.verdict, 'fix-needed');
+  assert.equal(evidence.findings[0].title, 'Greeting contract is incomplete');
   const summary = fs.readFileSync(
     path.join(fixture.root, '.pair', 'plan-reviews', 'summary.md'),
     'utf8',
   );
-  assert.match(summary, /Review 1: approved[\s\S]*Review 2: approved/);
+  assert.match(summary, /Review 1: plan-findings[\s\S]*Review 2: human-override/);
+  assert.match(summary, /Greeting contract is incomplete/);
   assert.match(summary, /Model \/ effort:\*\*[\s\S]*Tokens:\*\* input 100, cached 20, output 30, reasoning 10/);
   assert.match(summary, /Review Session:.*01900000-0000-7000-8000-000000000099/);
-  assert.match(summary, /Final reason:\*\* bounded approval/);
+  assert.match(summary, /Final reason:\*\* The first greeting slice lacks the contract the plan names/);
+
+  const handoff = childProcess.spawnSync(
+    process.execPath,
+    [PAIR_TASK, '--runtime', 'codex', '--once', '--inline'],
+    {
+      cwd: fixture.root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fixture.fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+        CLAUDE_SCRATCH_DIR: fixture.scratchRoot,
+        PAIR_DATA_DIR: dataDir,
+        PAIR_MAX_PLAN_REVIEWS: '',
+        PAIR_TEST_RUNTIME_LOG: runtimeLog,
+        PAIR_REVIEW_TRANSPORT: 'direct',
+        CODEX_THREAD_ID: '',
+        CODEX_SANDBOX: '',
+        CLAUDECODE: '',
+      },
+    },
+  );
+  assert.equal(handoff.status, 0, handoff.stdout + handoff.stderr);
+  assert.match(handoff.stdout, /retained plan challenge findings/i);
+  assert.match(handoff.stdout, /Greeting contract is incomplete/);
+  assert.equal(fs.readFileSync(runtimeLog, 'utf8'), 'review\nreview\n');
 });

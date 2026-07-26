@@ -21,6 +21,15 @@ function paneIsReady(pane) {
     && (!pane.command || SHELLS.has(path.basename(pane.command)));
 }
 
+function paneWorkingDirectoryIsUsable(pane) {
+  if (!pane?.currentPath) return false;
+  try {
+    return fs.statSync(pane.currentPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function waitForPaneReady(session, paneId, role, execute, options = {}) {
   // A freshly created pane transiently reports its shell's own startup command
   // (observed in the wild as "mkdir") as pane_current_command, which would otherwise
@@ -40,6 +49,32 @@ function waitForPaneReady(session, paneId, role, execute, options = {}) {
       throw new Error(
         `Pair v4 ${role} pane ${paneId} is busy with ${pane.command}; cancel or wait before dispatching another request`,
       );
+    }
+    sleepSync(intervalMs);
+  }
+}
+
+function restorePaneWorkingDirectory(session, paneId, role, root, execute, options = {}) {
+  const pane = waitForPaneReady(session, paneId, role, execute, options);
+  if (paneWorkingDirectoryIsUsable(pane)) return pane;
+
+  // A persistent pane can retain a deleted CWD after its repository is moved or
+  // a scratch directory is cleaned. Repair only an idle shell so a live request
+  // is never interrupted or fed an unexpected command.
+  run(execute, ['send-keys', '-t', paneId, '-l', `cd -- ${shellQuote(root)}`]);
+  run(execute, ['send-keys', '-t', paneId, 'Enter']);
+
+  const timeoutMs = Number(options.timeoutMs ?? process.env.PAIR_PANE_SETTLE_TIMEOUT_MS ?? 3000);
+  const intervalMs = Number(options.intervalMs ?? 100);
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const repaired = listPanes(session, execute)?.find(candidate => candidate.id === paneId);
+    if (!repaired || repaired.dead) {
+      throw new Error(`Pair v4 ${role} pane ${paneId} is unavailable while restoring its working directory`);
+    }
+    if (paneWorkingDirectoryIsUsable(repaired)) return repaired;
+    if (Date.now() >= deadline) {
+      throw new Error(`Pair v4 ${role} pane ${paneId} did not restore a usable working directory`);
     }
     sleepSync(intervalMs);
   }
@@ -86,14 +121,20 @@ function privateAtomicWrite(file, value) {
 function listPanes(session, execute = defaultExecute) {
   const result = run(
     execute,
-    ['list-panes', '-t', `=${session}`, '-F', '#{pane_id}\t#{pane_title}\t#{pane_dead}\t#{pane_current_command}'],
+    ['list-panes', '-t', `=${session}`, '-F', '#{pane_id}\t#{pane_title}\t#{pane_dead}\t#{pane_current_command}\t#{pane_current_path}'],
     {},
     true,
   );
   if (result.status !== 0) return null;
   return result.stdout.trim().split(/\r?\n/u).filter(Boolean).map(line => {
-    const [id, title, dead, command] = line.split('\t');
-    return { id, title, dead: dead === '1', command: command || null };
+    const [id, title, dead, command, currentPath] = line.split('\t');
+    return {
+      id,
+      title,
+      dead: dead === '1',
+      command: command || null,
+      currentPath: currentPath || null,
+    };
   });
 }
 
@@ -165,6 +206,13 @@ function ensureHost(root, options = {}) {
     const available = titled || panes.find(pane => !used.has(pane.id));
     assigned[role] = available.id;
     used.add(available.id);
+  }
+
+  for (const role of ROLES) {
+    restorePaneWorkingDirectory(session, assigned[role], role, resolvedRoot, execute, {
+      timeoutMs: options.paneSettleTimeoutMs,
+      intervalMs: options.paneSettleIntervalMs,
+    });
   }
 
   run(execute, ['set-window-option', '-t', `${session}:`, 'allow-rename', 'off']);
@@ -246,6 +294,7 @@ module.exports = {
   hostStatus,
   listPanes,
   paneIsReady,
+  paneWorkingDirectoryIsUsable,
   runInPaneSync,
   sendKeys,
   sessionNameForRoot,

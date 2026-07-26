@@ -280,3 +280,76 @@ test('prefers the latest explicit brainstorming Core Anchor and retains later us
   assert.doesNotMatch(JSON.stringify(recovered.checkpoint.findings), /Preserve approved product direction/u);
   assert.ok(Buffer.byteLength(recovered.checkpoint.coreAnchor, 'utf8') <= 4_096);
 });
+
+test('recognizes the observed Goal-style Core Anchor after an artifact-path preamble', t => {
+  const root = fixture(t);
+  const transcriptPath = path.join(root, 'observed-core-anchor.jsonl');
+  writeJsonl(transcriptPath, [
+    { type: 'session_meta', payload: { id: 'observed-core-anchor', cwd: root } },
+    {
+      type: 'event_msg',
+      payload: { type: 'user_message', message: '.artifacts/' },
+    },
+    {
+      type: 'event_msg',
+      payload: {
+        type: 'user_message',
+        message: '.artifacts/brainstorm/lens-review this is the Lens visual; review both repositories.',
+      },
+    },
+    {
+      type: 'event_msg',
+      payload: {
+        type: 'agent_message',
+        message: [
+          'Core Anchor for the verification design:',
+          '- Goal: make Lens acceptance a machine-checkable claim over the real App to Agent path.',
+          '- Success: thirty deterministic stub trials produce visible terminal outcomes.',
+          '- Constraints: no real OpenAI request and no decisive boundary mocks.',
+          '- Non-goals: backward compatibility for the unreleased contract.',
+          '- Evidence rule: one later live counterexample invalidates acceptance.',
+        ].join('\n'),
+      },
+    },
+    {
+      type: 'event_msg',
+      payload: { type: 'user_message', message: 'Gate plus all confirmed remediation is required.' },
+    },
+  ]);
+
+  const recovered = recoverAgentConversationCheckpoint({
+    root,
+    runtime: 'codex',
+    agentConversationId: 'observed-core-anchor',
+    transcriptPath,
+  });
+
+  assert.match(recovered.checkpoint.coreAnchor, /machine-checkable claim over the real App to Agent path/u);
+  assert.match(recovered.checkpoint.coreAnchor, /thirty deterministic stub trials/u);
+  assert.match(recovered.checkpoint.coreAnchor, /one later live counterexample invalidates acceptance/u);
+  assert.match(recovered.checkpoint.coreAnchor, /Gate plus all confirmed remediation is required/u);
+  assert.doesNotMatch(recovered.checkpoint.coreAnchor, /Initial user intent:\s*\.artifacts\//u);
+});
+
+test('skips a path-only preamble when recovering fallback user intent', t => {
+  const root = fixture(t);
+  const transcriptPath = path.join(root, 'path-preamble.jsonl');
+  writeJsonl(transcriptPath, [
+    { type: 'session_meta', payload: { id: 'path-preamble', cwd: root } },
+    { type: 'event_msg', payload: { type: 'user_message', message: '.artifacts/' } },
+    {
+      type: 'event_msg',
+      payload: { type: 'user_message', message: 'Review the Lens implementation against the approved visual.' },
+    },
+  ]);
+
+  const recovered = recoverAgentConversationCheckpoint({
+    root,
+    runtime: 'codex',
+    agentConversationId: 'path-preamble',
+    transcriptPath,
+  });
+
+  assert.match(recovered.checkpoint.coreAnchor, /Initial user intent:\s*Review the Lens implementation/u);
+  assert.doesNotMatch(recovered.checkpoint.coreAnchor, /Initial user intent:\s*\.artifacts\//u);
+});

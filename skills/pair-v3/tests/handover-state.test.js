@@ -112,7 +112,7 @@ function checkpoint(overrides = {}) {
     currentDirection: 'Seal a bounded Agent Conversation Handover.',
     unresolvedDecisions: ['None.'],
     nextAction: 'Run the focused handover-state verification.',
-    artifacts: [{ path: '.pair/plan.md', sha256: 'a'.repeat(64) }],
+    artifacts: [],
     ...overrides,
   };
 }
@@ -126,6 +126,25 @@ test('normalizeCheckpoint treats a nullish field as empty text instead of the li
 
   const bootstrapped = normalizeCheckpoint(handoverApi().brainstormBootstrapCheckpoint());
   assert.equal(bootstrapped.core_anchor, '');
+});
+
+test('checkpoint input rejects malformed known fields instead of coercing or dropping them', () => {
+  const { normalizeCheckpoint, validateAgentConversationCheckpointInput } = handoverApi();
+  const cases = [
+    [{ coreAnchor: { goal: 'Preserve the live brainstorming anchor.' } }, /coreAnchor must be a string/u],
+    [{ confirmedChoices: ['Keep the gate.', { choice: 'Invalid nested value.' }] }, /confirmedChoices must contain only strings/u],
+    [{ findings: [{ finding: ['Invalid finding value.'] }] }, /finding must be a string/u],
+    [{ findings: [{ reference: 'runtime evidence', digest: 'deadbeef' }] }, /finding digest must be null or 64 lowercase hexadecimal characters/u],
+    [{ artifacts: [{ path: 42, sha256: 'a'.repeat(64) }] }, /artifact path must be a repository-relative string/u],
+    [{ artifacts: [{ path: 'docs/approved-design.md', sha256: 'deadbeef' }] }, /artifact sha256 must be 64 lowercase hexadecimal characters/u],
+    [{ coreAnchor: 'Camel case.', core_anchor: 'Snake case.' }, /must not include both coreAnchor and core_anchor/u],
+  ];
+
+  for (const [input, expected] of cases) {
+    assert.throws(() => validateAgentConversationCheckpointInput(input), expected);
+  }
+
+  assert.doesNotThrow(() => validateAgentConversationCheckpointInput(normalizeCheckpoint(checkpoint())));
 });
 
 test('a brainstorming conversation registered without an explicit checkpoint never persists a literal "undefined" core anchor', t => {
@@ -350,6 +369,60 @@ test('path-unsafe or digest-mismatched Pair Work references fail closed during a
   assert.throws(() => adoptAgentConversationHandover(root, { handoverId: sealed.handoverId, runtime: 'codex', agentConversationId: 'fresh-digest' }), /invalid handover/i);
 });
 
+test('non-Pair artifact drift fails closed before sealing and before adoption', t => {
+  const root = fixture(t);
+  const {
+    adoptAgentConversationHandover,
+    readAgentConversationRegistry,
+    registerAgentConversation,
+    sealAgentConversationHandover,
+    updateAgentConversationCheckpoint,
+  } = handoverApi();
+  const identity = conversation({ kind: 'brainstorming', agentConversationId: 'artifact-bound-brainstorm' });
+  const artifactPath = 'docs/approved-design.md';
+  const absoluteArtifact = path.join(root, artifactPath);
+  fs.mkdirSync(path.dirname(absoluteArtifact), { recursive: true });
+  fs.writeFileSync(absoluteArtifact, 'approved revision one\n');
+  const revisionOneDigest = crypto.createHash('sha256').update(fs.readFileSync(absoluteArtifact)).digest('hex');
+  registerAgentConversation(root, identity);
+  updateAgentConversationCheckpoint(root, {
+    ...identity,
+    checkpoint: checkpoint({ artifacts: [{ path: artifactPath, sha256: revisionOneDigest }] }),
+  });
+
+  fs.writeFileSync(absoluteArtifact, 'changed before sealing\n');
+  assert.throws(
+    () => sealAgentConversationHandover(root, { ...identity, now: 2_000 }),
+    /artifact.*changed|changed.*artifact/iu,
+  );
+  let source = readAgentConversationRegistry(root).conversations[
+    require(HANDOVER_MODULE).conversationIdentity(identity).sourceKey
+  ];
+  assert.equal(source.status, 'warm');
+  assert.equal(source.sealed_handover_id, null);
+
+  const currentDigest = crypto.createHash('sha256').update(fs.readFileSync(absoluteArtifact)).digest('hex');
+  updateAgentConversationCheckpoint(root, {
+    ...identity,
+    now: 3_000,
+    checkpoint: checkpoint({ artifacts: [{ path: artifactPath, sha256: currentDigest }] }),
+  });
+  const sealed = sealAgentConversationHandover(root, { ...identity, now: 4_000 });
+  fs.writeFileSync(absoluteArtifact, 'changed after sealing\n');
+
+  assert.throws(
+    () => adoptAgentConversationHandover(root, {
+      handoverId: sealed.handoverId,
+      runtime: 'codex',
+      agentConversationId: 'fresh-artifact-adopter',
+      now: 5_000,
+    }),
+    /artifact.*changed|changed.*artifact/iu,
+  );
+  source = readAgentConversationRegistry(root).conversations[sealed.sourceKey];
+  assert.equal(source.status, 'sealed');
+});
+
 test('private permissions and symlink resistance exclude forbidden fields and secret-like values', t => {
   const root = fixture(t);
   const { handoverPaths, registerAgentConversation, updateAgentConversationCheckpoint, sealAgentConversationHandover } = handoverApi();
@@ -362,13 +435,7 @@ test('private permissions and symlink resistance exclude forbidden fields and se
     checkpoint: checkpoint({
       nextAction: 'Use API_TOKEN=super-secret-canary only in memory.',
       currentDirection: 'Use gho_abcdefghijklmno, ghr_abcdefghijklmno, eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature, and capability_token=private-capability-canary only in memory.',
-      artifacts: [
-        { path: '.pair/plan.md', sha256: 'a'.repeat(64) },
-        { path: 'evidence/gho_abcdefghijklmno.json', sha256: 'b'.repeat(64) },
-      ],
-      transcript: 'never persist this transcript',
-      compactSummary: 'never persist this compact summary',
-      environment: { API_TOKEN: 'super-secret-canary' },
+      artifacts: [],
     }),
   });
   const sealed = sealAgentConversationHandover(root, { ...identity, now: 2_000 });
@@ -378,9 +445,9 @@ test('private permissions and symlink resistance exclude forbidden fields and se
     fs.readFileSync(path.join(directory, 'checkpoint.md'), 'utf8'),
     fs.readFileSync(path.join(directory, 'events.jsonl'), 'utf8'),
   ].join('\n');
-  assert.doesNotMatch(persisted, /super-secret-canary|gho_abcdefghijklmno|ghr_abcdefghijklmno|eyJhbGciOiJIUzI1NiJ9|private-capability-canary|never persist this|compact summary|transcript/i);
+  assert.doesNotMatch(persisted, /super-secret-canary|gho_abcdefghijklmno|ghr_abcdefghijklmno|eyJhbGciOiJIUzI1NiJ9|private-capability-canary/i);
   const storedCheckpoint = JSON.parse(fs.readFileSync(path.join(directory, 'checkpoint.md'), 'utf8'));
-  assert.deepEqual(storedCheckpoint.artifacts, [{ path: '.pair/plan.md', sha256: 'a'.repeat(64) }]);
+  assert.deepEqual(storedCheckpoint.artifacts, []);
   for (const file of ['manifest.json', 'checkpoint.md', 'events.jsonl']) {
     assert.equal(fs.statSync(path.join(directory, file)).mode & 0o077, 0, `${file} must be private`);
   }

@@ -117,7 +117,7 @@ skills/pair-v3/scripts/validate-plan .pair/plan.md
 pair-loop --challenge-plan --runtime auto
 ```
 
-The first challenge performs one bounded sweep and reports all material findings together. After a semantic revision, run a focused closure verdict that carries prior findings forward. Every CLI invocation is finite, exact already-approved digests are cached, and unchanged material findings require plan revision rather than blind redispatch. Pair v4 has no default lifetime counter across plan digests; `PAIR_MAX_PLAN_REVIEWS` or `--max-plan-reviews` remains an optional operator ceiling.
+The first challenge performs one bounded sweep and reports all material findings together. After a semantic revision, run a focused closure verdict that carries prior findings forward. Pair v4 challenges a Work at most twice across plan digests by default. If the second reviewer verdict still has material plan findings, Pair records an exact-digest `human-override`, retains the findings for mandatory coordinator work, and does not challenge the plan again. Reviewer-environment failures are never approved. `PAIR_MAX_PLAN_REVIEWS` or `--max-plan-reviews` can select a different positive challenge cap.
 
 A clean independent verdict records `no-blockers:<digest>:<runtime>/<model>`. If the human deliberately accepts the risk or the reviewer environment is unusable, the user may approve the exact current digest honestly:
 

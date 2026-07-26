@@ -30,7 +30,7 @@ function registerWarmConversation(root, runtime = 'codex', agentConversationId =
   handover.updateAgentConversationCheckpoint(root, {
     ...identity,
     checkpoint: {
-      purpose: 'Protect registered Agent Conversations.',
+      coreAnchor: 'Protect registered Agent Conversations.',
       currentDirection: 'Implement the Freshness Gate.',
       nextAction: 'Run the handover integration contract.',
     },
@@ -654,6 +654,56 @@ test('brainstorming Stop fills a missing Core Anchor from the exact provider tra
   assert.equal(conversation.checkpoint_origin, 'recovered');
   assert.match(conversation.checkpoint.core_anchor, /approved product direction/u);
   assert.match(JSON.stringify(conversation.checkpoint.findings), /Core Anchor must survive adoption/u);
+});
+
+test('brainstorming Stop refreshes volatile fields after transcript progress while preserving stable decisions', t => {
+  const root = fixture(t);
+  const sessionId = 'brainstorm-volatile-refresh';
+  const identity = { runtime: 'codex', agentConversationId: sessionId, kind: 'brainstorming' };
+  const transcriptPath = path.join(root, 'brainstorm-volatile-refresh.jsonl');
+  handover.registerAgentConversation(root, { ...identity, now: 1_000 });
+  handover.updateAgentConversationCheckpoint(root, {
+    ...identity,
+    now: 1_100,
+    origin: 'manual',
+    checkpoint: {
+      coreAnchor: 'Deliver the approved gate and every confirmed remediation.',
+      confirmedChoices: ['Use two coordinated repository Works.'],
+      rejectedAlternatives: ['Do not ship a detection-only gate.'],
+      currentDirection: 'Wait until ParagonAgent becomes writable.',
+      unresolvedDecisions: ['ParagonAgent is not writable.'],
+      nextAction: 'Make ParagonAgent writable.',
+    },
+  });
+  writeJsonl(transcriptPath, [
+    { type: 'session_meta', payload: { id: sessionId, cwd: root } },
+    {
+      timestamp: '2026-07-26T22:42:32.317Z',
+      type: 'event_msg',
+      payload: { type: 'user_message', message: 'try again' },
+    },
+    {
+      timestamp: '2026-07-26T22:43:17.015Z',
+      type: 'event_msg',
+      payload: {
+        type: 'agent_message',
+        message: 'The retry succeeded. ParagonAgent is writable, so I am now grounding the two coordinated plans.',
+      },
+    },
+  ]);
+
+  assert.equal(invoke(root, 'codex', {
+    hook_event_name: 'Stop', session_id: sessionId, transcript_path: transcriptPath, now: 2_000,
+  }), null);
+
+  const conversation = registry(root).conversations[handover.conversationIdentity(identity).sourceKey];
+  assert.equal(conversation.checkpoint_origin, 'manual-recovered');
+  assert.equal(conversation.checkpoint.core_anchor, 'Deliver the approved gate and every confirmed remediation.');
+  assert.deepEqual(conversation.checkpoint.confirmed_choices, ['Use two coordinated repository Works.']);
+  assert.deepEqual(conversation.checkpoint.rejected_alternatives, ['Do not ship a detection-only gate.']);
+  assert.match(conversation.checkpoint.current_direction, /ParagonAgent is writable/u);
+  assert.match(conversation.checkpoint.next_action, /grounding the two coordinated plans/u);
+  assert.deepEqual(conversation.checkpoint.unresolved_decisions, []);
 });
 
 test('exact override permits one prompt and blocks Stop until that turn refreshes its checkpoint', t => {

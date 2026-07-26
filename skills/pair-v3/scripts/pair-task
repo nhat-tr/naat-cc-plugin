@@ -83,6 +83,7 @@ const {
   sealAgentConversationHandover,
   setGeneralHandoverPolicy,
   updateAgentConversationCheckpoint,
+  validateAgentConversationCheckpointInput,
 } = require("./lib/handover-state");
 
 const POLICY_VERSION = "4.0.0";
@@ -863,7 +864,19 @@ function taskContract(task, planPath) {
   return `Task ${task.id}: ${task.text}\nProfile: ${JSON.stringify({ type: task.type, complexity: task.complexity, risk: task.risk, scope: task.scope, uncertainty: task.uncertainty })}\nAcceptance criteria: ${task.acceptanceCriteria?.join(", ") || "read the plan mapping"}\nOwned files: ${task.files.join(", ") || "verification-only; do not expand ownership"}\nTest files: ${(task.testFiles || []).join(", ") || "none"}\nConsumes: ${JSON.stringify(task.consumes || [])}\nProduces: ${JSON.stringify(task.produces || [])}\nDefect class: ${task.defect || "read the plan"}\nReview boundary: ${task.reviewBoundary || "read the plan"}\nRED command: ${task.redVerify || "not applicable"}\nRED expected signal: ${task.redExpected || "not applicable"}\nGREEN verification: ${task.verify || "read the plan"}\nPlan: ${planPath}`;
 }
 
-function redWorkerPrompt(task, planPath, approvedTests, priorReview = null) {
+function retainedPlanFindingsContext(task, planReview) {
+  if (planReview?.approval_kind !== "human-override") return "";
+  const findings = Array.isArray(planReview.findings)
+    ? planReview.findings.filter((finding) =>
+      finding?.origin === "plan" &&
+      (finding.task_id === null || finding.task_id === task.id),
+    )
+    : [];
+  if (findings.length === 0) return "";
+  return `\nThis plan was approved after its second plan-review verdict. The following retained plan challenge findings are mandatory work for this Review Slice:\n${JSON.stringify(findings, null, 2)}\nResolve them while completing this slice. Do not discard or defer a finding that targets this task; if it cannot be resolved within this Review Slice, return blocked with a blocker beginning 'incorrect-plan:'.`;
+}
+
+function redWorkerPrompt(task, planPath, approvedTests, priorReview = null, planReview = null) {
   const hitlContext = approvedTests?.length
     ? `\nHITL-approved test set — write exactly these tests and no others:\n${approvedTests.map((test) => `- ${test.name} (${test.file}): ${test.purpose}`).join("\n")}`
     : "";
@@ -872,10 +885,10 @@ function redWorkerPrompt(task, planPath, approvedTests, priorReview = null) {
     : priorReview?.findings?.length
     ? `\nA previous review rejected this slice. Correct these findings within the same Review boundary:\n${JSON.stringify(priorReview.findings, null, 2)}`
     : "";
-  return `Execute only the RED phase of one behavior-sized pair Review Slice.\n\n${taskContract(task, planPath)}\n\nRead applicable AGENTS.md, the named repository contracts, existing callers, and existing tests before editing. Edit only the declared test files; do not edit production code, snapshots unrelated to the behavior, .pair files, or adjacent tasks. Write the smallest tests that expose the declared defect at the declared test boundary. Run the exact RED command. It must fail for the declared ${task.redMode} reason and contain the exact expected signal. If the command passes, fails in tooling, or requires an unavailable/later contract not produced by this same Review Slice, return blocked with a blocker beginning 'incorrect-plan:'.${reviewContext}${hitlContext}\nReturn only the requested structured result.`;
+  return `Execute only the RED phase of one behavior-sized pair Review Slice.\n\n${taskContract(task, planPath)}\n\nRead applicable AGENTS.md, the named repository contracts, existing callers, and existing tests before editing. Edit only the declared test files; do not edit production code, snapshots unrelated to the behavior, .pair files, or adjacent tasks. Write the smallest tests that expose the declared defect at the declared test boundary. Run the exact RED command. It must fail for the declared ${task.redMode} reason and contain the exact expected signal. If the command passes, fails in tooling, or requires an unavailable/later contract not produced by this same Review Slice, return blocked with a blocker beginning 'incorrect-plan:'.${retainedPlanFindingsContext(task, planReview)}${reviewContext}${hitlContext}\nReturn only the requested structured result.`;
 }
 
-function workerPrompt(task, planPath, priorReview, approvedTests, singleSession = false) {
+function workerPrompt(task, planPath, priorReview, approvedTests, singleSession = false, planReview = null) {
   const reviewContext = priorReview?.retry_context
     ? `\nA previous worker could not complete this slice. Re-read the repository evidence and resolve this bounded context without expanding the Review Slice:\n${priorReview.retry_context}`
     : priorReview?.findings?.length
@@ -889,7 +902,7 @@ function workerPrompt(task, planPath, priorReview, approvedTests, singleSession 
     : task.tddMode === "cycle"
     ? "The coordinator has independently reproduced and preserved the RED phase. Implement only the minimum GREEN behavior. Do not modify any RED-verified test file."
     : "Work exactly one pair-plan Review Slice.";
-  return `${phase}\n\n${taskContract(task, planPath)}\n\nRead the applicable AGENTS.md, the plan's Intent Contract, canonical specification, named Repository evidence, exact callers, and existing tests before editing. Legacy strict plans may also provide Capability Evidence, a Simplicity Contract, and explicit interface contracts; honor them when present. Do not invent APIs, wrappers, factories, registries, ports, or orchestration that the approved intent does not justify. If a load-bearing capability is absent, or this slice cannot be completed within its ownership, return blocked with a blocker beginning 'incorrect-plan:' and cite the observed evidence. Make the smallest complete implementation and run the exact verification. Do not edit any file under .pair/ or work on another task.${reviewContext}${hitlContext}\nReturn only the requested structured result.`;
+  return `${phase}\n\n${taskContract(task, planPath)}\n\nRead the applicable AGENTS.md, the plan's Intent Contract, canonical specification, named Repository evidence, exact callers, and existing tests before editing. Legacy strict plans may also provide Capability Evidence, a Simplicity Contract, and explicit interface contracts; honor them when present. Do not invent APIs, wrappers, factories, registries, ports, or orchestration that the approved intent does not justify. If a load-bearing capability is absent, or this slice cannot be completed within its ownership, return blocked with a blocker beginning 'incorrect-plan:' and cite the observed evidence. Make the smallest complete implementation and run the exact verification. Do not edit any file under .pair/ or work on another task.${retainedPlanFindingsContext(task, planReview)}${reviewContext}${hitlContext}\nReturn only the requested structured result.`;
 }
 
 // Inside a cmux pane the spawned worker/reviewer must reach the genuine Claude CLI,
@@ -3425,10 +3438,10 @@ function isDelegable(_task) {
   return false;
 }
 
-function inlineBrief(task, planPath, priorReview, approvedTests, phase = "green") {
+function inlineBrief(task, planPath, priorReview, approvedTests, phase = "green", planReview = null) {
   const body = (phase === "red"
-    ? redWorkerPrompt(task, planPath, approvedTests, priorReview)
-    : workerPrompt(task, planPath, priorReview, approvedTests, phase === "slice"))
+    ? redWorkerPrompt(task, planPath, approvedTests, priorReview, planReview)
+    : workerPrompt(task, planPath, priorReview, approvedTests, phase === "slice", planReview))
     .replace("\nReturn only the requested structured result.", "");
   const next = phase === "red"
     ? "write only the RED tests, run the exact RED command, then run bare `pair-loop`; it will independently replay RED and hand back the GREEN phase (`--complete` remains a compatibility alias)"
@@ -4269,19 +4282,21 @@ function runOne(root, runtime, options, paths) {
           : ["cycle", "red-contract"].includes(task.tddMode)
             ? "red"
             : "green",
+        readJson(path.join(root, ".pair", "plan-review.json")),
       ),
     );
     return { done: false, inlineHandoff: true };
   }
 
   const priorReview = readJson(path.join(root, ".pair", "review.json"));
+  const planReview = readJson(path.join(root, ".pair", "plan-review.json"));
   const needsRed = options.legacyV3 && ["cycle", "red-contract"].includes(task.tddMode);
   const redInvocation = needsRed
     ? buildWorkerPhase({
         runtime,
         route,
         root,
-        prompt: redWorkerPrompt(task, paths.plan, gate.approvedTests, priorReview),
+        prompt: redWorkerPrompt(task, paths.plan, gate.approvedTests, priorReview, planReview),
         paths,
         attemptId: attempt.attemptId,
         phase: "red",
@@ -4295,13 +4310,14 @@ function runOne(root, runtime, options, paths) {
         route,
         root,
         prompt: singleRedContract
-          ? redWorkerPrompt(task, paths.plan, gate.approvedTests, priorReview)
+          ? redWorkerPrompt(task, paths.plan, gate.approvedTests, priorReview, planReview)
           : workerPrompt(
               task,
               paths.plan,
               priorReview,
               gate.approvedTests,
               !options.legacyV3,
+              planReview,
             ),
         paths,
         attemptId: attempt.attemptId,
@@ -4465,20 +4481,26 @@ function runtimeForNativeConversation(requested, identity) {
   return runtime;
 }
 
+function readCheckpointInput(command, input) {
+  if (input !== null) return input;
+  if (process.stdin.isTTY) {
+    throw new Error(`${command} does not accept interactive TTY stdin; save one JSON object as checkpoint.json and redirect it with < checkpoint.json`);
+  }
+  try {
+    return JSON.parse(fs.readFileSync(0, "utf8") || "null");
+  } catch {
+    throw new Error(`${command} requires one JSON object on stdin`);
+  }
+}
+
 function recordBrainstormCheckpoint(root, options, input = null) {
   const identity = coordinatorIdentity();
   const runtime = runtimeForNativeConversation(options.runtime, identity);
-  let checkpoint = input;
-  if (checkpoint === null) {
-    try {
-      checkpoint = JSON.parse(fs.readFileSync(0, "utf8") || "null");
-    } catch {
-      throw new Error("--brainstorm-checkpoint requires one JSON object on stdin");
-    }
-  }
+  const checkpoint = readCheckpointInput("--brainstorm-checkpoint", input);
   if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
     throw new Error("--brainstorm-checkpoint requires one JSON object on stdin");
   }
+  validateAgentConversationCheckpointInput(checkpoint);
   registerAgentConversation(root, {
     runtime,
     agentConversationId: identity.agentConversationId,
@@ -4495,17 +4517,11 @@ function recordBrainstormCheckpoint(root, options, input = null) {
 function recordConversationCheckpoint(root, options, input = null) {
   const identity = coordinatorIdentity();
   const runtime = runtimeForNativeConversation(options.runtime, identity);
-  let checkpoint = input;
-  if (checkpoint === null) {
-    try {
-      checkpoint = JSON.parse(fs.readFileSync(0, "utf8") || "null");
-    } catch {
-      throw new Error("--conversation-checkpoint requires one JSON object on stdin");
-    }
-  }
+  const checkpoint = readCheckpointInput("--conversation-checkpoint", input);
   if (!checkpoint || typeof checkpoint !== "object" || Array.isArray(checkpoint)) {
     throw new Error("--conversation-checkpoint requires one JSON object on stdin");
   }
+  validateAgentConversationCheckpointInput(checkpoint);
   const sourceKey = conversationIdentity({
     runtime,
     agentConversationId: identity.agentConversationId,
@@ -4770,14 +4786,26 @@ Manual quality upgrade (optional)
     "rejectedAlternatives": ["An option rejected, with the reason."],
     "currentDirection": "What the conversation is doing now.",
     "unresolvedDecisions": ["A real open question."],
-    "nextAction": "The first concrete action for the fresh conversation."
+    "nextAction": "The first concrete action for the fresh conversation.",
+    "artifacts": [
+      { "path": "docs/approved-design.md", "sha256": "<64 lowercase hex characters>" }
+    ]
   }
+
+  The JSON contract is strict. Unknown top-level or nested fields, wrong field
+  types, conflicting aliases, and malformed digests fail visibly; findings use
+  finding/reference/digest and artifacts use path/sha256.
 
   Save it as checkpoint.json, then run inside that same agent conversation:
     pair-loop --conversation-checkpoint < checkpoint.json
 
-  Automatic Stop recovery will enrich later checkpoints without replacing a richer
-  manual Core Anchor. To transfer immediately after reviewing the checkpoint:
+  Both checkpoint commands reject interactive TTY stdin. Use the file redirection
+  shown above or supply JSON in the same shell invocation with a here-document;
+  never start a checkpoint command and paste or stream JSON afterward.
+
+  Automatic Stop recovery preserves the manual Core Anchor and stable choices while
+  refreshing volatile direction, unresolved decisions, and next action after later
+  transcript progress. To transfer immediately after reviewing the checkpoint:
     pair-loop --handover-now
 
 Recovery and opt-out
