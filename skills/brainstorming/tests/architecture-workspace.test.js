@@ -177,7 +177,7 @@ test('scenario paths resolve in both modes and camera, focus, and annotation con
   assert.ok(content.annotation_targets.some(id => edgeIds.has(id)), 'an edge must be annotatable');
 });
 
-test('runtime content rejects a Scenario Path that is not an ordered contiguous directed walk', () => {
+test('runtime content rejects a Scenario Path whose edges do not connect node-to-node in order', () => {
   const invalid = structuredClone(fixture().content);
   const proposed = invalid.scenarios[0].paths.proposed;
   [proposed.node_ids[1], proposed.node_ids[2]] = [proposed.node_ids[2], proposed.node_ids[1]];

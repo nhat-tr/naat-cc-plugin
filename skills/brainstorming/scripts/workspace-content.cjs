@@ -159,19 +159,42 @@ function validateArchitectureSemantics(content, context) {
   for (const scenario of content.scenarios) {
     for (const mode of ['current', 'proposed']) {
       const scenarioPath = scenario.paths[mode];
-      const pathError = () => semanticError(
-        `scenario ${scenario.id} ${mode} path must be an ordered contiguous directed walk`,
-      );
-      if (scenarioPath.node_ids.length !== scenarioPath.edge_ids.length + 1) pathError();
+      if (scenarioPath.node_ids.length !== scenarioPath.edge_ids.length + 1) {
+        semanticError(
+          `scenario ${scenario.id} ${mode} path is malformed: node_ids has ${scenarioPath.node_ids.length} entries but edge_ids has ${scenarioPath.edge_ids.length} — a walk through N nodes needs exactly N-1 edges (expected ${scenarioPath.node_ids.length - 1})`,
+        );
+      }
       const pathNodes = scenarioPath.node_ids.map(id => nodes.get(id));
       const pathEdges = scenarioPath.edge_ids.map(id => edges.get(id));
-      if (pathNodes.some(node => !node) || pathEdges.some(edge => !edge)) pathError();
-      if (pathNodes.some(node => !node.modes.includes(mode))
-        || pathEdges.some(edge => !edge.modes.includes(mode))) pathError();
+
+      const missingNodeIndex = pathNodes.findIndex(node => !node);
+      const missingEdgeIndex = pathEdges.findIndex(edge => !edge);
+      if (missingNodeIndex !== -1 || missingEdgeIndex !== -1) {
+        const badKind = missingNodeIndex !== -1 ? 'node' : 'edge';
+        const badId = badKind === 'node' ? scenarioPath.node_ids[missingNodeIndex] : scenarioPath.edge_ids[missingEdgeIndex];
+        semanticError(
+          `scenario ${scenario.id} ${mode} path references an unknown ${badKind} id "${badId}" — every node_id/edge_id in a Scenario Path must already exist in this workspace's nodes/edges arrays`,
+        );
+      }
+
+      const unsupportedNodeIndex = pathNodes.findIndex(node => !node.modes.includes(mode));
+      const unsupportedEdgeIndex = pathEdges.findIndex(edge => !edge.modes.includes(mode));
+      if (unsupportedNodeIndex !== -1 || unsupportedEdgeIndex !== -1) {
+        const badKind = unsupportedNodeIndex !== -1 ? 'node' : 'edge';
+        const badId = badKind === 'node' ? scenarioPath.node_ids[unsupportedNodeIndex] : scenarioPath.edge_ids[unsupportedEdgeIndex];
+        semanticError(
+          `scenario ${scenario.id} ${mode} path includes ${badKind} "${badId}" which does not declare "${mode}" in its own modes array — every node/edge referenced by a path for mode X must list X in modes, even when current and proposed reuse the identical path`,
+        );
+      }
+
       for (let index = 0; index < pathEdges.length; index += 1) {
         const edge = pathEdges[index];
         if (edge.source.node_id !== scenarioPath.node_ids[index]
-          || edge.target.node_id !== scenarioPath.node_ids[index + 1]) pathError();
+          || edge.target.node_id !== scenarioPath.node_ids[index + 1]) {
+          semanticError(
+            `scenario ${scenario.id} ${mode} path is disconnected at step ${index}: edge "${edge.id}" connects "${edge.source.node_id}"→"${edge.target.node_id}", but the path expects "${scenarioPath.node_ids[index]}"→"${scenarioPath.node_ids[index + 1]}" — a Scenario Path must be one linear walk; if the real flow forks or branches, split it into two scenarios instead of one`,
+          );
+        }
       }
     }
   }

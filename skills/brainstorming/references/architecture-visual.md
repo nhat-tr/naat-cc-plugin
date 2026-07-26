@@ -25,6 +25,8 @@ Use this complete compact grammar; fields not listed are rejected:
 | Scenario | `id`, `label`, `description`, both mode paths | none |
 | Decision | `id`, `title`, 2-5 Options | `multiselect` |
 
+**Scenario Path rules:** `node_ids` are stations in order; `edge_ids` the hops between — one fewer than `node_ids`. `edge_ids[i]` connects `node_ids[i]`→`node_ids[i+1]`. Every referenced node/edge must list the path's mode in its own `modes` (reuse for both `current`+`proposed` needs both listed). One linear walk only — split forks/branches into separate scenarios.
+
 ```json
 {
   "work_id": "work-YYYYMMDD-slug",
@@ -32,35 +34,21 @@ Use this complete compact grammar; fields not listed are rejected:
   "evidence": [{ "id": "EVD-001-runtime-trace", "label": "Observed runtime trace" }],
   "boundaries": [{ "id": "runtime", "label": "Runtime" }],
   "nodes": [
-    {
-      "id": "browser-client",
-      "label": "Browser client",
-      "owner_id": "runtime",
-      "type": "interface",
-      "ports": [{ "id": "feedback-output", "label": "Feedback", "direction": "output", "kind": "event", "protocol": "HTTP" }]
-    },
-    {
-      "id": "agent-session",
-      "label": "Agent Session",
-      "owner_id": "runtime",
-      "type": "service",
-      "ports": [{ "id": "feedback-input", "label": "Feedback", "direction": "input", "kind": "event", "protocol": "HTTP" }]
-    }
+    { "id": "browser-client", "label": "Browser client", "owner_id": "runtime", "type": "interface", "ports": [{ "id": "feedback-output", "label": "Feedback", "direction": "output", "kind": "event", "protocol": "HTTP" }] },
+    { "id": "agent-session", "label": "Agent Session", "owner_id": "runtime", "type": "service", "ports": [{ "id": "feedback-input", "label": "Feedback", "direction": "input", "kind": "event", "protocol": "HTTP" }, { "id": "archive-output", "label": "Out", "direction": "output", "kind": "event", "protocol": "HTTP" }] },
+    { "id": "audit-log", "label": "Audit Log", "owner_id": "runtime", "type": "data_store", "modes": ["proposed"], "ports": [{ "id": "archive-input", "label": "In", "direction": "input", "kind": "event", "protocol": "HTTP" }] }
   ],
-  "edges": [{
-    "id": "feedback-delivery",
-    "label": "Feedback delivery",
-    "type": "event",
-    "source": { "node_id": "browser-client", "port_id": "feedback-output" },
-    "target": { "node_id": "agent-session", "port_id": "feedback-input" }
-  }],
+  "edges": [
+    { "id": "feedback-delivery", "label": "Feedback delivery", "source": { "node_id": "browser-client", "port_id": "feedback-output" }, "target": { "node_id": "agent-session", "port_id": "feedback-input" } },
+    { "id": "session-archive", "label": "Archive", "modes": ["proposed"], "source": { "node_id": "agent-session", "port_id": "archive-output" }, "target": { "node_id": "audit-log", "port_id": "archive-input" } }
+  ],
   "scenarios": [{
     "id": "submit-feedback",
     "label": "Submit feedback",
-    "description": "Deliver browser feedback to the same Agent Session.",
+    "description": "Deliver feedback to Agent Session; proposed also archives it.",
     "paths": {
       "current": { "node_ids": ["browser-client", "agent-session"], "edge_ids": ["feedback-delivery"] },
-      "proposed": { "node_ids": ["browser-client", "agent-session"], "edge_ids": ["feedback-delivery"] }
+      "proposed": { "node_ids": ["browser-client", "agent-session", "audit-log"], "edge_ids": ["feedback-delivery", "session-archive"] }
     }
   }],
   "decisions": [{
