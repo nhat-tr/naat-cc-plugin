@@ -9,7 +9,8 @@
         "properties": {
           "name": { "type": "string" },
           "purpose": { "type": "string" },
-          "file": { "type": "string" }
+          "file": { "type": "string" },
+          "spec": { "type": "string", "maxLength": 700 }
         },
         "required": ["name", "purpose", "file"],
         "additionalProperties": false

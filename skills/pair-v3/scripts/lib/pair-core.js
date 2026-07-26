@@ -94,7 +94,8 @@ function taskFromParts(id, rawText, lineNumber, prefix = '') {
   const testFiles = [...testFileClause.matchAll(/`([^`]+)`/g)].map(item => item[1]);
   const redVerify = rawText.match(/\s*[-:–—]\s*red:\s*`([^`]+)`/i)?.[1]?.trim() || '';
   const redExpected = rawText.match(/\s*[-:–—]\s*red-expect:\s*`([^`]+)`/i)?.[1]?.trim() || '';
-  const verify = rawText.match(/\s*[-:–—]\s*verify:\s*`([^`]+)`/i)?.[1]?.trim() || '';
+  const extraVerify = rawText.match(/\s*[-:–—]\s*extra-verify:\s*`([^`]+)`/i)?.[1]?.trim() || '';
+  const verify = rawText.match(/\s*[-:–—]\s*(?<!extra-)verify:\s*`([^`]+)`/i)?.[1]?.trim() || '';
   const complexityMatch = rawText.match(/\*\*([SML])\*\*/i);
   const complexity = complexityMatch?.[1]?.toUpperCase() || 'M';
   const tags = Object.fromEntries([...rawText.matchAll(/\[(type|risk|scope|uncertainty|phase|ac|tdd|red|test):([^\]]+)\]/gi)]
@@ -109,7 +110,8 @@ function taskFromParts(id, rawText, lineNumber, prefix = '') {
     .replace(/\s*[-:–—]\s*tests?:\s*(?:`[^`]+`(?:\s*,\s*)?)+/i, '')
     .replace(/\s*[-:–—]\s*red-expect:\s*`[^`]+`/i, '')
     .replace(/\s*[-:–—]\s*red:\s*`[^`]+`/i, '')
-    .replace(/\s*[-:–—]\s*verify:\s*`[^`]+`/i, '')
+    .replace(/\s*[-:–—]\s*extra-verify:\s*`[^`]+`/i, '')
+    .replace(/\s*[-:–—]\s*(?<!extra-)verify:\s*`[^`]+`/i, '')
     .replace(/\s*(?:[-:–—·])\s*\*\*[SML]\*\*/gi, '')
     .trim();
   const joined = `${text} ${files.join(' ')}`;
@@ -141,6 +143,7 @@ function taskFromParts(id, rawText, lineNumber, prefix = '') {
     files,
     testFiles,
     verify,
+    extraVerify,
     consumesRaw: '',
     consumes: [],
     producesRaw: '',
@@ -163,6 +166,7 @@ function addTaskMetadata(task, label, value) {
     red: ` - red: ${value}`,
     'red expect': ` - red-expect: ${value}`,
     verify: ` - verify: ${value}`,
+    'extra-verify': ` - extra-verify: ${value}`,
   }[normalized];
   if (!clause) return;
 

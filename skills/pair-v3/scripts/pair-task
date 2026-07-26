@@ -119,6 +119,8 @@ function isPairRuntimeArtifact(file) {
     normalized === ".pair/ledger-bindings.json" ||
     normalized === ".pair/review.json" ||
     normalized === ".pair/review.md" ||
+    normalized === ".pair/review-gate.json" ||
+    normalized === ".pair/review-ledger.jsonl" ||
     normalized === ".pair/final-review.json" ||
     normalized === ".pair/final-review.md" ||
     normalized === ".pair/test-proposal.json" ||
@@ -153,6 +155,7 @@ function parseArgs(argv) {
     legacyV3: process.env.PAIR_LEGACY_V3 === "1",
     independentReview: process.env.PAIR_INDEPENDENT_REVIEW !== "off",
     advisoryReview: process.env.PAIR_REVIEW_MODE === "advisory",
+    reviewGate: process.env.PAIR_REVIEW_GATE === "1",
     freshFrom: null,
     adoptHandover: null,
     allowColdResume: null,
@@ -211,7 +214,16 @@ function parseArgs(argv) {
         argv[index + 1] && !argv[index + 1].startsWith("-")
           ? argv[++index]
           : "all";
-    } else if (arg === "--max-attempts")
+    } else if (arg === "--revise-test") options.reviseTest = argv[++index];
+    else if (arg === "--note") options.reviseNote = argv[++index];
+    else if (arg === "--review-gate") options.reviewGate = true;
+    else if (arg === "--review-status") options.reviewStatus = true;
+    else if (arg === "--review-decision") options.reviewDecision = argv[++index];
+    else if (arg === "--action") options.reviewAction = argv[++index];
+    else if (arg === "--reason") options.reviewReason = argv[++index];
+    else if (arg === "--add-verify") options.addVerify = argv[++index];
+    else if (arg === "--task") options.taskScope = argv[++index];
+    else if (arg === "--max-attempts")
       options.maxAttempts = Number(argv[++index]);
     else if (arg === "--max-work-attempts")
       options.maxWorkAttempts = Number(argv[++index]);
@@ -1315,6 +1327,8 @@ function verifyOwnership(root, task, snapshot) {
     const base = path.posix.basename(normalized).toLowerCase();
     return normalized === ".pair/plan.md" ||
       normalized === ".pair/spec.md" ||
+      normalized === ".pair/verify.sh" ||
+      normalized === ".pair/extra-verify.json" ||
       (normalized.startsWith("docs/work/") && normalized.endsWith("/spec.md")) ||
       normalized.startsWith("../") ||
       normalized.startsWith("/") ||
@@ -1344,7 +1358,61 @@ function verifyOwnership(root, task, snapshot) {
   };
 }
 
+function extraVerifyPath(root) {
+  return path.join(root, ".pair", "extra-verify.json");
+}
+
+// The runtime store is human-owned: entries are added between attempts via
+// `pair-loop --add-verify` and never by the doer (a doer edit is a hard
+// ownership boundary). Task-scoped entries run only for their task.
+function collectExtraVerification(root, task) {
+  const extras = [];
+  if (task.extraVerify?.trim()) {
+    extras.push({ command: task.extraVerify, source: "plan" });
+  }
+  const store = readJson(extraVerifyPath(root));
+  for (const entry of Array.isArray(store?.entries) ? store.entries : []) {
+    if (!entry || typeof entry.command !== "string" || !entry.command.trim()) continue;
+    if (entry.task_id && String(entry.task_id) !== String(task.id)) continue;
+    extras.push({ command: entry.command, source: "runtime" });
+  }
+  return extras;
+}
+
+function runAdditiveVerification(root, task, primary) {
+  const extras = collectExtraVerification(root, task);
+  for (const extra of extras) {
+    const result = runVerificationCommand(
+      root,
+      extra.command,
+      `${task.id || "task"} extra-verify`,
+    );
+    if (result.status !== 0) {
+      return {
+        status: "fail",
+        command: extra.command,
+        output: result.output,
+        ownership: primary.ownership || null,
+        termination: result.termination,
+        signal: result.signal,
+        evidence: result.evidence,
+        exit_status: result.status,
+        extraVerify: { source: extra.source, primary: primary.command },
+      };
+    }
+  }
+  return extras.length > 0
+    ? { ...primary, extraVerify: { ran: extras.map((extra) => extra.command) } }
+    : primary;
+}
+
 function verify(root, task, workerResult, snapshot = null, greenSnapshot = null) {
+  const primary = verifyPrimary(root, task, workerResult, snapshot, greenSnapshot);
+  if (primary.status !== "pass" || isExpectedFailingTestTask(task)) return primary;
+  return runAdditiveVerification(root, task, primary);
+}
+
+function verifyPrimary(root, task, workerResult, snapshot = null, greenSnapshot = null) {
   const diffCheck = git(root, ["diff", "--check"]);
   if (diffCheck.status !== 0)
     return {
@@ -2056,6 +2124,160 @@ function shouldRunTaskReview(task, options = {}, env = process.env) {
   return task.risk === "critical";
 }
 
+function reviewGatePath(root) {
+  return path.join(root, ".pair", "review-gate.json");
+}
+
+function reviewLedgerPath(root) {
+  return path.join(root, ".pair", "review-ledger.jsonl");
+}
+
+function reviewVerdictDigest(review) {
+  return sha256(JSON.stringify({
+    verdict: review.verdict,
+    recommended_action: review.recommended_action,
+    summary: review.summary,
+    findings: review.findings || [],
+  }));
+}
+
+// The gate record stores the effective (post-anchor) verdict so a resumed run
+// reuses it instead of re-running the reviewer — a fresh review could drift and
+// orphan the human decision. It never holds prompts, transcripts, or reasoning.
+function resolveReviewGate(root, { taskId, attemptId, review }) {
+  const file = reviewGatePath(root);
+  const record = readJson(file);
+  const verdictDigest = reviewVerdictDigest(review);
+  const matches = Boolean(record) &&
+    record.taskId === taskId &&
+    record.attemptId === attemptId &&
+    record.verdictDigest === verdictDigest;
+  if (matches && record.status === "decided" && record.decision) {
+    fs.rmSync(file, { force: true });
+    return { status: "decided", decision: record.decision, verdictDigest };
+  }
+  if (matches && record.status === "awaiting-decision") {
+    return { status: "awaiting-decision", verdictDigest };
+  }
+  writePrivateJson(file, {
+    schema: 1,
+    taskId,
+    attemptId,
+    verdictDigest,
+    reviewerRecommendedAction: review.recommended_action,
+    review,
+    status: "awaiting-decision",
+    createdAt: new Date().toISOString(),
+  });
+  return { status: "awaiting-decision", verdictDigest };
+}
+
+function readReviewGateEvidence(root, taskId, attemptId) {
+  const record = readJson(reviewGatePath(root));
+  if (!record || record.taskId !== taskId || record.attemptId !== attemptId) return null;
+  if (!record.review || typeof record.review !== "object") return null;
+  return record.review;
+}
+
+const REVIEW_OVERRIDE_ACTIONS = new Set(["approve", "local-fix", "rewrite", "redesign"]);
+
+function decideReviewGate(root, { decision, action, reason }) {
+  const file = reviewGatePath(root);
+  const record = readJson(file);
+  if (!record || record.status !== "awaiting-decision") {
+    throw new Error("no review verdict is awaiting a decision; run pair-loop with --review-gate first");
+  }
+  if (!["approve", "override"].includes(decision)) {
+    throw new Error(`--review-decision must be approve or override, got ${decision}`);
+  }
+  const decidedAt = new Date().toISOString();
+  let entryDecision;
+  if (decision === "override") {
+    if (!REVIEW_OVERRIDE_ACTIONS.has(String(action || ""))) {
+      throw new Error("--review-decision override requires --action approve|local-fix|rewrite|redesign");
+    }
+    if (!String(reason || "").trim()) {
+      throw new Error('--review-decision override requires --reason "<text>"');
+    }
+    entryDecision = { decision: "override", action: String(action), reason: String(reason).trim(), decidedAt };
+  } else {
+    entryDecision = { decision: "approve", action: null, reason: String(reason || "").trim() || null, decidedAt };
+  }
+  writePrivateJson(file, { ...record, status: "decided", decision: entryDecision });
+  const ledgerEntry = {
+    task_id: record.taskId,
+    attempt_id: record.attemptId,
+    verdict_digest: record.verdictDigest,
+    reviewer_recommended_action: record.reviewerRecommendedAction,
+    human_decision: entryDecision.decision,
+    override_action: entryDecision.action,
+    override_reason: entryDecision.reason,
+    at: decidedAt,
+  };
+  appendJsonLine(reviewLedgerPath(root), ledgerEntry);
+  return ledgerEntry;
+}
+
+function reviewStatusSummary(root) {
+  const sources = [
+    { kind: "slice", file: path.join(root, ".pair", "review.json") },
+    { kind: "plan", file: path.join(root, ".pair", "plan-review.json") },
+    { kind: "final", file: path.join(root, ".pair", "final-review.json") },
+  ];
+  const available = [];
+  for (const source of sources) {
+    let stat;
+    try {
+      stat = fs.statSync(source.file);
+    } catch {
+      continue;
+    }
+    const data = readJson(source.file);
+    if (!data || typeof data !== "object") continue;
+    const review = data.review && typeof data.review === "object" ? data.review : data;
+    available.push({
+      kind: source.kind,
+      file: source.file,
+      updated_at: stat.mtime.toISOString(),
+      mtimeMs: stat.mtimeMs,
+      verdict: review.verdict ?? null,
+      recommended_action: review.recommended_action ?? null,
+      summary: typeof review.summary === "string" ? review.summary : null,
+      findings: Array.isArray(review.findings) ? review.findings : [],
+    });
+  }
+  if (available.length === 0) return null;
+  available.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const [latest, ...others] = available.map(({ mtimeMs, ...entry }) => entry);
+  return {
+    ...latest,
+    other: others.map(({ kind, verdict, updated_at }) => ({ kind, verdict, updated_at })),
+  };
+}
+
+function printReviewStatus(summary) {
+  console.log(
+    `pair-loop: latest review evidence — ${summary.kind} (${path.basename(summary.file)}, updated ${summary.updated_at})`,
+  );
+  console.log(
+    `  verdict: ${summary.verdict ?? "unknown"}${summary.recommended_action ? ` — recommended action: ${summary.recommended_action}` : ""}`,
+  );
+  if (summary.summary) console.log(`  summary: ${summary.summary}`);
+  if (summary.findings.length === 0) {
+    console.log("  findings: none");
+  } else {
+    console.log(`  findings (${summary.findings.length}):`);
+    for (const finding of summary.findings) {
+      const label = [finding.severity, finding.category, finding.origin].filter(Boolean).join(" ");
+      const where = finding.file ? ` (${finding.file}${finding.line ? `:${finding.line}` : ""})` : "";
+      console.log(`    - [${label}] ${finding.title || "untitled"}${where}${finding.detail ? ` — ${finding.detail}` : ""}`);
+    }
+  }
+  for (const other of summary.other || []) {
+    console.log(`  also available: ${other.kind} — ${other.verdict ?? "unknown"} (updated ${other.updated_at})`);
+  }
+}
+
 function writeReviewFiles(root, review) {
   const safeReview = sanitizeValue(review) || {};
   const dir = path.join(root, ".pair");
@@ -2173,12 +2395,19 @@ function finalVerificationCommands(root, parsed) {
   const commands = new Set(
     [
       ...parsed.tasks.map((task) => task.verify),
+      ...parsed.tasks.map((task) => task.extraVerify),
       ...(parsed.fullVerificationCommands || []),
     ].filter(Boolean),
   );
   const verifyScript = path.join(root, ".pair", "verify.sh");
   if (fs.existsSync(verifyScript) && (fs.statSync(verifyScript).mode & 0o111)) {
     commands.add("./.pair/verify.sh");
+  }
+  const store = readJson(extraVerifyPath(root));
+  for (const entry of Array.isArray(store?.entries) ? store.entries : []) {
+    if (entry && typeof entry.command === "string" && entry.command.trim()) {
+      commands.add(entry.command);
+    }
   }
   return [...commands];
 }
@@ -2583,6 +2812,22 @@ function applyTestApproval(proposal, selection) {
   return { ...proposal, status: "approved", tests };
 }
 
+// A revision note demotes the test back to unapproved and flags the whole
+// proposal for regeneration; notes ride on the proposal record, so they share
+// its task-ID + plan-digest binding and vanish when the task changes.
+function reviseTestProposal(proposal, index, note) {
+  const tests = proposal.tests.map((test, position) =>
+    position === index - 1
+      ? {
+          ...test,
+          approved: false,
+          feedback: [...(Array.isArray(test.feedback) ? test.feedback : []), note],
+        }
+      : test,
+  );
+  return { ...proposal, status: "revise", tests };
+}
+
 function printTestProposal(proposal) {
   console.log(
     `pair-loop: task ${proposal.taskId} proposes ${proposal.tests.length} test(s) — review before they are written:`,
@@ -2591,14 +2836,23 @@ function printTestProposal(proposal) {
     console.log(
       `  [${index + 1}] ${test.name} — ${test.purpose} (${test.file})`,
     );
+    if (test.spec) console.log(`      spec: ${test.spec}`);
+    if (Array.isArray(test.feedback) && test.feedback.length > 0) {
+      console.log(`      revision notes: ${test.feedback.join("; ")}`);
+    }
   });
   console.log(
-    "pair-loop: approve with `pair-loop --approve-tests all` (indexes like 1,3 approve a subset; `none` rejects), then rerun pair-loop.",
+    "pair-loop: approve with `pair-loop --approve-tests all` (indexes like 1,3 approve a subset; `none` rejects), or steer one test with `pair-loop --revise-test <n> --note \"...\"`, then rerun pair-loop.",
   );
 }
 
-function proposalPrompt(task, planPath) {
-  return `Propose the exact tests-first test set for Pair slice ${task.id} WITHOUT writing or editing any file.\n\n${taskContract(task, planPath)}\n\nRead the Intent Contract, canonical specification, named Repository evidence, relevant callers, and existing tests. Propose the minimum tests that expose only the mapped missing behavior at the declared test boundary. Follow repository naming conventions. For each test return its exact name, one-line behavioral purpose, and one declared test file. Do not propose structure-mirroring tests or behavior outside this slice. Return only the requested structured result.`;
+function proposalPrompt(task, planPath, revisionNotes = null) {
+  const revisionContext = revisionNotes?.length
+    ? `\n\nA previous proposal for this task was declined with revision notes. Account for each note in the new proposal:\n${revisionNotes
+        .map((note) => `- ${note.name}: ${note.notes.join("; ")}`)
+        .join("\n")}`
+    : "";
+  return `Propose the exact tests-first test set for Pair slice ${task.id} WITHOUT writing or editing any file.\n\n${taskContract(task, planPath)}\n\nRead the Intent Contract, canonical specification, named Repository evidence, relevant callers, and existing tests. Propose the minimum tests that expose only the mapped missing behavior at the declared test boundary. Follow repository naming conventions. For each test return its exact name, one-line behavioral purpose, and one declared test file; optionally add a short \`spec\` — two to four sentences sketching what the test arranges and asserts and why the declared boundary is right. Do not propose structure-mirroring tests or behavior outside this slice.${revisionContext}\n\nReturn only the requested structured result.`;
 }
 
 function runTestProposal({
@@ -2609,6 +2863,7 @@ function runTestProposal({
   planPath,
   scratchDir,
   timeoutMs,
+  revisionNotes = null,
 }) {
   const outputPath = path.join(scratchDir, `${task.id}.test-proposal.json`);
   const rawPath = path.join(
@@ -2622,7 +2877,7 @@ function runTestProposal({
   const proposalPlanPath = snapshot && resolvedPlanPath.startsWith(`${path.resolve(root)}${path.sep}`)
     ? path.join(proposalRoot, path.relative(root, resolvedPlanPath))
     : planPath;
-  const prompt = proposalPrompt(task, proposalPlanPath);
+  const prompt = proposalPrompt(task, proposalPlanPath, revisionNotes);
   let command;
   if (runtime === "codex") {
     const args = [
@@ -2740,7 +2995,13 @@ function hitlGate(
     };
   }
   let proposal = readTestProposal(root, task, plan);
-  if (!proposal) {
+  const needsReproposal = proposal?.status === "revise";
+  if (!proposal || needsReproposal) {
+    const revisionNotes = needsReproposal
+      ? proposal.tests
+          .filter((test) => Array.isArray(test.feedback) && test.feedback.length > 0)
+          .map((test) => ({ name: test.name, notes: test.feedback }))
+      : null;
     const generated = generate({
       runtime,
       route,
@@ -2749,6 +3010,7 @@ function hitlGate(
       planPath: paths.plan,
       scratchDir: paths.scratch,
       timeoutMs: Number(process.env.PAIR_PROPOSAL_TIMEOUT_MS || 10 * 60 * 1000),
+      revisionNotes,
     });
     if (generated.status !== 0 || generated.tests.length === 0) {
       fail(`task ${task.id} test proposal failed; see ${paths.scratch}`);
@@ -2758,6 +3020,7 @@ function hitlGate(
       taskId: task.id,
       planDigest: planContractDigest(plan),
       status: "proposed",
+      ...(revisionNotes?.length ? { revisions: revisionNotes } : {}),
       tests: generated.tests.map((test) => ({ ...test, approved: false })),
     };
     writeTestProposal(root, proposal);
@@ -3354,8 +3617,15 @@ function assessAttempt({
     });
   }
   const taskReviewRequired = eligibleForReview && shouldRunTaskReview(task, options);
-  const reviewRun =
-    taskReviewRequired
+  // A verdict already gated for this attempt is reused verbatim on resume; a
+  // fresh review could drift and orphan the recorded human decision.
+  const gatedReviewEvidence =
+    taskReviewRequired && options.reviewGate && !options.advisoryReview
+      ? readReviewGateEvidence(root, task.id, attempt.attemptId)
+      : null;
+  const reviewRun = gatedReviewEvidence
+    ? { status: 0, review: gatedReviewEvidence, usage: null, resumedFromGate: true }
+    : taskReviewRequired
       ? runReview({
           runtime,
           route,
@@ -3400,6 +3670,7 @@ function assessAttempt({
     reviewRun.status === 0 &&
     !options.dryRun &&
     !reviewRun.skipped &&
+    !reviewRun.resumedFromGate &&
     shouldRunAnchorReview(attempt.attemptId, task, reviewRun.review)
       ? runReview({
           runtime,
@@ -3448,6 +3719,57 @@ function assessAttempt({
     (anchorRun.review.verdict !== "approve" ||
       anchorRun.review.recommended_action !== "approve");
   const effectiveReview = anchorDisagrees ? anchorRun.review : reviewRun.review;
+  // D-4 review gate: with findings present, pause before the coordinator acts
+  // and wait for an explicit human decision. Only reachable after verification
+  // passed (reviews run only on verified work), so a decision can never stand
+  // in for verification.
+  let reviewGateDecision = null;
+  if (
+    options.reviewGate &&
+    !options.advisoryReview &&
+    !options.dryRun &&
+    (effectiveReview.findings || []).length > 0
+  ) {
+    const gate = resolveReviewGate(root, {
+      taskId: task.id,
+      attemptId: attempt.attemptId,
+      review: effectiveReview,
+    });
+    if (gate.status === "awaiting-decision") {
+      writeReviewFiles(root, effectiveReview);
+      enterAttemptPhase(paths, attempt, "reviewing", {
+        verification: {
+          status: verification.status,
+          command: verification.command,
+          ownership: verification.ownership || null,
+        },
+        review: effectiveReview,
+        reviewSlice: {
+          path: reviewSlice.path,
+          changed: reviewSlice.changed,
+        },
+        patchDigest: reviewSliceDigest,
+      });
+      appendJsonLine(paths.ledger, {
+        event: "review-gate.awaiting",
+        attemptId: attempt.attemptId,
+        taskId: task.id,
+        workId: attempt.workId || null,
+        planDigest: attempt.planDigest || null,
+        verdictDigest: gate.verdictDigest,
+        findings: (effectiveReview.findings || []).length,
+        phase: "reviewing",
+        resume_target: "reviewing",
+        terminal: false,
+      });
+      console.log(
+        `pair-v4: review verdict for task ${task.id} is gated with ${(effectiveReview.findings || []).length} finding(s); inspect with \`pair-loop --review-status\`, decide with \`pair-loop --review-decision approve\` or \`pair-loop --review-decision override --action approve|local-fix|rewrite|redesign --reason "..."\`, then rerun pair-loop`,
+      );
+      return { done: false, action: "await-review-decision", recoverable: true, gated: true };
+    }
+    reviewGateDecision = gate.decision;
+  }
+  const humanOverride = reviewGateDecision?.decision === "override" ? reviewGateDecision : null;
   const ownership = redPhase?.verification?.ownership?.status === "fail"
     ? redPhase.verification.ownership
     : verification.ownership || null;
@@ -3456,13 +3778,15 @@ function assessAttempt({
     workerBlocker: worker.blocker,
     verification: verification.status,
     ownership,
-    findings: options.advisoryReview ? [] : effectiveReview.findings || [],
+    findings: options.advisoryReview || humanOverride?.action === "approve"
+      ? []
+      : effectiveReview.findings || [],
     priorRetryCounts: options.legacyV3
       ? attemptCapStatus(prior, options.maxAttempts).retryCounts
       : {},
     runtimeStatus: workerRun.status ?? 1,
     reviewStatus: anchorRun ? (anchorRun.status ?? 1) : (reviewRun.status ?? 1),
-    recommendedAction: effectiveReview.recommended_action,
+    recommendedAction: humanOverride ? humanOverride.action : effectiveReview.recommended_action,
     workerParseError: worker.parseError === true,
   });
   const recordedReview = options.advisoryReview
@@ -3480,7 +3804,17 @@ function assessAttempt({
           ].join(" "),
         }
       : effectiveReview;
-  writeReviewFiles(root, recordedReview);
+  const reviewForEvidence = reviewGateDecision
+    ? {
+        ...recordedReview,
+        review_gate: {
+          human_decision: reviewGateDecision.decision,
+          override_action: reviewGateDecision.action || null,
+          override_reason: reviewGateDecision.reason || null,
+        },
+      }
+    : recordedReview;
+  writeReviewFiles(root, reviewForEvidence);
   const workerUsage = parseRuntimeUsage(runtime, workerRun.stdout || "");
   const distinctRedUsage = task.tddMode === "cycle" ? redPhase?.usage : null;
   const measuredCosts = [
@@ -3510,7 +3844,7 @@ function assessAttempt({
         }
       : null,
     verification,
-    review: recordedReview,
+    review: reviewForEvidence,
     primaryReview: reviewRun.review,
     anchorReview: anchorRun?.review || null,
     reviewCalibration: anchorRun
@@ -4333,7 +4667,7 @@ function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     console.log(
-      "Usage: pair-task [--runtime codex|claude|auto] [--fresh-from HANDOVER_ID|--adopt-handover HANDOVER_ID|--allow-cold-resume HANDOVER_ID --once --confirm-cost-risk|--brainstorm-checkpoint|--register-brainstorming] [--host|--attach|--status [--json]|--freshness-status|--pause|--resume|--takeover [SESSION]|--cancel-now|--discard-attempt [ATTEMPT] [--confirm-discard]|--begin-human-edit plan|code|--end-human-edit|--steer MESSAGE] [--allow-cross-runtime-fallback] [--model MODEL] [--effort LEVEL] [--once] [--inline] [--complete] [--doctor] [--dry-run] [--no-independent-review] [--advisory-review] [--hitl] [--approve-tests all|1,3|none] [--max-attempts N] [--max-work-attempts N] [--max-final-reviews N] [--legacy-v3]",
+      "Usage: pair-task [--runtime codex|claude|auto] [--fresh-from HANDOVER_ID|--adopt-handover HANDOVER_ID|--allow-cold-resume HANDOVER_ID --once --confirm-cost-risk|--brainstorm-checkpoint|--register-brainstorming] [--host|--attach|--status [--json]|--freshness-status|--pause|--resume|--takeover [SESSION]|--cancel-now|--discard-attempt [ATTEMPT] [--confirm-discard]|--begin-human-edit plan|code|--end-human-edit|--steer MESSAGE] [--allow-cross-runtime-fallback] [--model MODEL] [--effort LEVEL] [--once] [--inline] [--complete] [--doctor] [--dry-run] [--no-independent-review] [--advisory-review] [--hitl] [--approve-tests all|1,3|none] [--revise-test N --note TEXT] [--add-verify CMD [--task ID]] [--review-status [--json]] [--review-gate] [--review-decision approve|override --action approve|local-fix|rewrite|redesign --reason TEXT] [--max-attempts N] [--max-work-attempts N] [--max-final-reviews N] [--legacy-v3]",
     );
     return;
   }
@@ -4448,6 +4782,76 @@ function main() {
           ? " — none approved; revise the plan task or delete .pair/test-proposal.json to repropose"
           : "; rerun pair-loop to write them"
       }`,
+    );
+    return;
+  }
+  if (options.reviseTest !== undefined) {
+    const note = String(options.reviseNote || "").trim();
+    if (!note) fail('--revise-test requires --note "<text>"');
+    const proposal = readJson(testProposalPath(root));
+    if (!proposal?.tests) {
+      fail("no test proposal is awaiting review; --revise-test needs a current proposal");
+    }
+    const index = Number(options.reviseTest);
+    if (!Number.isInteger(index) || index < 1 || index > proposal.tests.length) {
+      fail(`invalid test index ${options.reviseTest}; the proposal has ${proposal.tests.length} test(s)`);
+    }
+    const revised = reviseTestProposal(proposal, index, note);
+    writeTestProposal(root, revised);
+    console.log(
+      `pair-loop: recorded revision note for test [${index}] ${revised.tests[index - 1].name}; rerun pair-loop to re-propose with the note applied`,
+    );
+    return;
+  }
+  if (options.addVerify !== undefined) {
+    const command = String(options.addVerify || "").trim();
+    if (!command) fail("--add-verify requires a non-empty command");
+    const file = extraVerifyPath(root);
+    const store = readJson(file) || { schema: 1, entries: [] };
+    if (!Array.isArray(store.entries)) {
+      fail(".pair/extra-verify.json is malformed; fix or remove it before adding entries");
+    }
+    store.entries.push({
+      command,
+      task_id: options.taskScope ? String(options.taskScope) : null,
+      added_at: new Date().toISOString(),
+      source: "human",
+    });
+    writePrivateJson(file, store);
+    console.log(
+      `pair-loop: recorded extra verification${options.taskScope ? ` for task ${options.taskScope}` : ""}: \`${command}\`; it runs additively at the next verification and joins the final gate`,
+    );
+    return;
+  }
+  if (options.reviewStatus) {
+    const summary = reviewStatusSummary(root);
+    if (!summary) {
+      console.log(
+        options.json
+          ? JSON.stringify({ status: "no-review-evidence" })
+          : "pair-loop: no review evidence found under .pair/",
+      );
+      return;
+    }
+    if (options.json) console.log(JSON.stringify(summary, null, 2));
+    else printReviewStatus(summary);
+    return;
+  }
+  if (options.reviewDecision !== undefined) {
+    let recorded;
+    try {
+      recorded = decideReviewGate(root, {
+        decision: options.reviewDecision,
+        action: options.reviewAction,
+        reason: options.reviewReason,
+      });
+    } catch (error) {
+      fail(error.message);
+    }
+    console.log(
+      recorded.human_decision === "approve"
+        ? `pair-loop: approved the reviewer verdict for task ${recorded.task_id}; rerun pair-loop to proceed as the reviewer recommended`
+        : `pair-loop: recorded override (${recorded.override_action}) for task ${recorded.task_id}; rerun pair-loop to apply it`,
     );
     return;
   }
@@ -4652,12 +5056,17 @@ module.exports = {
   adoptFreshAgentConversation,
   applyTestApproval,
   assertPlainFreshRuntimeCommand,
+  assessAttempt,
   authorizeOneShotColdResume,
   beginActivePairLoop,
   bindAttemptLedger,
   changedPathsSinceSnapshot,
   chooseRoute,
   clearTestProposal,
+  collectExtraVerification,
+  decideReviewGate,
+  extraVerifyPath,
+  finalVerificationCommands,
   endActivePairLoop,
   coordinatorIdentity,
   finalGateFailureCapStatus,
@@ -4672,7 +5081,14 @@ module.exports = {
   launchFreshAgentConversation,
   parseArgs,
   parseWorkerResult,
+  printTestProposal,
+  proposalPrompt,
   readTestProposal,
+  resolveReviewGate,
+  reviewGatePath,
+  reviewLedgerPath,
+  reviewStatusSummary,
+  reviseTestProposal,
   recordBrainstormCheckpoint,
   registerBrainstormingBootstrap,
   readWorkLinkage,
@@ -4689,6 +5105,7 @@ module.exports = {
   snapshotWorktree,
   taskHistory,
   verify,
+  verifyOwnership,
   verifyRed,
   workerPrompt,
   writeCumulativeReviewPatch,
