@@ -60,6 +60,15 @@ SEQUENCE kind (`sequence`):
 
 `points`: any node, lifeline, or message may carry up to 6 short claims (≤160 chars). Each renders as its own annotatable target with a derived id `<component-id>-p1`, `-p2`, … — the same claim-level feedback contract as the Architecture Canvas.
 
+Activation bars are derived from `message_kind`, never authored:
+
+- `sync` / `create` activate the receiver until the receiver's next `reply` / `destroy`. Pair them, and nested calls close innermost-first.
+- `async` owns no bar. A fire-and-forget notification has no observable return, so a bar for it would have no end.
+- `self` owns one bar spanning its own row, nested inside whatever already has the lifeline busy.
+- A `sync` call with no matching `reply` still gets a bar, but it stops at the last row its lifeline takes part in and is drawn with a dashed edge — the reader is told the end was inferred. Add the reply when the end matters.
+
+Every bar is clickable and carries the label of the message that opened it, so a lifeline that does many things stays attributable. A lifeline fed only by `async` messages therefore shows the work it actually does, not one bar per notification it ever received.
+
 Do not add `version`, `workspace_kind`, `revision`, `frames`, `components`, `component_id`, `layout`, `camera`, `focus_targets`, `annotation_targets`, HTML, or style fields. The compiler derives and validates them.
 
 ### Component example
@@ -155,6 +164,12 @@ Do not add `version`, `workspace_kind`, `revision`, `frames`, `components`, `com
   ]
 }
 ```
+
+## Edge Labels And Reviewer Layout Control
+
+For the graph kinds, an edge `label` is laid out, not overlaid: the compiler measures the label box (wrapped to at most three lines) and ELK reserves that space between layers, so a label never lands on a card and never hides an arrowhead. Long labels therefore widen the diagram — keep them to a short relationship phrase (roughly ≤ 40 characters, e.g. `captures typed results by CallId`) and put the argument in the target node's `points`.
+
+The reviewer can drag any node to untangle a dense region; its package grows to keep containing it and every attached edge re-routes to the moved border. Edge labels are draggable too — dragging one pulls it off a label it collides with and leaves a leader line back to its edge, while a plain click still selects the relationship for annotation. The camera toolbar's fourth control ("Restore the computed layout") returns every card and label to the computed layout, and any `publish` resets them. Manual positions are a viewing aid only — they are never part of the Visual Document, so never author layout by asking the user to drag.
 
 ## Present And Revise
 

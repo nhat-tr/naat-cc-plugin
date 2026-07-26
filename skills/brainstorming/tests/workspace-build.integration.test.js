@@ -38,6 +38,8 @@ function stageBuild(t) {
     'architecture-elk-graph.d.cts',
     'uml-elk-graph.cjs',
     'uml-elk-graph.d.cts',
+    'uml-sequence-activations.cjs',
+    'uml-sequence-activations.d.cts',
   ]) {
     copyFile(
       path.join(repositoryRoot, 'skills/brainstorming/scripts', name),

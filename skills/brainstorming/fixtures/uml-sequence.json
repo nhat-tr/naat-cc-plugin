@@ -1,0 +1,297 @@
+{
+  "version": 2,
+  "work_id": "work-20260726-uml-sequence-activations",
+  "workspace_kind": "uml",
+  "title": "Turn streaming activation spans",
+  "evidence_refs": [],
+  "revision": "d75508bd",
+  "frames": [
+    {
+      "id": "diagram",
+      "title": "Turn streaming activation spans",
+      "component_ids": [
+        "api",
+        "session",
+        "choke",
+        "channel",
+        "post-turn",
+        "run-tool",
+        "tool-start",
+        "render",
+        "patch",
+        "tool-done",
+        "tool-result",
+        "completed",
+        "sanitize",
+        "persist",
+        "pull",
+        "frames",
+        "session-p1",
+        "sanitize-p1"
+      ]
+    }
+  ],
+  "components": [
+    {
+      "id": "api",
+      "frame_id": "diagram",
+      "label": "Gateway API"
+    },
+    {
+      "id": "session",
+      "frame_id": "diagram",
+      "label": "ChatAgentSession"
+    },
+    {
+      "id": "choke",
+      "frame_id": "diagram",
+      "label": "ToolInvocationMiddleware"
+    },
+    {
+      "id": "channel",
+      "frame_id": "diagram",
+      "label": "AgentEventChannel"
+    },
+    {
+      "id": "post-turn",
+      "frame_id": "diagram",
+      "label": "POST turn"
+    },
+    {
+      "id": "run-tool",
+      "frame_id": "diagram",
+      "label": "model requests a tool"
+    },
+    {
+      "id": "tool-start",
+      "frame_id": "diagram",
+      "label": "Emit(AgentToolStart)"
+    },
+    {
+      "id": "render",
+      "frame_id": "diagram",
+      "label": "agent.ui.render"
+    },
+    {
+      "id": "patch",
+      "frame_id": "diagram",
+      "label": "agent.ui.patch"
+    },
+    {
+      "id": "tool-done",
+      "frame_id": "diagram",
+      "label": "Emit(AgentToolCompleted)"
+    },
+    {
+      "id": "tool-result",
+      "frame_id": "diagram",
+      "label": "typed tool result"
+    },
+    {
+      "id": "completed",
+      "frame_id": "diagram",
+      "label": "agent.response.completed"
+    },
+    {
+      "id": "sanitize",
+      "frame_id": "diagram",
+      "label": "sanitize and assign id"
+    },
+    {
+      "id": "persist",
+      "frame_id": "diagram",
+      "label": "fire-and-forget append"
+    },
+    {
+      "id": "pull",
+      "frame_id": "diagram",
+      "label": "SSE writer pulls the next event"
+    },
+    {
+      "id": "frames",
+      "frame_id": "diagram",
+      "label": "text/event-stream frames"
+    },
+    {
+      "id": "session-p1",
+      "frame_id": "diagram",
+      "label": "ChatAgentSession · point 1: Owns one turn"
+    },
+    {
+      "id": "sanitize-p1",
+      "frame_id": "diagram",
+      "label": "sanitize and assign id · point 1: A non-persistent event still gets an id"
+    }
+  ],
+  "decisions": [],
+  "feedback_threads": [],
+  "content": {
+    "diagram_kind": "sequence",
+    "lifelines": [
+      {
+        "id": "api",
+        "component_id": "api",
+        "label": "Gateway API",
+        "lifeline_kind": "boundary",
+        "points": []
+      },
+      {
+        "id": "session",
+        "component_id": "session",
+        "label": "ChatAgentSession",
+        "lifeline_kind": "control",
+        "points": [
+          "Owns one turn"
+        ]
+      },
+      {
+        "id": "choke",
+        "component_id": "choke",
+        "label": "ToolInvocationMiddleware",
+        "lifeline_kind": "control",
+        "points": []
+      },
+      {
+        "id": "channel",
+        "component_id": "channel",
+        "label": "AgentEventChannel",
+        "lifeline_kind": "entity",
+        "points": []
+      }
+    ],
+    "messages": [
+      {
+        "id": "post-turn",
+        "component_id": "post-turn",
+        "label": "POST turn",
+        "message_kind": "sync",
+        "from": "api",
+        "to": "session",
+        "points": []
+      },
+      {
+        "id": "run-tool",
+        "component_id": "run-tool",
+        "label": "model requests a tool",
+        "message_kind": "sync",
+        "from": "session",
+        "to": "choke",
+        "points": []
+      },
+      {
+        "id": "tool-start",
+        "component_id": "tool-start",
+        "label": "Emit(AgentToolStart)",
+        "message_kind": "async",
+        "from": "choke",
+        "to": "channel",
+        "points": []
+      },
+      {
+        "id": "render",
+        "component_id": "render",
+        "label": "agent.ui.render",
+        "message_kind": "async",
+        "from": "choke",
+        "to": "channel",
+        "points": []
+      },
+      {
+        "id": "patch",
+        "component_id": "patch",
+        "label": "agent.ui.patch",
+        "message_kind": "async",
+        "from": "choke",
+        "to": "channel",
+        "points": []
+      },
+      {
+        "id": "tool-done",
+        "component_id": "tool-done",
+        "label": "Emit(AgentToolCompleted)",
+        "message_kind": "async",
+        "from": "choke",
+        "to": "channel",
+        "points": []
+      },
+      {
+        "id": "tool-result",
+        "component_id": "tool-result",
+        "label": "typed tool result",
+        "message_kind": "reply",
+        "from": "choke",
+        "to": "session",
+        "points": []
+      },
+      {
+        "id": "completed",
+        "component_id": "completed",
+        "label": "agent.response.completed",
+        "message_kind": "async",
+        "from": "session",
+        "to": "channel",
+        "points": []
+      },
+      {
+        "id": "sanitize",
+        "component_id": "sanitize",
+        "label": "sanitize and assign id",
+        "message_kind": "self",
+        "from": "channel",
+        "to": "channel",
+        "points": [
+          "A non-persistent event still gets an id"
+        ]
+      },
+      {
+        "id": "persist",
+        "component_id": "persist",
+        "label": "fire-and-forget append",
+        "message_kind": "self",
+        "from": "channel",
+        "to": "channel",
+        "points": []
+      },
+      {
+        "id": "pull",
+        "component_id": "pull",
+        "label": "SSE writer pulls the next event",
+        "message_kind": "sync",
+        "from": "api",
+        "to": "channel",
+        "points": []
+      },
+      {
+        "id": "frames",
+        "component_id": "frames",
+        "label": "text/event-stream frames",
+        "message_kind": "reply",
+        "from": "channel",
+        "to": "api",
+        "points": []
+      }
+    ],
+    "fragments": [],
+    "annotation_targets": [
+      "api",
+      "session",
+      "choke",
+      "channel",
+      "session-p1",
+      "post-turn",
+      "run-tool",
+      "tool-start",
+      "render",
+      "patch",
+      "tool-done",
+      "tool-result",
+      "completed",
+      "sanitize",
+      "persist",
+      "pull",
+      "frames",
+      "sanitize-p1"
+    ]
+  },
+  "read_only": false
+}

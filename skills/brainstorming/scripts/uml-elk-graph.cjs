@@ -19,6 +19,37 @@ const POINT_BLOCK_PADDING = 6;
 // Characters that fit on one wrapped line inside the point column (~124px usable).
 const POINT_CHARS_PER_LINE = 18;
 
+// Card header metrics mirror `.uml-node-body` in uml.css. The stereotype and the label
+// each occupy their own line block, and a long label wraps — reserving only a flat base
+// height clipped multi-line labels because `.uml-node-body` hides its overflow.
+const CARD_VERTICAL_PADDING = 13; // 0.4rem top + 0.4rem bottom
+const CARD_ROW_GAP = 2; // 0.1rem flex gap between header rows
+const STEREOTYPE_LINE_HEIGHT = 13; // 0.6rem text
+const LABEL_LINE_HEIGHT = 15; // 0.72rem text * 1.2 line-height
+// Characters that fit on one wrapped line of the bold, centred card label.
+const LABEL_CHARS_PER_LINE = 19;
+
+// Node kinds whose card renders a «stereotype» line above the label (uml-graph.tsx).
+const UML_STEREOTYPE_KINDS = Object.freeze([
+  'component',
+  'interface',
+  'artifact',
+  'deployment_node',
+  'use_case',
+  'accept_event',
+  'send_signal',
+]);
+
+// Edge-label metrics mirror `.uml-edge-label` in uml.css. ELK is told the label box so
+// it reserves room for it between layers; without that the box is drawn on top of the
+// cards it connects, hiding both the label text and the arrowhead underneath it.
+const EDGE_LABEL_CHAR_WIDTH = 6.3; // 0.62rem sans-serif average advance, in px
+const EDGE_LABEL_LINE_HEIGHT = 14;
+const EDGE_LABEL_PADDING_X = 14;
+const EDGE_LABEL_PADDING_Y = 5;
+const EDGE_LABEL_CHARS_PER_LINE = 22;
+const EDGE_LABEL_MAX_LINES = 3;
+
 // Fixed geometry for pseudostate / control nodes that never grow with their label.
 const PSEUDOSTATE_SIZES = Object.freeze({
   initial: { width: 26, height: 26 },
@@ -37,6 +68,11 @@ const ROUTE_SPACING_OPTIONS = {
   'elk.spacing.edgeNode': '24',
   'elk.layered.spacing.edgeEdgeBetweenLayers': '18',
   'elk.layered.spacing.edgeNodeBetweenLayers': '24',
+  // Centre labels claim their own space between layers instead of being drawn over the
+  // cards the edge connects.
+  'elk.edgeLabels.placement': 'CENTER',
+  'elk.spacing.edgeLabel': '8',
+  'elk.spacing.labelNode': '10',
 };
 
 function pointLineCount(point) {
@@ -44,14 +80,57 @@ function pointLineCount(point) {
   return Math.max(1, Math.ceil(length / POINT_CHARS_PER_LINE));
 }
 
+function labelLineCount(label) {
+  const length = typeof label === 'string' ? label.trim().length : 0;
+  return Math.max(1, Math.ceil(length / LABEL_CHARS_PER_LINE));
+}
+
 function umlCardHeight(node) {
   const points = Array.isArray(node.points) ? node.points : [];
-  if (points.length === 0) return UML_NODE_BASE_HEIGHT;
+  const stereotype = UML_STEREOTYPE_KINDS.includes(node.node_kind) ? STEREOTYPE_LINE_HEIGHT + CARD_ROW_GAP : 0;
+  const headerHeight = CARD_VERTICAL_PADDING + stereotype + labelLineCount(node.label) * LABEL_LINE_HEIGHT;
+  if (points.length === 0) return Math.max(UML_NODE_BASE_HEIGHT, headerHeight);
   const pointsHeight = points.reduce(
     (total, point) => total + pointLineCount(point) * POINT_LINE_HEIGHT + POINT_ROW_GAP,
     0,
   );
-  return UML_NODE_BASE_HEIGHT + pointsHeight + POINT_BLOCK_PADDING;
+  return Math.max(UML_NODE_BASE_HEIGHT, headerHeight) + pointsHeight + POINT_BLOCK_PADDING;
+}
+
+// Greedy word wrap on the rendered label text. Words longer than one line keep their own
+// line rather than breaking mid-token, so a file reference stays readable.
+function umlEdgeLabelLines(label) {
+  const text = typeof label === 'string' ? label.trim() : '';
+  if (text.length === 0) return [];
+  const lines = [];
+  for (const word of text.split(/\s+/u)) {
+    const current = lines[lines.length - 1];
+    if (current !== undefined && current.length + 1 + word.length <= EDGE_LABEL_CHARS_PER_LINE) {
+      lines[lines.length - 1] = `${current} ${word}`;
+      continue;
+    }
+    if (lines.length === EDGE_LABEL_MAX_LINES) {
+      lines[lines.length - 1] = `${current} ${word}`;
+      continue;
+    }
+    lines.push(word);
+  }
+  return lines;
+}
+
+function umlEdgeLabelSize(label) {
+  const lines = umlEdgeLabelLines(label);
+  if (lines.length === 0) return { width: 0, height: 0, lines };
+  const widest = lines.reduce((longest, line) => Math.max(longest, line.length), 0);
+  return {
+    width: Math.round(widest * EDGE_LABEL_CHAR_WIDTH + EDGE_LABEL_PADDING_X),
+    height: lines.length * EDGE_LABEL_LINE_HEIGHT + EDGE_LABEL_PADDING_Y * 2,
+    lines,
+  };
+}
+
+function umlEdgeLabelId(edgeId) {
+  return `${edgeId}::label`;
 }
 
 // A fork/join bar is drawn perpendicular to the flow direction.
@@ -116,11 +195,20 @@ function buildUmlElkGraph(content) {
   return {
     id: UML_GRAPH_ROOT_ID,
     children: rootChildren,
-    edges: content.edges.map(edge => ({
-      id: edge.id,
-      sources: [edge.source],
-      targets: [edge.target],
-    })),
+    edges: content.edges.map(edge => {
+      const elkEdge = { id: edge.id, sources: [edge.source], targets: [edge.target] };
+      const label = umlEdgeLabelSize(edge.label);
+      if (label.width > 0) {
+        elkEdge.labels = [{
+          id: umlEdgeLabelId(edge.id),
+          text: edge.label,
+          width: label.width,
+          height: label.height,
+          layoutOptions: { 'elk.edgeLabels.placement': 'CENTER' },
+        }];
+      }
+      return elkEdge;
+    }),
     layoutOptions: {
       'elk.algorithm': content.layout.algorithm,
       'elk.direction': direction,
@@ -138,7 +226,11 @@ module.exports = {
   UML_NODE_WIDTH,
   UML_NODE_BASE_HEIGHT,
   UML_GRAPH_ROOT_ID,
+  UML_STEREOTYPE_KINDS,
   umlCardHeight,
+  umlEdgeLabelId,
+  umlEdgeLabelLines,
+  umlEdgeLabelSize,
   umlNodeSize,
   buildUmlElkGraph,
 };

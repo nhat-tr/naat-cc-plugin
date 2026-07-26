@@ -1,0 +1,367 @@
+{
+  "version": 2,
+  "work_id": "work-20260725-uml-graph-legibility",
+  "workspace_kind": "uml",
+  "title": "Turn pipeline component structure",
+  "evidence_refs": [
+    {
+      "id": "EVD-001-turn-pipeline",
+      "label": "TurnPipeline.cs:55-69"
+    },
+    {
+      "id": "EVD-002-tool-choke",
+      "label": "ToolInvocationMiddleware.cs:38-41"
+    }
+  ],
+  "revision": "2f70b753",
+  "frames": [
+    {
+      "id": "diagram",
+      "title": "Turn pipeline component structure",
+      "component_ids": [
+        "gateway-host",
+        "agent-core",
+        "gateway-endpoints",
+        "chat-agent-session",
+        "turn-pipeline",
+        "tool-invocation-middleware",
+        "turn-artifacts",
+        "api-hosts-session",
+        "session-builds-pipeline",
+        "pipeline-tool-calls",
+        "choke-writes-artifacts",
+        "gateway-endpoints-p1",
+        "gateway-endpoints-p2",
+        "gateway-endpoints-p3",
+        "chat-agent-session-p1",
+        "chat-agent-session-p2",
+        "chat-agent-session-p3",
+        "turn-pipeline-p1",
+        "turn-pipeline-p2",
+        "turn-pipeline-p3",
+        "tool-invocation-middleware-p1",
+        "tool-invocation-middleware-p2",
+        "tool-invocation-middleware-p3",
+        "turn-artifacts-p1",
+        "turn-artifacts-p2"
+      ]
+    }
+  ],
+  "components": [
+    {
+      "id": "gateway-host",
+      "frame_id": "diagram",
+      "label": "Paragon.Api (gateway host)"
+    },
+    {
+      "id": "agent-core",
+      "frame_id": "diagram",
+      "label": "Paragon.Core (agent)"
+    },
+    {
+      "id": "gateway-endpoints",
+      "frame_id": "diagram",
+      "label": "Gateway endpoints"
+    },
+    {
+      "id": "chat-agent-session",
+      "frame_id": "diagram",
+      "label": "ChatAgentSession"
+    },
+    {
+      "id": "turn-pipeline",
+      "frame_id": "diagram",
+      "label": "TurnPipeline"
+    },
+    {
+      "id": "tool-invocation-middleware",
+      "frame_id": "diagram",
+      "label": "ToolInvocationMiddleware (choke point)"
+    },
+    {
+      "id": "turn-artifacts",
+      "frame_id": "diagram",
+      "label": "TurnArtifacts"
+    },
+    {
+      "id": "api-hosts-session",
+      "frame_id": "diagram",
+      "label": "hosts"
+    },
+    {
+      "id": "session-builds-pipeline",
+      "frame_id": "diagram",
+      "label": "composes per turn"
+    },
+    {
+      "id": "pipeline-tool-calls",
+      "frame_id": "diagram",
+      "label": "AgentRun tool calls pass through"
+    },
+    {
+      "id": "choke-writes-artifacts",
+      "frame_id": "diagram",
+      "label": "captures typed results by CallId"
+    },
+    {
+      "id": "gateway-endpoints-p1",
+      "frame_id": "diagram",
+      "label": "Gateway endpoints · point 1: The only surface the desktop client may talk to"
+    },
+    {
+      "id": "gateway-endpoints-p2",
+      "frame_id": "diagram",
+      "label": "Gateway endpoints · point 2: Paragon.Competence.ThePlatform/Direct/DirectLookupService.cs exists (file located, contents not read)"
+    },
+    {
+      "id": "gateway-endpoints-p3",
+      "frame_id": "diagram",
+      "label": "Gateway endpoints · point 3: Endpoint names are a boundary, not a contract"
+    },
+    {
+      "id": "chat-agent-session-p1",
+      "frame_id": "diagram",
+      "label": "ChatAgentSession · point 1: Builds a fresh TurnPipeline per turn (ChatAgentSession.cs:322-328)"
+    },
+    {
+      "id": "chat-agent-session-p2",
+      "frame_id": "diagram",
+      "label": "ChatAgentSession · point 2: Chooses the recording middleware per session: transactional when a persister exists (317-320)"
+    },
+    {
+      "id": "chat-agent-session-p3",
+      "frame_id": "diagram",
+      "label": "ChatAgentSession · point 3: Seeds TurnArtifacts with capability flags before the run (312-315)"
+    },
+    {
+      "id": "turn-pipeline-p1",
+      "frame_id": "diagram",
+      "label": "TurnPipeline · point 1: Runs ITurnMiddleware instances in registered order"
+    },
+    {
+      "id": "turn-pipeline-p2",
+      "frame_id": "diagram",
+      "label": "TurnPipeline · point 2: Order: ErrorBoundary, Telemetry, Recording, AgentRun, RenderPlan"
+    },
+    {
+      "id": "turn-pipeline-p3",
+      "frame_id": "diagram",
+      "label": "TurnPipeline · point 3: DECISION: ErrorBoundary outermost, so a thrown turn still becomes SSE lifecycle events"
+    },
+    {
+      "id": "tool-invocation-middleware-p1",
+      "frame_id": "diagram",
+      "label": "ToolInvocationMiddleware (choke point) · point 1: Own inner chain: Events(start), Policy, LoopGuard, ErrorEnvelope(catch), invoke+process (55-69)"
+    },
+    {
+      "id": "tool-invocation-middleware-p2",
+      "frame_id": "diagram",
+      "label": "ToolInvocationMiddleware (choke point) · point 2: DECISION: ErrorEnvelope wraps only invoke+process, so Policy/LoopGuard throws propagate"
+    },
+    {
+      "id": "tool-invocation-middleware-p3",
+      "frame_id": "diagram",
+      "label": "ToolInvocationMiddleware (choke point) · point 3: Adopts the framework CallId so events correlate with the LLM transcript (38-41)"
+    },
+    {
+      "id": "turn-artifacts-p1",
+      "frame_id": "diagram",
+      "label": "TurnArtifacts · point 1: Run-scope carrier: MessageId, SessionId, UiStreaming, RenderFromText"
+    },
+    {
+      "id": "turn-artifacts-p2",
+      "frame_id": "diagram",
+      "label": "TurnArtifacts · point 2: Typed tool results captured per CallId, remove-on-read via TakeResult"
+    }
+  ],
+  "decisions": [],
+  "feedback_threads": [],
+  "content": {
+    "diagram_kind": "component",
+    "layout": {
+      "contract_version": 1,
+      "engine": "elk",
+      "algorithm": "layered",
+      "direction": "RIGHT"
+    },
+    "containers": [
+      {
+        "id": "gateway-host",
+        "component_id": "gateway-host",
+        "label": "Paragon.Api (gateway host)",
+        "container_kind": "package",
+        "parent_id": null
+      },
+      {
+        "id": "agent-core",
+        "component_id": "agent-core",
+        "label": "Paragon.Core (agent)",
+        "container_kind": "package",
+        "parent_id": null
+      }
+    ],
+    "nodes": [
+      {
+        "id": "gateway-endpoints",
+        "component_id": "gateway-endpoints",
+        "label": "Gateway endpoints",
+        "node_kind": "interface",
+        "container_id": "gateway-host",
+        "points": [
+          "The only surface the desktop client may talk to",
+          "Paragon.Competence.ThePlatform/Direct/DirectLookupService.cs exists (file located, contents not read)",
+          "Endpoint names are a boundary, not a contract"
+        ],
+        "layout_hint": {
+          "layer": 0,
+          "order": 0
+        }
+      },
+      {
+        "id": "chat-agent-session",
+        "component_id": "chat-agent-session",
+        "label": "ChatAgentSession",
+        "node_kind": "component",
+        "container_id": "agent-core",
+        "points": [
+          "Builds a fresh TurnPipeline per turn (ChatAgentSession.cs:322-328)",
+          "Chooses the recording middleware per session: transactional when a persister exists (317-320)",
+          "Seeds TurnArtifacts with capability flags before the run (312-315)"
+        ],
+        "layout_hint": {
+          "layer": 1,
+          "order": 0
+        }
+      },
+      {
+        "id": "turn-pipeline",
+        "component_id": "turn-pipeline",
+        "label": "TurnPipeline",
+        "node_kind": "component",
+        "container_id": "agent-core",
+        "points": [
+          "Runs ITurnMiddleware instances in registered order",
+          "Order: ErrorBoundary, Telemetry, Recording, AgentRun, RenderPlan",
+          "DECISION: ErrorBoundary outermost, so a thrown turn still becomes SSE lifecycle events"
+        ],
+        "layout_hint": {
+          "layer": 2,
+          "order": 0
+        }
+      },
+      {
+        "id": "tool-invocation-middleware",
+        "component_id": "tool-invocation-middleware",
+        "label": "ToolInvocationMiddleware (choke point)",
+        "node_kind": "component",
+        "container_id": "agent-core",
+        "points": [
+          "Own inner chain: Events(start), Policy, LoopGuard, ErrorEnvelope(catch), invoke+process (55-69)",
+          "DECISION: ErrorEnvelope wraps only invoke+process, so Policy/LoopGuard throws propagate",
+          "Adopts the framework CallId so events correlate with the LLM transcript (38-41)"
+        ],
+        "layout_hint": {
+          "layer": 3,
+          "order": 0
+        }
+      },
+      {
+        "id": "turn-artifacts",
+        "component_id": "turn-artifacts",
+        "label": "TurnArtifacts",
+        "node_kind": "artifact",
+        "container_id": "agent-core",
+        "points": [
+          "Run-scope carrier: MessageId, SessionId, UiStreaming, RenderFromText",
+          "Typed tool results captured per CallId, remove-on-read via TakeResult"
+        ],
+        "layout_hint": {
+          "layer": 4,
+          "order": 0
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "api-hosts-session",
+        "component_id": "api-hosts-session",
+        "relation": "delegation",
+        "source": "gateway-endpoints",
+        "target": "chat-agent-session",
+        "label": "hosts"
+      },
+      {
+        "id": "session-builds-pipeline",
+        "component_id": "session-builds-pipeline",
+        "relation": "dependency",
+        "source": "chat-agent-session",
+        "target": "turn-pipeline",
+        "label": "composes per turn"
+      },
+      {
+        "id": "pipeline-tool-calls",
+        "component_id": "pipeline-tool-calls",
+        "relation": "dependency",
+        "source": "turn-pipeline",
+        "target": "tool-invocation-middleware",
+        "label": "AgentRun tool calls pass through"
+      },
+      {
+        "id": "choke-writes-artifacts",
+        "component_id": "choke-writes-artifacts",
+        "relation": "dependency",
+        "source": "tool-invocation-middleware",
+        "target": "turn-artifacts",
+        "label": "captures typed results by CallId"
+      }
+    ],
+    "camera": {
+      "min_zoom": 0.2,
+      "max_zoom": 2,
+      "default_zoom": 1,
+      "fit_padding": 0.15,
+      "controls": [
+        "pan",
+        "zoom_in",
+        "zoom_out",
+        "fit_view",
+        "minimap"
+      ]
+    },
+    "focus_targets": [
+      "gateway-endpoints",
+      "chat-agent-session",
+      "turn-pipeline",
+      "tool-invocation-middleware",
+      "turn-artifacts"
+    ],
+    "annotation_targets": [
+      "gateway-host",
+      "agent-core",
+      "gateway-endpoints",
+      "chat-agent-session",
+      "turn-pipeline",
+      "tool-invocation-middleware",
+      "turn-artifacts",
+      "gateway-endpoints-p1",
+      "gateway-endpoints-p2",
+      "gateway-endpoints-p3",
+      "chat-agent-session-p1",
+      "chat-agent-session-p2",
+      "chat-agent-session-p3",
+      "turn-pipeline-p1",
+      "turn-pipeline-p2",
+      "turn-pipeline-p3",
+      "tool-invocation-middleware-p1",
+      "tool-invocation-middleware-p2",
+      "tool-invocation-middleware-p3",
+      "turn-artifacts-p1",
+      "turn-artifacts-p2",
+      "api-hosts-session",
+      "session-builds-pipeline",
+      "pipeline-tool-calls",
+      "choke-writes-artifacts"
+    ]
+  },
+  "read_only": false
+}

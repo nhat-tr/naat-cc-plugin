@@ -1,15 +1,19 @@
 import {
   Handle,
   Position,
+  useStore,
   type Edge,
   type EdgeProps,
   type Node,
   type NodeProps,
 } from "@xyflow/react";
+import { useRef, type PointerEvent as ReactPointerEvent } from "react";
 
 import { InlineText } from "../../shared/InlineText";
+import { UML_STEREOTYPE_NODE_KINDS } from "./uml-layout";
 import type {
   UmlContainer,
+  UmlEdgeLabel,
   UmlGraphEdge,
   UmlGraphNode,
   UmlNodeKind,
@@ -20,6 +24,8 @@ interface Point {
   x: number;
   y: number;
 }
+
+const EDGE_LABEL_LINE_HEIGHT = 14;
 
 export interface UmlGraphNodeData extends Record<string, unknown> {
   node: UmlGraphNode;
@@ -35,7 +41,10 @@ export interface UmlGraphEdgeData extends Record<string, unknown> {
   edge: UmlGraphEdge;
   path: string;
   points: Point[];
-  labelPoint: Point | null;
+  label: UmlEdgeLabel | null;
+  /** How far the reviewer nudged this label away from its computed slot, in flow units. */
+  labelOffset: Point;
+  onLabelMove: (edgeId: string, offset: Point) => void;
 }
 
 export type UmlGraphFlowNode = Node<UmlGraphNodeData, "umlNode">;
@@ -57,15 +66,9 @@ const CARD_KINDS = new Set<UmlNodeKind>([
   "send_signal",
 ]);
 const DIAMOND_KINDS = new Set<UmlNodeKind>(["choice", "decision", "merge"]);
-const STEREOTYPE_KINDS = new Set<UmlNodeKind>([
-  "component",
-  "interface",
-  "artifact",
-  "deployment_node",
-  "use_case",
-  "accept_event",
-  "send_signal",
-]);
+// Shared with the ELK sizing contract so the height reserved for a card's header is the
+// height the card renders.
+const STEREOTYPE_KINDS = UML_STEREOTYPE_NODE_KINDS;
 
 const DASHED_RELATIONS = new Set<UmlRelation>(["dependency", "realization", "object_flow"]);
 const RELATION_ARROWHEAD: Record<UmlRelation, "open" | "filled" | "hollow"> = {
@@ -189,11 +192,110 @@ function ArrowHead({ points, kind }: { points: Point[]; kind: "open" | "filled" 
   );
 }
 
+// A label the reviewer nudged this far from its slot gets a leader line, so it stays
+// obvious which edge it belongs to.
+const LABEL_LEADER_THRESHOLD = 14;
+
+// The shell selects an Annotation Component from a capture-phase click on an ancestor, which
+// runs before any handler this component could attach. Swallowing the click that ends a drag
+// therefore has to happen at the window, outside that ancestor's capture path.
+function suppressNextClick(): void {
+  const swallow = (event: MouseEvent): void => {
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+  };
+  globalThis.addEventListener("click", swallow, { capture: true, once: true });
+  // A drag that ends without a following click must not leave the trap armed.
+  globalThis.setTimeout(() => globalThis.removeEventListener("click", swallow, { capture: true }), 300);
+}
+
+function UmlEdgeLabelView({ edgeId, label, offset, onMove }: {
+  edgeId: string;
+  label: UmlEdgeLabel;
+  offset: Point;
+  onMove: (edgeId: string, offset: Point) => void;
+}) {
+  const zoom = useStore(state => state.transform[2]);
+  const drag = useRef<{ pointerId: number; startX: number; startY: number; base: Point; moved: boolean } | null>(null);
+
+  const box = {
+    x: label.box.x + offset.x,
+    y: label.box.y + offset.y,
+    width: label.box.width,
+    height: label.box.height,
+  };
+  const centerX = box.x + box.width / 2;
+  const firstLineY = box.y + box.height / 2 - ((label.lines.length - 1) * EDGE_LABEL_LINE_HEIGHT) / 2;
+  const nudged = Math.hypot(offset.x, offset.y) > LABEL_LEADER_THRESHOLD;
+
+  const onPointerDown = (event: ReactPointerEvent<SVGGElement>): void => {
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drag.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      base: offset,
+      moved: false,
+    };
+  };
+  const onPointerMove = (event: ReactPointerEvent<SVGGElement>): void => {
+    const active = drag.current;
+    if (!active || active.pointerId !== event.pointerId) return;
+    const dx = (event.clientX - active.startX) / (zoom || 1);
+    const dy = (event.clientY - active.startY) / (zoom || 1);
+    if (!active.moved && Math.hypot(dx, dy) < 2) return;
+    active.moved = true;
+    onMove(edgeId, { x: active.base.x + dx, y: active.base.y + dy });
+  };
+  const onPointerUp = (event: ReactPointerEvent<SVGGElement>): void => {
+    if (drag.current?.pointerId !== event.pointerId) return;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    const moved = drag.current.moved;
+    drag.current = null;
+    if (moved) suppressNextClick();
+  };
+
+  return (
+    <g
+      className="uml-edge-label"
+      data-edge-label={edgeId}
+      data-label-nudged={nudged ? "" : undefined}
+      onPointerCancel={onPointerUp}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+    >
+      {nudged ? (
+        <line
+          className="uml-edge-label-leader"
+          x1={label.box.x + label.box.width / 2}
+          x2={centerX}
+          y1={label.box.y + label.box.height / 2}
+          y2={box.y + box.height / 2}
+        />
+      ) : null}
+      <rect height={box.height} rx={4} width={box.width} x={box.x} y={box.y} />
+      <text textAnchor="middle" x={centerX} y={firstLineY}>
+        {label.lines.map((line, index) => (
+          <tspan
+            dominantBaseline="central"
+            key={line + String(index)}
+            x={centerX}
+            y={firstLineY + index * EDGE_LABEL_LINE_HEIGHT}
+          >
+            {line}
+          </tspan>
+        ))}
+      </text>
+    </g>
+  );
+}
+
 export function UmlGraphEdgeView({ data }: EdgeProps<UmlGraphFlowEdge>) {
   if (!data || data.path.length === 0) return null;
-  const { edge, points, labelPoint } = data;
+  const { edge, points, label } = data;
   const dashed = DASHED_RELATIONS.has(edge.relation);
-  const labelWidth = edge.label ? Math.min(220, edge.label.length * 6.3 + 14) : 0;
   return (
     <g
       className={`uml-edge uml-edge-${edge.relation}`}
@@ -204,13 +306,16 @@ export function UmlGraphEdgeView({ data }: EdgeProps<UmlGraphFlowEdge>) {
     >
       <path className="uml-edge-hit" d={data.path} />
       <path className="uml-edge-path" d={data.path} data-dashed={dashed ? "" : undefined} />
-      <ArrowHead kind={RELATION_ARROWHEAD[edge.relation]} points={points} />
-      {edge.label && labelPoint ? (
-        <g className="uml-edge-label" transform={`translate(${labelPoint.x}, ${labelPoint.y})`}>
-          <rect height={18} rx={4} width={labelWidth} x={-labelWidth / 2} y={-9} />
-          <text dominantBaseline="central" textAnchor="middle" x={0} y={1}>{edge.label}</text>
-        </g>
+      {/* The label is drawn before the arrowhead so its background can never hide an arrow. */}
+      {label ? (
+        <UmlEdgeLabelView
+          edgeId={edge.id}
+          label={label}
+          offset={data.labelOffset}
+          onMove={data.onLabelMove}
+        />
       ) : null}
+      <ArrowHead kind={RELATION_ARROWHEAD[edge.relation]} points={points} />
     </g>
   );
 }

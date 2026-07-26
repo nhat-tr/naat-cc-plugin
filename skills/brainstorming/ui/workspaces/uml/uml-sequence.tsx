@@ -15,6 +15,7 @@ interface UmlSequenceProps {
 const HEADER_WIDTH = SEQUENCE_METRICS.headerWidth;
 const HEADER_HEIGHT = SEQUENCE_METRICS.headerHeight;
 const ACTIVATION_WIDTH = SEQUENCE_METRICS.activationWidth;
+const ACTIVATION_NEST_STEP = SEQUENCE_METRICS.activationNestStep;
 const STEREOTYPE_KINDS = new Set(["actor", "boundary", "control", "entity", "database"]);
 
 function titleCase(value: string): string {
@@ -147,15 +148,29 @@ export function UmlSequence({ content, onPresentedComponentIdsChange }: UmlSeque
             </g>
           ))}
 
-          {layout.activations.map((activation, index) => (
-            <rect
-              className="uml-seq-activation"
-              height={Math.max(8, activation.bottom - activation.top)}
-              key={`${activation.lifelineId}-${index}`}
-              width={ACTIVATION_WIDTH}
-              x={activation.centerX - ACTIVATION_WIDTH / 2 + activation.depth * 5}
-              y={activation.top}
-            />
+          {/* Each bar is wrapped in the Component of the message that opened it, so clicking a
+              bar picks that action for annotation — a bare rect left the reviewer with no way
+              to tell which of a lifeline's activations belonged to which message. */}
+          {layout.activations.map(activation => (
+            <g
+              className="uml-seq-activation-group"
+              data-brainstorm-id={activation.componentId}
+              data-brainstorm-label={activation.label}
+              data-brainstorm-secondary=""
+              data-activation-depth={activation.depth}
+              data-activation-open-ended={activation.openEnded ? "true" : undefined}
+              data-message-id={activation.messageId}
+              key={`${activation.messageId}-${activation.lifelineId}-${activation.depth}`}
+            >
+              <title>{`${activation.label} — active on ${activation.lifelineId}${activation.openEnded ? " (no reply in this diagram)" : ""}`}</title>
+              <rect
+                className="uml-seq-activation"
+                height={Math.max(8, activation.bottom - activation.top)}
+                width={ACTIVATION_WIDTH}
+                x={activation.centerX - ACTIVATION_WIDTH / 2 + activation.depth * ACTIVATION_NEST_STEP}
+                y={activation.top}
+              />
+            </g>
           ))}
 
           {layout.lifelines.map(item => (

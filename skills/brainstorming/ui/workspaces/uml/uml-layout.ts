@@ -4,9 +4,14 @@ import ELK, {
   type ElkPoint,
 } from "elkjs/lib/elk-api.js";
 import umlElkGraph from "../../../scripts/uml-elk-graph.cjs";
+import umlSequenceActivations from "../../../scripts/uml-sequence-activations.cjs";
+
+const { deriveSequenceActivations } = umlSequenceActivations;
 
 const {
   UML_NODE_WIDTH: NODE_WIDTH,
+  UML_STEREOTYPE_KINDS,
+  umlEdgeLabelSize,
   umlNodeSize,
   buildUmlElkGraph,
 } = umlElkGraph;
@@ -161,11 +166,23 @@ export interface LayoutUmlNode {
   height: number;
 }
 
+export interface UmlBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface UmlEdgeLabel {
+  box: UmlBox;
+  lines: string[];
+}
+
 export interface LayoutUmlEdge {
   edge: UmlGraphEdge;
   path: string;
   points: ElkPoint[];
-  labelPoint: ElkPoint | null;
+  label: UmlEdgeLabel | null;
 }
 
 export interface UmlLayoutResult {
@@ -193,6 +210,38 @@ function midpoint(points: ElkPoint[]): ElkPoint | null {
     return { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
   }
   return points[Math.floor(points.length / 2)] ?? null;
+}
+
+function labelBoxAt(center: ElkPoint | null, width: number, height: number): UmlBox | null {
+  if (!center) return null;
+  return { x: center.x - width / 2, y: center.y - height / 2, width, height };
+}
+
+// ELK places a CENTER edge label in the space it reserved for it between layers. Use that
+// box verbatim so the rendered label never lands on top of a card; fall back to the route
+// midpoint only when a layout carries no label geometry (an unrouted or degenerate edge).
+function edgeLabel(
+  edge: UmlGraphEdge,
+  layoutEdge: ElkExtendedEdge | undefined,
+  containerOrigin: ElkPoint,
+  points: ElkPoint[],
+): UmlEdgeLabel | null {
+  const size = umlEdgeLabelSize(edge.label);
+  if (size.lines.length === 0) return null;
+  const placed = layoutEdge?.labels?.[0];
+  if (placed && Number.isFinite(placed.x) && Number.isFinite(placed.y)) {
+    return {
+      box: {
+        x: finite(placed.x) + containerOrigin.x,
+        y: finite(placed.y) + containerOrigin.y,
+        width: finite(placed.width, size.width),
+        height: finite(placed.height, size.height),
+      },
+      lines: size.lines,
+    };
+  }
+  const box = labelBoxAt(midpoint(points), size.width, size.height);
+  return box ? { box, lines: size.lines } : null;
 }
 
 function collectEdges(node: ElkNode, destination: ElkExtendedEdge[]): void {
@@ -269,7 +318,12 @@ function mapLayout(content: UmlGraphContent, graph: ElkNode): UmlLayoutResult {
         points = [start, end];
       }
     }
-    return { edge, points, path: routePath(points), labelPoint: midpoint(points) };
+    return {
+      edge,
+      points,
+      path: routePath(points),
+      label: edgeLabel(edge, layoutEdge, containerOrigin, points),
+    };
   });
 
   return {
@@ -280,6 +334,73 @@ function mapLayout(content: UmlGraphContent, graph: ElkNode): UmlLayoutResult {
     height: finite(graph.height, 1),
   };
 }
+
+// --- Manual routing for dragged cards ---
+
+// A dragged card invalidates the ELK route that ended at its old border. Re-route those
+// edges with the same orthogonal grammar (leave one border, one bend, enter the facing
+// border) so the arrowhead stays on the card the reviewer moved.
+function routeUmlEdge(source: UmlBox, target: UmlBox, direction: "RIGHT" | "DOWN"): ElkPoint[] {
+  const gapRight = target.x - (source.x + source.width);
+  const gapLeft = source.x - (target.x + target.width);
+  const gapDown = target.y - (source.y + source.height);
+  const gapUp = source.y - (target.y + target.height);
+  const horizontalGap = Math.max(gapRight, gapLeft);
+  const verticalGap = Math.max(gapDown, gapUp);
+  const horizontal = horizontalGap === verticalGap
+    ? direction === "RIGHT"
+    : horizontalGap > verticalGap;
+
+  if (horizontal) {
+    const forward = gapRight >= gapLeft;
+    const start = {
+      x: forward ? source.x + source.width : source.x,
+      y: source.y + source.height / 2,
+    };
+    const end = {
+      x: forward ? target.x : target.x + target.width,
+      y: target.y + target.height / 2,
+    };
+    if (Math.abs(start.y - end.y) < 1) return [start, { x: end.x, y: start.y }];
+    const bend = (start.x + end.x) / 2;
+    return [start, { x: bend, y: start.y }, { x: bend, y: end.y }, end];
+  }
+
+  const downward = gapDown >= gapUp;
+  const start = {
+    x: source.x + source.width / 2,
+    y: downward ? source.y + source.height : source.y,
+  };
+  const end = {
+    x: target.x + target.width / 2,
+    y: downward ? target.y : target.y + target.height,
+  };
+  if (Math.abs(start.x - end.x) < 1) return [start, { x: start.x, y: end.y }];
+  const bend = (start.y + end.y) / 2;
+  return [start, { x: start.x, y: bend }, { x: end.x, y: bend }, end];
+}
+
+export function manualUmlEdgeGeometry(
+  edge: UmlGraphEdge,
+  source: UmlBox,
+  target: UmlBox,
+  direction: "RIGHT" | "DOWN",
+): { path: string; points: ElkPoint[]; label: UmlEdgeLabel | null } {
+  const points = routeUmlEdge(source, target, direction);
+  const size = umlEdgeLabelSize(edge.label);
+  const label = size.lines.length > 0
+    ? labelBoxAt(midpoint(points), size.width, size.height)
+    : null;
+  return {
+    path: routePath(points),
+    points,
+    label: label ? { box: label, lines: size.lines } : null,
+  };
+}
+
+export const UML_STEREOTYPE_NODE_KINDS: ReadonlySet<UmlNodeKind> = new Set(
+  UML_STEREOTYPE_KINDS as readonly UmlNodeKind[],
+);
 
 export async function layoutUml(content: UmlGraphContent): Promise<UmlLayoutResult> {
   const workerUrl = window.__BRAINSTORM_ELK_WORKER_URL_PROMISE__
@@ -309,6 +430,13 @@ const SEQ_SIDE_MARGIN = 48;
 const SEQ_BOTTOM_MARGIN = 44;
 const SEQ_FRAGMENT_PAD = 16;
 const SEQ_ACTIVATION_WIDTH = 12;
+// A nested bar steps sideways by more than half its own width, so the bar underneath keeps a
+// visible edge of its own. Stepping by less than that merged the nesting into one blur.
+const SEQ_ACTIVATION_NEST_STEP = 8;
+// An activation whose reply is missing from the model stops just past the last row its
+// lifeline works on; the tail keeps that row's arrowhead inside the bar.
+const SEQ_ACTIVATION_TAIL = 14;
+const SEQ_ACTIVATION_MIN_HEIGHT = 18;
 
 export interface SequencePointLayout {
   id: string;
@@ -338,10 +466,14 @@ export interface LayoutSequenceMessage {
 
 export interface LayoutSequenceActivation {
   lifelineId: string;
+  messageId: string;
+  componentId: string;
+  label: string;
   centerX: number;
   top: number;
   bottom: number;
   depth: number;
+  openEnded: boolean;
 }
 
 export interface LayoutSequenceFragment {
@@ -432,41 +564,26 @@ export function computeSequenceLayout(content: UmlSequenceContent): SequenceLayo
     message.toX = columnX.get(message.message.to) ?? SEQ_FIRST_COLUMN_X;
   }
 
-  // Activation bars: a call/create activates its callee; a reply deactivates its
-  // source. Leftover activations close at the end of the timeline.
-  const activations: LayoutSequenceActivation[] = [];
-  const openByLifeline = new Map<string, { top: number; depth: number }[]>();
-  for (const message of positionedMessages) {
-    const { message_kind: kind, from, to } = message.message;
-    if (kind === "reply" || kind === "destroy") {
-      const stack = openByLifeline.get(from);
-      const open = stack?.pop();
-      if (open) {
-        activations.push({
-          lifelineId: from,
-          centerX: columnX.get(from) ?? SEQ_FIRST_COLUMN_X,
-          top: open.top,
-          bottom: message.y,
-          depth: open.depth,
-        });
-      }
-    } else {
-      const stack = openByLifeline.get(to) ?? [];
-      stack.push({ top: message.y, depth: stack.length });
-      openByLifeline.set(to, stack);
-    }
-  }
-  for (const [lifelineId, stack] of openByLifeline) {
-    for (const open of stack) {
-      activations.push({
-        lifelineId,
-        centerX: columnX.get(lifelineId) ?? SEQ_FIRST_COLUMN_X,
-        top: open.top,
-        bottom: timelineBottom - 8,
-        depth: open.depth,
-      });
-    }
-  }
+  // Activation bars: which rows each bar spans is decided by deriveSequenceActivations, so
+  // the semantics stay unit-testable; here they only become geometry.
+  const activations: LayoutSequenceActivation[] = deriveSequenceActivations(content.messages).map(span => {
+    const top = positionedMessages[span.openRow]?.y ?? messagesTop;
+    const closeY = positionedMessages[span.closeRow]?.y ?? top;
+    const bottom = span.terminator === "self-return"
+      ? top + SEQ_SELF_LOOP
+      : Math.min(closeY + (span.terminator === "open-ended" ? SEQ_ACTIVATION_TAIL : 0), timelineBottom - 8);
+    return {
+      lifelineId: span.lifelineId,
+      messageId: span.messageId,
+      componentId: span.componentId,
+      label: span.label,
+      centerX: columnX.get(span.lifelineId) ?? SEQ_FIRST_COLUMN_X,
+      top,
+      bottom: Math.max(bottom, top + SEQ_ACTIVATION_MIN_HEIGHT),
+      depth: span.depth,
+      openEnded: span.terminator === "open-ended",
+    };
+  });
 
   const fragments: LayoutSequenceFragment[] = content.fragments.map(fragment => {
     const rows = fragment.message_ids.map(id => rowY.get(id)).filter((y): y is number => typeof y === "number");
@@ -498,6 +615,7 @@ export const SEQUENCE_METRICS = {
   headerWidth: SEQ_HEADER_WIDTH,
   headerHeight: SEQ_HEADER_HEIGHT,
   activationWidth: SEQ_ACTIVATION_WIDTH,
+  activationNestStep: SEQ_ACTIVATION_NEST_STEP,
   selfLoop: SEQ_SELF_LOOP,
 };
 

@@ -77,6 +77,15 @@
   background: var(--uml-surface-muted);
 }
 
+.uml-camera-controls button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Cards can be dragged out of the computed layout; the cursor has to say so. */
+.react-flow__node.draggable .uml-node { cursor: grab; }
+.react-flow__node.draggable.dragging .uml-node { cursor: grabbing; }
+
 .uml-minimap-shell {
   position: absolute;
   bottom: 12px;
@@ -324,6 +333,21 @@
 .uml-edge-label rect { fill: var(--uml-surface); stroke: var(--uml-border); stroke-width: 1; }
 .uml-edge-label text { fill: var(--uml-ink); font-size: 0.62rem; }
 
+/* Labels are draggable, so two that collide can be pulled apart. */
+.uml-edge-label {
+  cursor: grab;
+  pointer-events: all;
+}
+.uml-edge-label:active { cursor: grabbing; }
+.uml-edge-label:hover rect { stroke: var(--uml-mark); }
+.uml-edge-label[data-label-nudged] rect { stroke-dasharray: 3 2; }
+.uml-edge-label-leader {
+  stroke: currentColor;
+  stroke-width: 1;
+  stroke-dasharray: 2 3;
+  opacity: 0.55;
+}
+
 /* --- Sequence diagram --- */
 
 .uml-sequence {
@@ -359,6 +383,23 @@
   fill: var(--uml-surface);
   stroke: var(--uml-mark);
   stroke-width: 1;
+}
+
+/* Nested bars sit on top of their parent, so each level is tinted a step darker: the step
+   sideways alone reads as one blurred block once three levels overlap. */
+.uml-seq-activation-group[data-activation-depth="1"] .uml-seq-activation { fill: #eef1f4; }
+.uml-seq-activation-group[data-activation-depth="2"] .uml-seq-activation { fill: #dfe4ea; }
+.uml-seq-activation-group[data-activation-depth="3"] .uml-seq-activation { fill: #d0d7df; }
+
+/* No reply for this call anywhere in the diagram: the bar has to stop somewhere, and a dashed
+   edge says the end is inferred rather than modelled. */
+.uml-seq-activation-group[data-activation-open-ended="true"] .uml-seq-activation {
+  stroke-dasharray: 3 3;
+}
+
+.uml-seq-activation-group:hover .uml-seq-activation {
+  stroke: #bc7900;
+  stroke-width: 2;
 }
 
 .uml-seq-line {
