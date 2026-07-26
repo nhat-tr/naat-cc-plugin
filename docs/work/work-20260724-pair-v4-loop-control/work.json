@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "work_id": "work-20260724-pair-v4-loop-control",
+  "title": "Pair v4 loop control — human insight and control over tests, review, and verification",
+  "status": "design-approved",
+  "spec": {
+    "path": "docs/work/work-20260724-pair-v4-loop-control/spec.md",
+    "sha256": "ce541196bd44dce5ddc3a586a12c8c52b8e787ea0c1122fd17283d6d9c31a499"
+  },
+  "active_pair_mirror": ".pair/spec.md",
+  "engineering_quality_contract": {
+    "path": "docs/work/work-20260724-pair-v4-loop-control/spec.md",
+    "section": "Engineering Quality Contract",
+    "status": "approved"
+  },
+  "decision_records": [],
+  "decision_supersessions": [],
+  "changes": [],
+  "outcomes": [],
+  "evidence_records": []
+}
