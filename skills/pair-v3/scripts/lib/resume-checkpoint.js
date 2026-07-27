@@ -64,6 +64,9 @@ function createResumeCheckpoint(input) {
     task_id: input.taskId ? identifier(input.taskId, 'task identity') : null,
     plan: artifact(input.plan, 'plan artifact'),
     patch: artifact(input.patch, 'patch artifact'),
+    ...(input.executionPacket
+      ? { execution_packet: artifact(input.executionPacket, 'execution packet artifact') }
+      : {}),
     resume_target: identifier(input.resumeTarget, 'resume target'),
     next_action: truncateUtf8(input.nextAction, MAX_NEXT_ACTION_BYTES),
     acceptance_criteria: boundedList(input.acceptanceCriteria),

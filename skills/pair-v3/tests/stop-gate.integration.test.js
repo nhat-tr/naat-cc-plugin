@@ -48,7 +48,7 @@ function invoke(root, runtime, sessionId, extra = {}) {
   return result.stdout.trim() ? JSON.parse(result.stdout) : null;
 }
 
-function captureOwner(root, sessionId, command) {
+function captureOwner(root, sessionId, command, extra = {}) {
   return childProcess.spawnSync(process.execPath, [ownerAdapter], {
     cwd: root,
     encoding: 'utf8',
@@ -59,6 +59,7 @@ function captureOwner(root, sessionId, command) {
       hook_event_name: 'PostToolUse',
       tool_name: 'Bash',
       tool_input: { command },
+      ...extra,
     })}\n`,
   });
 }
@@ -132,9 +133,51 @@ test('Claude captures ownership from the exact Pair Bash invocation, not an unre
   assert.equal(invoke(root, 'claude', 'unrelated-session'), null);
 });
 
+test('Pair PostToolUse captures the pre-implementation Claude usage baseline', t => {
+  const root = fixture(t);
+  appendPairEvent(root, {
+    event: 'continuation.claimed', workId: 'work-stop-contract', session_id: null, runtime: null,
+  });
+  const transcript = path.join(root, 'claude-transcript.jsonl');
+  fs.writeFileSync(transcript, `${JSON.stringify({
+    sessionId: 'claude-owner', type: 'assistant',
+    message: {
+      id: 'message-1', model: 'claude-sonnet-4-5',
+      usage: { input_tokens: 100, cache_creation_input_tokens: 20, cache_read_input_tokens: 80, output_tokens: 10 },
+    },
+  })}\n`);
+
+  const captured = captureOwner(root, 'claude-owner', 'pair-loop --runtime auto', {
+    transcript_path: transcript,
+  });
+
+  assert.equal(captured.status, 0, captured.stderr);
+  const usage = require('../scripts/lib/pair-state').readPairEvents(root)
+    .filter(event => event.event === 'usage.recorded' && event.role === 'coordinator');
+  assert.equal(usage.length, 1);
+  assert.equal(usage[0].baseline, true);
+  assert.equal(usage[0].runtime, 'claude');
+  assert.equal(usage[0].model, 'claude-sonnet-4-5');
+  assert.equal(loadPairState(root).continuation.owner_session_id, 'claude-owner');
+});
+
 test('unrelated sessions stop normally while pause releases continuation ownership', t => {
   const root = fixture(t);
-  assert.equal(invoke(root, 'codex', 'unrelated-session'), null);
+  const unrelatedTranscript = path.join(root, 'unrelated-codex-transcript.jsonl');
+  fs.writeFileSync(unrelatedTranscript, [
+    { type: 'session_meta', payload: { id: 'unrelated-session' } },
+    { type: 'turn_context', payload: { model: 'gpt-5.6-terra', effort: 'medium' } },
+    { type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: {
+      input_tokens: 900, cached_input_tokens: 700, output_tokens: 90, reasoning_output_tokens: 10,
+    } } } },
+  ].map(record => JSON.stringify(record)).join('\n') + '\n');
+  assert.equal(invoke(root, 'codex', 'unrelated-session', { transcript_path: unrelatedTranscript }), null);
+  assert.equal(
+    require('../scripts/lib/pair-state').readPairEvents(root)
+      .filter(event => event.event === 'usage.recorded' && event.role === 'coordinator').length,
+    0,
+    'a non-owner transcript must never be attributed to the active Review Slice',
+  );
   pauseWork(root);
   assert.equal(invoke(root, 'codex', 'owner-session'), null);
   assert.equal(loadPairState(root).continuation.owner_session_id, null);
@@ -169,6 +212,31 @@ test('owning Stop gate keeps emitting continuation instructions across evidence 
     evidence_digest: 'a'.repeat(64),
   });
   assert.equal(invoke(root, 'codex', 'owner-session').decision, 'block');
+});
+
+test('owning Stop gate records observed coordinator usage without persisting transcript content', t => {
+  const root = fixture(t);
+  const transcript = path.join(root, 'codex-transcript.jsonl');
+  const writeTranscript = usage => fs.writeFileSync(transcript, [
+    { type: 'session_meta', payload: { id: 'owner-session' } },
+    { type: 'turn_context', payload: { model: 'gpt-5.6-terra', effort: 'medium' } },
+    { type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: usage } } },
+  ].map(record => JSON.stringify(record)).join('\n') + '\n');
+  writeTranscript({ input_tokens: 1000, cached_input_tokens: 700, output_tokens: 100, reasoning_output_tokens: 20 });
+
+  assert.equal(invoke(root, 'codex', 'owner-session', { transcript_path: transcript }).decision, 'block');
+  writeTranscript({ input_tokens: 1500, cached_input_tokens: 1050, output_tokens: 160, reasoning_output_tokens: 30 });
+  assert.equal(invoke(root, 'codex', 'owner-session', { transcript_path: transcript }).decision, 'block');
+
+  const usage = require('../scripts/lib/pair-state').readPairEvents(root)
+    .filter(event => event.event === 'usage.recorded' && event.role === 'coordinator');
+  assert.equal(usage.length, 2);
+  assert.equal(usage[0].baseline, true);
+  assert.equal(usage[1].input_tokens, 500);
+  assert.equal(usage[1].cached_input_tokens, 350);
+  assert.equal(usage[1].output_tokens, 60);
+  const bytes = fs.readFileSync(path.join(root, '.pair', 'runs', 'work-stop-contract', 'events.jsonl'), 'utf8');
+  assert.doesNotMatch(bytes, /codex-transcript|token_count|turn_context/i);
 });
 
 test('hook infrastructure failure never deletes or rewrites the durable phase', t => {

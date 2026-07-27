@@ -130,6 +130,23 @@ slice, and cumulative review. Authoritative events, atomic status, and attempt
 evidence live under `.pair/runs/<work-id>/`; home-directory history is optional
 legacy import only.
 
+New promotions use `**Pair mode:** compiled`. `pair-promote` records one
+provider-neutral, content-addressed Implementation Design Contract in canonical
+Work, and the validator compiles a private bounded Review Slice Execution Packet
+for each task. The packet carries verbatim Acceptance Criteria, exact symbols and
+call paths, behavior/state/wiring/failure contracts, tests and RED signals,
+verification, constraints, relevant repository evidence, upstream decision
+contracts, and non-goals, so either Codex or Claude Code can execute the slice
+without rediscovering the whole implementation design.
+
+`S` and `M` remain size labels. A slice is reported as cheap-ready only when its
+risk, scope, uncertainty, closed mappings, and 8,192-byte packet bound all pass;
+the validator also prints the recommended model-strength floor. Compiled policy
+reviews every cheap-ready M slice and a deterministic sample of cheap-ready S
+slices. The Pair owner hook captures a provider-token baseline immediately after
+Pair invocation, and the owning Stop hook records the safe delta—not transcript
+content. `pair-report --json` attributes those tokens to accepted slices.
+
 Start the three-pane host with `pair-loop --host`, inspect it with
 `pair-loop --status`, then run bare `pair-loop --runtime auto`. Attempts survive
 process exits at their exact phase. Additional repository files are advisory,
@@ -246,6 +263,7 @@ of rules that instructions alone under-deliver:
 | Hook | Event | Does |
 |------|-------|------|
 | `handover-gate.sh` | UserPromptSubmit | Blocks only a stale registered Agent Conversation before model processing and seals its bounded Agent Conversation Handover; it never persists submitted prompts or compaction summaries. |
+| `pair-owner.sh` | PostToolUse (Pair command) | Claims the invoking Codex or Claude conversation as the Pair owner and captures its provider-token baseline before implementation continues. |
 | `stop-gate.sh` | Stop | The single coordinated Stop hook: records registered activity, safely recovers enabled General Agent Conversation checkpoints from the exact provider transcript, and continues only the Agent Conversation that owns active Pair Work. |
 | `delegation-nudge.sh` | PostToolUse (edits) | Once per session at the 8th main-session edit, reminds the model to batch mechanical remainders into a subagent (mech/haiku, general-purpose/sonnet). Opt-out `CLAUDE_DELEGATION_NUDGE=off`; threshold `CLAUDE_DELEGATION_NUDGE_AT` |
 | `commit-guard.sh` | PreToolUse (git commit) | Blocks commits containing attribution trailers (Co-Authored-By / Generated with Claude) before they run |

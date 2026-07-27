@@ -143,6 +143,24 @@ test('plan challenge defaults to medium effort and one bounded evidence sweep', 
   assert.match(prompt, /report all material findings in this verdict/i);
 });
 
+test('compiled plan review verifies the bound Implementation Design Contract without redesigning it', () => {
+  const prompt = planReviewPrompt({
+    planPath: '.pair/plan.md',
+    specPath: 'docs/work/work-20260727-compiled/spec.md',
+    digest: 'a'.repeat(64),
+    implementationDesign: {
+      path: 'docs/work/work-20260727-compiled/evidence/EVD-001-implementation-design.json',
+      sha256: 'b'.repeat(64),
+    },
+  });
+
+  assert.match(prompt, /Implementation Design Contract/i);
+  assert.match(prompt, /EVD-001-implementation-design\.json/);
+  assert.match(prompt, new RegExp('b{64}'));
+  assert.match(prompt, /task-to-decision mapping/i);
+  assert.match(prompt, /do not redesign.*unless.*stale|unless.*stale.*do not redesign/i);
+});
+
 test('a revised plan challenge carries prior findings into a bounded closure review', () => {
   const priorReview = {
     plan_digest: 'prior-digest',

@@ -13,6 +13,9 @@ const {
   validatePlan,
 } = require("./lib/pair-core");
 const {
+  validatePlanImplementationDesign,
+} = require("./lib/implementation-design");
+const {
   createReviewSnapshot,
   repositoryDigest,
   treeDigest,
@@ -145,7 +148,7 @@ function resolveCanonicalWork(root) {
   };
 }
 
-function planReviewPrompt({ planPath, specPath, digest, priorReview = null }) {
+function planReviewPrompt({ planPath, specPath, digest, priorReview = null, implementationDesign = null }) {
   const priorFindings = Array.isArray(priorReview?.findings)
     ? priorReview.findings.filter((finding) => finding?.origin === "plan")
     : [];
@@ -155,11 +158,15 @@ function planReviewPrompt({ planPath, specPath, digest, priorReview = null }) {
       ? `This is a closure review of the unchanged plan digest after the reviewer contract or environment was corrected. The independent prior reviewer reported these material findings for digest ${digest}:\n${JSON.stringify(priorFindings, null, 2)}\n\nVerify every prior finding against the parent-provided contract evidence first. Then inspect only the directly affected contracts needed to decide whether any genuine plan defect remains. Do not restart an open-ended repository audit or reopen unrelated areas.`
       : `This is a closure review of a revised plan. The independent prior reviewer rejected digest ${priorReview.plan_digest || "unknown"} with these material findings:\n${JSON.stringify(priorFindings, null, 2)}\n\nVerify every prior finding against the new digest first. Then inspect only the changed or directly affected contracts needed to catch regressions introduced by those fixes. Do not restart an open-ended repository audit or reopen unchanged, previously reviewed areas without concrete new evidence.`
     : "This is the first review of this plan lineage. Perform one complete evidence sweep across every review ground below.";
+  const designContext = implementationDesign
+    ? `\nImplementation Design Contract: ${implementationDesign.path}\nImplementation Design Contract raw SHA-256: ${implementationDesign.sha256}\nThis immutable provider-neutral contract closes the implementation symbols, call paths, before/after/error behavior, state flow, wiring, failure handling, deletions, test cases, RED signals, and non-goals. Verify its digest, repository grounding, freshness, and task-to-decision mapping. Treat supported implementation decisions as approved: do not redesign them unless concrete repository evidence proves the contract stale or contradictory.\n`
+    : "";
   return `You are the independent challenge gate for a Pair implementation plan. You did not write the plan. Read-only review; never edit files.
 
 Plan: ${planPath}
 Canonical specification: ${specPath}
 Plan contract SHA-256: ${digest}
+${designContext}
 
 This value is Pair's progress-stable contract digest, not the raw file SHA-256. Pair computes it from ".pair/plan.md" after normalizing executable Task/Acceptance-Criteria checkbox state to unchecked and removing Pair-v3 recovery-context lines. The parent process verifies this contract digest before and after review and rejects source or snapshot mutation. A disposable snapshot also contains parent-generated ".pair/plan-contract.json" with both the contract digest and raw plan SHA-256. Never report a digest mismatch from a raw "sha256sum"/"shasum" comparison, and never treat stale ".pair/plan-review.*" runtime evidence as approval for the current digest.
 
@@ -868,7 +875,10 @@ async function main() {
   const planPath = path.join(root, ".pair", "plan.md");
   if (!fs.existsSync(planPath)) fail(".pair/plan.md is missing");
   const plan = fs.readFileSync(planPath, "utf8");
-  const validation = validatePlan(plan);
+  const structural = validatePlan(plan);
+  const validation = structural.parsed.pairMode === "compiled"
+    ? validatePlanImplementationDesign({ root, planPath, plan })
+    : structural;
   if (!validation.valid) {
     fail(`plan validation failed:\n- ${validation.errors.join("\n- ")}`);
   }
@@ -969,6 +979,9 @@ async function main() {
     specPath: path.relative(root, path.join(workDirectory, "spec.md")),
     digest,
     priorReview,
+    implementationDesign: validation.design
+      ? { path: validation.design.path, sha256: validation.design.sha256 }
+      : null,
   });
   if (options.dryRun) {
     const commands = runtimes.map((runtime, index) => {

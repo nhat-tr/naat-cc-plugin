@@ -5,7 +5,7 @@ description: Promote an approved specification into an evidence-grounded, compac
 
 # Promote an Approved Spec Into a Compact Pair Plan
 
-Produce the smallest executable plan the visible Pair v4 coordinator can follow. Do not implement during promotion, and do not copy the repository investigation into the plan.
+Produce the smallest executable plan the visible Pair v4 coordinator can follow, backed by one immutable Implementation Design Contract. Do not implement during promotion, and do not copy the repository investigation into the plan. Both artifacts are provider-neutral: the same bytes must work in Codex and Claude Code without provider prompts or model-specific fields.
 
 ## Resolve Canonical Work
 
@@ -19,7 +19,7 @@ For Pair Work, the canonical path is `docs/work/<work-id>/spec.md`; `.pair/spec.
 
 If no approved design exists, stop. Purpose, constraints, stable Acceptance Criteria IDs, and verification must be approved before promotion. If the input already passes the canonical `validate-plan`, report that it is already executable and do not rewrite it.
 
-## Ground the Plan, Keep the Evidence Compact
+## Ground the Design Once
 
 Read applicable `AGENTS.md`, the relevant `UBIQUITOUS_LANGUAGE.md` cluster, manifests/lockfiles, exact callers, existing implementations, and tests before naming a path or contract. Load applicable language skills read-only.
 
@@ -35,7 +35,55 @@ For a dependency or framework capability, check in this order:
 
 Do not label repository behavior as a dependency, use model memory as evidence, or invent an abstraction to cover an unknown. Start with the framework-native baseline; custom code must implement confirmed application behavior.
 
-Record only the decisive paths/symbols in the plan's single `Repository evidence` field. The investigation remains in tool evidence or canonical Work, not in repeated Capability Evidence, Simplicity Contract, Change Map, Consumes/Produces, and Review-boundary prose.
+Record the closed implementation decisions once in an Implementation Design Contract, not repeatedly in plan prose or executor prompts. Keep only a short, human-scannable list of decisive paths/symbols in the plan's `Repository evidence` field.
+
+## Persist the Implementation Design Contract
+
+Before writing `.pair/plan.md`, create one persisted evidence envelope with `kind: "implementation-design-contract"`. Choose the next unused Work-local `EVD-NNN` number by inspecting `work.json` and the indexed `evidence/` files. Use this exact outer/result shape; arrays contain concrete values, not these placeholders:
+
+```json
+{
+  "schema": 1,
+  "id": "EVD-NNN-implementation-design",
+  "work_id": "work-YYYYMMDD-slug",
+  "kind": "implementation-design-contract",
+  "acceptance_criteria": ["AC-1"],
+  "decision_record_ids": [],
+  "source": "pair-promote/repository-grounding",
+  "recorded_at": "ISO-8601 date-time",
+  "result": {
+    "schema": 1,
+    "spec": { "path": "docs/work/<work-id>/spec.md", "sha256": "64 lowercase hex" },
+    "repository_evidence": [{ "path": "existing/file", "symbols": ["ExactSymbol"] }],
+    "decisions": [{
+      "id": "IMP-001", "outcome": "closed behavior", "acceptance_criteria": ["AC-1"], "depends_on": [],
+      "symbols": [{ "path": "file", "symbol": "ExactSymbol", "action": "read|add|modify|delete" }],
+      "call_paths": ["entry -> ExactSymbol -> effect"],
+      "contract": { "before": ["current behavior"], "after": ["required behavior"], "errors": ["error behavior"] },
+      "data_shapes": ["exact DTO/API shape"], "state_flow": ["state transition"], "wiring": ["DI/host wiring"],
+      "failure_handling": ["failure rule"], "deletions": [],
+      "pattern_references": [{ "path": "existing/file", "symbol": "ExactSymbol" }],
+      "tests": [{ "name": "exact test", "file": "test/file", "boundary": "unit|integration|e2e", "purpose": "behavior proved", "red_signal": "missing-behavior failure" }],
+      "verify": "exact focused command", "non_goals": ["explicit exclusion"]
+    }]
+  }
+}
+```
+
+The `result` contains:
+
+- The canonical spec path and SHA-256.
+- Existing repository evidence paths and exact symbols actually read. Every non-`add` symbol and every pattern reference must map to this evidence; unused or missing evidence is invalid.
+- Stable `IMP-NNN` decisions. Each decision closes its mapped Acceptance Criteria, dependencies, exact symbols/actions and call paths, before/after/error contract, DTO/API/data shapes, state flow, DI/host wiring, failure handling, deletions, repository pattern references, exact tests and RED signal, focused verification, and non-goals.
+
+No `TODO`, `TBD`, unknown field, provider/model/prompt field, provider-specific executor instruction, or undecided alternative may survive promotion. Provider names remain valid only when they are part of the approved product behavior. A decision maps to exactly one Review Slice; all decisions and Acceptance Criteria must be mapped. Write the candidate under `$CLAUDE_SCRATCH_DIR/<repo>/pair-promote/`, then run:
+
+```bash
+validate-implementation-design "$CLAUDE_SCRATCH_DIR/<repo>/pair-promote/implementation-design.json"
+work-lineage.cjs record-evidence --file "$CLAUDE_SCRATCH_DIR/<repo>/pair-promote/implementation-design.json" --repository-root .
+```
+
+The second command creates the immutable `docs/work/<work-id>/evidence/EVD-NNN-implementation-design.json` record and indexes it in `work.json`. Compute its raw SHA-256 after persistence; `.pair/plan.md` binds that exact digest. A revision is a new evidence record, never an in-place edit.
 
 ## Design Finite Behavior Slices
 
@@ -54,8 +102,9 @@ Do not create separate RED, GREEN, unit-test, integration-test, wiring, or revie
 Only these task facts belong in the executable plan:
 
 - Stable task ID and observable outcome.
-- Explicit `risk`, mapped `[ac:...]`, and `[test:...]` boundary.
+- Explicit `type`, `risk`, `scope`, `uncertainty`, mapped `[ac:...]`, and `[test:...]` boundary.
 - Exact owned `files`, test-owned `tests`, exact `verify` command, and S/M/L size.
+- Exact mapped `IMP-NNN` Implementation Design Contract decisions.
 
 Human readability is part of the contract. Put the observable outcome on the checkbox line, then put each machine-read fact on its own indented, labeled row. Do not collapse profile, files, tests, RED evidence, and verification into one scrolling sentence. The validator accepts this readable form and the legacy one-line form.
 
@@ -69,6 +118,14 @@ Budgets remain hard limits:
 
 Cross-module work is at least medium risk; contract/architecture work is at least high risk; credentials, authorization, payments, destructive data changes, and production security are critical. Resolve uncertainty before promotion. Pair v4 plans are limited to 12 Review Slices and 24 KiB.
 
+## Prove Cheap-Ready, Do Not Infer It From Size
+
+`S` and `M` are size budgets, not model-routing promises. A non-doc Review Slice is cheap-ready only when all of these are true: it is S or M with low uncertainty, risk is low or medium, scope is local or cross-module, every implementation decision is closed and mapped, all named existing evidence exists, and its compiled Review Slice Execution Packet is at most 8,192 UTF-8 bytes. The packet includes the slice constraints, relevant repository evidence, and transitive upstream decisions as well as its own decisions and tests.
+
+Strength 1 means a minimal docs executor; strength 2 means a standard code executor; strength 3 means a strong executor; strength 4 means the strongest available executor. Claude commonly maps these to Haiku/low, Sonnet/medium, Opus/high, and Opus/max; Codex commonly maps them to low, medium, high, and xhigh reasoning on the selected model. These are provider-affine launch recommendations, not fields in the contract. Pair v4's visible coordinator cannot switch its own model: choose the recommended tier before starting that coordinator. Provider configuration may change the concrete model while the provider-neutral packet stays identical.
+
+The validator compiles every packet and prints `cheap-ready`, `recommended-strength`, and `packet-bytes`. Treat failure of any gate as routing evidence, not as an invitation to relabel the task. This makes a grounded S or M task suitable for a less expensive executor while retaining exact decisions and tests; it does not make an arbitrary M task cheap.
+
 ## Write `.pair/plan.md`
 
 Use this default contract:
@@ -76,10 +133,11 @@ Use this default contract:
 ```markdown
 # Task: <title>
 
-**Pair mode:** lite
+**Pair mode:** compiled
 
 ## Intent Contract
 - **Spec:** `docs/work/<work-id>/spec.md` (`sha256:<Canonical SHA-256>`)
+- **Implementation design:** `docs/work/<work-id>/evidence/EVD-NNN-implementation-design.json` (`sha256:<raw evidence SHA-256>`)
 - **Purpose:** <approved observable outcome>
 - **Repository evidence:** `<existing-path#symbol>`, `<test/path>`, and `<manifest/lockfile>`
 - **Constraints:** <approved compatibility, security, rejection, and simplicity boundaries>
@@ -88,9 +146,10 @@ Use this default contract:
 ## Streams
 ### Stream 1: <observable capability>
 - [ ] Task 1.1 — <complete observable slice>
-  - **Profile:** [risk:medium] [ac:AC-1] [test:integration] · **M**
+  - **Profile:** [type:feature] [risk:medium] [scope:cross-module] [uncertainty:low] [ac:AC-1] [test:integration] · **M**
   - **Files:** `tests/<behavior>.integration.*`, `src/<behavior>.*`
   - **Tests:** `tests/<behavior>.integration.*`
+  - **Design:** IMP-001
   - **Verify:** `<exact focused command>`
 
 ## Acceptance Criteria
@@ -100,7 +159,7 @@ Use this default contract:
 - None.
 ```
 
-Use additional Streams only to make real ordering visible. The runner executes tasks in written order, so do not add dependency ceremony for a simple linear plan. Add a short nested `Consumes`/`Produces` contract only when an otherwise invisible cross-task interface truly needs it; it is optional in the compact Pair v4 contract. For the full Pair contract, put every required profile tag on `**Profile:**` and use separate `**Red:**`, `**Red expect:**`, `**Consumes:**`, `**Produces:**`, `**Defect:**`, `**Review boundary:**`, and `**Test boundary:**` rows.
+Use additional Streams only to make real ordering visible. The runner executes tasks in written order, so do not add dependency ceremony for a simple linear plan. Add a short nested `Consumes`/`Produces` contract only when an otherwise invisible cross-task interface truly needs it; it is optional in the compiled Pair v4 contract. Legacy `lite` and full Pair plans remain readable for compatibility, but new promotions use `compiled`.
 
 Never add progress logs, recovery notes, reviewer findings, or implementation history to the plan. Acceptance Criteria are completion state, not model tasks; the runner closes them automatically when all mapped tasks pass.
 
@@ -113,7 +172,7 @@ If `.pair/verify.sh` is absent, create a fast pre-existing-tree gate using repos
 Run:
 
 ```bash
-skills/pair-v3/scripts/validate-plan .pair/plan.md
+validate-plan .pair/plan.md
 pair-loop --challenge-plan --runtime auto
 ```
 
@@ -127,4 +186,4 @@ pair-loop --approve-plan <64-character-digest> --reason "<concrete reason>"
 
 This records `human-override:<digest>:user:<reason-hash>` plus the full reason in `.pair/plan-review.json`; it never claims an independent review occurred. Cross-provider fallback remains opt-in via `--allow-cross-runtime-fallback`.
 
-Report the Work ID, plan digest, task/AC counts, decisive repository evidence, full verification command, complete plan-review summary path, and whether approval was independent or a human override. Do not begin implementation.
+Report the Work ID, Implementation Design Contract path/digest, plan digest, task/AC counts, each Review Slice's cheap-ready/recommended-strength/packet-bytes result, decisive repository evidence, full verification command, complete plan-review summary path, and whether approval was independent or a human override. Do not begin implementation.

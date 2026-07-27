@@ -55,6 +55,7 @@ for (const record of records) {
 const attempts = [...terminalByAttempt.values()];
 
 const groups = new Map();
+const attemptGroupKeys = new Map();
 for (const attempt of attempts) {
   const key = `${attempt.routeId}|${attempt.profile?.type || '?'}|${attempt.profile?.risk || '?'}`;
   const group = groups.get(key) || {
@@ -77,12 +78,18 @@ for (const attempt of attempts) {
     majors: 0,
     inputTokens: 0,
     cachedInputTokens: 0,
+    uncachedInputTokens: 0,
     outputTokens: 0,
     reasoningTokens: 0,
     elapsedMs: 0,
     costUsd: 0,
     measuredCosts: 0,
+    coordinatorTurns: 0,
+    observedModels: [],
+    cheapReady: attempt.cheapReady ?? attempt.cheap_ready ?? null,
+    recommendedStrength: attempt.recommendedStrength ?? attempt.recommended_strength ?? null,
   };
+  attemptGroupKeys.set(attempt.attemptId, key);
   group.attempts++;
   if (attempt.status === 'interrupted') group.interrupted++;
   if (attempt.valid) group.valid++;
@@ -113,6 +120,40 @@ for (const attempt of attempts) {
     group.costUsd += attempt.totalCost;
     group.measuredCosts++;
   }
+  groups.set(key, group);
+}
+
+for (const usage of records.filter(record =>
+  record.event === 'usage.recorded'
+    && record.role === 'coordinator'
+    && record.telemetry_source === 'provider-transcript'
+    && record.baseline !== true,
+)) {
+  const key = attemptGroupKeys.get(usage.attemptId)
+    || `${usage.routeId || 'inline-coordinator'}|${usage.type || '?'}|${usage.risk || '?'}`;
+  const group = groups.get(key) || {
+    route: usage.routeId || 'inline-coordinator',
+    type: usage.type || '?',
+    risk: usage.risk || '?',
+    attempts: 0, interrupted: 0, valid: 0, accepted: 0, localFix: 0,
+    escalated: 0, rewrites: 0, redesigns: 0, regenerations: 0,
+    humanTakeovers: 0, anchorSamples: 0, reviewerMisses: 0, blockers: 0, majors: 0,
+    inputTokens: 0, cachedInputTokens: 0, uncachedInputTokens: 0,
+    outputTokens: 0, reasoningTokens: 0, elapsedMs: 0, costUsd: 0, measuredCosts: 0,
+    coordinatorTurns: 0, observedModels: [],
+    cheapReady: usage.cheap_ready ?? null,
+    recommendedStrength: usage.recommended_strength ?? null,
+  };
+  group.inputTokens += usage.input_tokens || 0;
+  group.cachedInputTokens += usage.cached_input_tokens || 0;
+  group.uncachedInputTokens += usage.uncached_input_tokens || 0;
+  group.outputTokens += usage.output_tokens || 0;
+  group.reasoningTokens += usage.reasoning_tokens || 0;
+  group.coordinatorTurns++;
+  const observedModel = `${usage.runtime || 'unknown'}/${usage.model || 'unknown'}`;
+  group.observedModels = [...new Set([...(group.observedModels || []), observedModel])].sort();
+  if (group.cheapReady === null && usage.cheap_ready !== undefined) group.cheapReady = usage.cheap_ready;
+  if (group.recommendedStrength === null && usage.recommended_strength !== undefined) group.recommendedStrength = usage.recommended_strength;
   groups.set(key, group);
 }
 
@@ -218,7 +259,14 @@ for (const usage of records.filter(record => record.event === 'usage.recorded' &
 }
 
 if (asJson) {
-  console.log(JSON.stringify([...groups.values()], null, 2));
+  const output = [...groups.values()].map(group => ({
+    ...group,
+    totalTokens: group.inputTokens + group.outputTokens,
+    tokensPerAccepted: group.accepted > 0
+      ? (group.inputTokens + group.outputTokens) / group.accepted
+      : null,
+  }));
+  console.log(JSON.stringify(output, null, 2));
   process.exit(0);
 }
 

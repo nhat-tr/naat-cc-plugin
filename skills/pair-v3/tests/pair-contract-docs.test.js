@@ -76,7 +76,7 @@ test('Claude command and portable skill share the compact Pair v4 plan contract'
     'Acceptance Criteria',
     'challenge-plan',
     'human-override',
-    'skills/pair-v3/scripts/validate-plan',
+    'validate-plan \\.pair/plan\\.md',
   ];
 
   for (const phrase of required) {
@@ -104,6 +104,63 @@ test('pair promotion writes one tests-first Review Slice instead of RED/GREEN mi
   assert.match(skill, /no-blockers:<digest>:<runtime>\/<model>/i);
   assert.match(skill, /human-override:<digest>:user:<reason-hash>/i);
   assert.doesNotMatch(skill, /red-expect:/i);
+});
+
+test('Pair promotion compiles a provider-neutral design contract into cheap-ready execution packets', () => {
+  const glossary = read('UBIQUITOUS_LANGUAGE.md');
+  const promotion = read('skills/pair-promote/SKILL.md');
+  const pair = read('skills/pair-v4/SKILL.md');
+  const command = read('commands/pair-promote.md');
+  const designSchema = JSON.parse(read('skills/pair-v3/schemas/implementation-design.schema.json'));
+  const packetSchema = JSON.parse(read('skills/pair-v3/schemas/review-slice-execution-packet.schema.json'));
+
+  for (const term of ['Implementation Design Contract', 'Review Slice Execution Packet']) {
+    assert.match(glossary, new RegExp(`\\*\\*${term}\\*\\*`));
+  }
+  for (const document of [promotion, command]) {
+    assert.match(document, /Pair mode:\*\* compiled/i);
+    assert.match(document, /Implementation Design Contract/i);
+    assert.match(document, /record-evidence/i);
+    assert.match(document, /cheap-ready/i);
+  }
+  assert.match(promotion, /Codex and Claude/i);
+  assert.match(promotion, /work-lineage\.cjs record-evidence/i);
+  assert.match(promotion, /next unused.*EVD-NNN/i);
+  assert.match(promotion, /"work_id"/i);
+  assert.match(promotion, /visible coordinator.*cannot.*switch/i);
+  assert.match(promotion, /strength 2.*standard code/i);
+  assert.match(promotion, /S or M.*low uncertainty/i);
+  assert.match(promotion, /8,192|8192/);
+  assert.match(pair, /every cheap-ready M/i);
+  assert.match(pair, /deterministic.*sample.*cheap-ready S/i);
+  assert.match(pair, /provider transcript.*model.*token/i);
+  assert.match(pair, /tokens per accepted Review Slice/i);
+  assert.equal(designSchema.additionalProperties, false);
+  assert.equal(packetSchema.additionalProperties, false);
+  assert.deepEqual(packetSchema.properties.routing.required, [
+    'cheap_ready', 'recommended_strength', 'reasons', 'packet_bytes',
+  ]);
+  assert.deepEqual(JSON.parse(read('metadata/runtime-asset-map.json')).assets['cli.validate-implementation-design'], {
+    type: 'cli',
+    canonical_file: 'bin/validate-implementation-design',
+    supported_runtimes: ['claude', 'codex'],
+  });
+  const help = childProcess.spawnSync(path.join(root, 'bin', 'validate-implementation-design'), ['--help'], {
+    cwd: root, encoding: 'utf8',
+  });
+  assert.equal(help.status, 0, help.stdout + help.stderr);
+  assert.match(help.stdout, /Usage: validate-implementation-design FILE/);
+  assert.deepEqual(JSON.parse(read('metadata/runtime-asset-map.json')).assets['cli.validate-plan'], {
+    type: 'cli',
+    canonical_file: 'bin/validate-plan',
+    supported_runtimes: ['claude', 'codex'],
+  });
+  const planHelp = childProcess.spawnSync(path.join(root, 'bin', 'validate-plan'), ['--help'], {
+    cwd: root, encoding: 'utf8',
+  });
+  assert.equal(planHelp.status, 0, planHelp.stdout + planHelp.stderr);
+  assert.match(planHelp.stdout, /Usage: validate-plan \[FILE\]/);
+  assert.match(promotion, /\nvalidate-plan \.pair\/plan\.md\n/);
 });
 
 test('the pair-v4 runtime engine owns plan validation', () => {

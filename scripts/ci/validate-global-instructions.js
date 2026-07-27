@@ -12,7 +12,13 @@ const checks = [
   {
     label: 'Repo AGENTS',
     file: path.join(ROOT_DIR, manifest.generated_outputs.repo_agents.output),
-    requirements: ['skills/csharp-dotnet/SKILL.md', 'skills/typescript/SKILL.md', 'react-next.md'],
+    requirements: [
+      'skills/csharp-dotnet/SKILL.md',
+      'skills/typescript/SKILL.md',
+      'react-next.md',
+      '## Skill Read Reuse',
+      'reuse it across later user turns',
+    ],
   },
   {
     label: 'Claude global instructions',

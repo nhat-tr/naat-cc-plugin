@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { planContractDigest, parsePlan, validatePlan } = require('./pair-core');
+const { validatePlanImplementationDesign } = require('./implementation-design');
 const { appendPairEvent, loadPairState, pairStatePaths } = require('./pair-state');
 const {
   createResumeCheckpoint,
@@ -230,7 +231,10 @@ function endHumanEdit(root) {
     const planPath = path.join(root, '.pair', 'plan.md');
     if (!fs.existsSync(planPath)) throw new Error('.pair/plan.md is missing');
     const plan = fs.readFileSync(planPath, 'utf8');
-    const validation = validatePlan(plan);
+    const structural = validatePlan(plan);
+    const validation = structural.parsed.pairMode === 'compiled'
+      ? validatePlanImplementationDesign({ root, planPath, plan })
+      : structural;
     if (!validation.valid) throw new Error(`plan validation failed: ${validation.errors.join('; ')}`);
     const digest = planContractDigest(plan);
     semanticChange = digest !== edit.base_plan_digest;

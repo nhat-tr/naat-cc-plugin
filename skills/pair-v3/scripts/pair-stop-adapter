@@ -5,6 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { loadPairState } = require('./lib/pair-state');
+const { appendPairEvent } = require('./lib/pair-state');
+const { recordCoordinatorTelemetry } = require('./lib/coordinator-telemetry');
 const { prepareAgentConversationStop, recordAgentConversationStop } = require('./lib/handover-state');
 
 function readInput() {
@@ -46,14 +48,17 @@ function hardStopResponse(reason) {
   return { continue: false, stopReason: reason };
 }
 
-function continuationResponse(root, input, runtime = runtimeFor(input)) {
+function hasPairAuthority(root) {
   const pairDirectory = path.join(root, '.pair');
-  const hasAuthority = [
+  return [
     path.join(pairDirectory, 'events.jsonl'),
     path.join(pairDirectory, 'current-run.json'),
     path.join(pairDirectory, 'runs'),
   ].some(candidate => fs.existsSync(candidate));
-  if (!hasAuthority) return null;
+}
+
+function continuationResponse(root, input, runtime = runtimeFor(input)) {
+  if (!hasPairAuthority(root)) return null;
   let state;
   try {
     state = loadPairState(root);
@@ -78,6 +83,34 @@ function main() {
   const root = repositoryRoot(cwd);
   if (!root) return;
   const runtime = runtimeFor(input);
+  let ownsPairWork = false;
+  if (hasPairAuthority(root)) {
+    try {
+      ownsPairWork = loadPairState(root).continuation?.owner_session_id === input.session_id;
+    } catch {
+      // Invalid Pair state remains inert here; the existing continuation path handles it below.
+    }
+  }
+  if (ownsPairWork && input.transcript_path) {
+    try {
+      recordCoordinatorTelemetry(root, {
+        runtime,
+        transcriptPath: input.transcript_path,
+        sessionId: input.session_id,
+        now: input.now,
+      });
+    } catch (error) {
+      try {
+        appendPairEvent(root, {
+          event: 'warning.recorded',
+          code: 'coordinator-telemetry-unavailable',
+          detail: `Observed coordinator usage was unavailable (${error.code || error.name || 'parse-error'}); Pair correctness is unaffected`,
+        });
+      } catch {
+        // Telemetry and its warning are both nonblocking.
+      }
+    }
+  }
   let recorded;
   try {
     const preparation = prepareAgentConversationStop(root, {
@@ -117,6 +150,7 @@ if (require.main === module) main();
 module.exports = {
   continuationReason,
   continuationResponse,
+  hasPairAuthority,
   hardStopResponse,
   response,
   runtimeFor,

@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pair v4 Implementation Design Contract result",
+  "type": "object",
+  "properties": {
+    "schema": { "const": 1 },
+    "spec": {
+      "type": "object",
+      "properties": {
+        "path": { "$ref": "#/$defs/path" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      },
+      "required": ["path", "sha256"],
+      "additionalProperties": false
+    },
+    "repository_evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": { "$ref": "#/$defs/path" },
+          "symbols": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/text" }, "uniqueItems": true }
+        },
+        "required": ["path", "symbols"],
+        "additionalProperties": false
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 24,
+      "items": { "$ref": "#/$defs/decision" }
+    }
+  },
+  "required": ["schema", "spec", "repository_evidence", "decisions"],
+  "additionalProperties": false,
+  "$defs": {
+    "text": { "type": "string", "pattern": "\\S" },
+    "path": { "type": "string", "pattern": "^(?!/|~)(?!.*(?:^|/)\\.\\.(?:/|$)).+" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "ac": { "type": "string", "pattern": "^AC-[1-9][0-9]*$" },
+    "decision_id": { "type": "string", "pattern": "^IMP-[0-9]{3}$" },
+    "texts": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/text" } },
+    "decision": {
+      "type": "object",
+      "properties": {
+        "id": { "$ref": "#/$defs/decision_id" },
+        "outcome": { "$ref": "#/$defs/text" },
+        "acceptance_criteria": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/ac" }, "uniqueItems": true },
+        "depends_on": { "type": "array", "items": { "$ref": "#/$defs/decision_id" }, "uniqueItems": true },
+        "symbols": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": { "path": { "$ref": "#/$defs/path" }, "symbol": { "$ref": "#/$defs/text" }, "action": { "enum": ["read", "add", "modify", "delete"] } },
+            "required": ["path", "symbol", "action"], "additionalProperties": false
+          }
+        },
+        "call_paths": { "$ref": "#/$defs/texts" },
+        "contract": {
+          "type": "object",
+          "properties": { "before": { "$ref": "#/$defs/texts" }, "after": { "$ref": "#/$defs/texts" }, "errors": { "$ref": "#/$defs/texts" } },
+          "required": ["before", "after", "errors"], "additionalProperties": false
+        },
+        "data_shapes": { "$ref": "#/$defs/texts" },
+        "state_flow": { "$ref": "#/$defs/texts" },
+        "wiring": { "$ref": "#/$defs/texts" },
+        "failure_handling": { "$ref": "#/$defs/texts" },
+        "deletions": { "type": "array", "items": { "$ref": "#/$defs/text" } },
+        "pattern_references": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": { "path": { "$ref": "#/$defs/path" }, "symbol": { "$ref": "#/$defs/text" } },
+            "required": ["path", "symbol"], "additionalProperties": false
+          }
+        },
+        "tests": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "$ref": "#/$defs/text" }, "file": { "$ref": "#/$defs/path" },
+              "boundary": { "enum": ["unit", "integration", "e2e"] },
+              "purpose": { "$ref": "#/$defs/text" }, "red_signal": { "$ref": "#/$defs/text" }
+            },
+            "required": ["name", "file", "boundary", "purpose", "red_signal"], "additionalProperties": false
+          }
+        },
+        "verify": { "$ref": "#/$defs/text" },
+        "non_goals": { "$ref": "#/$defs/texts" }
+      },
+      "required": ["id", "outcome", "acceptance_criteria", "depends_on", "symbols", "call_paths", "contract", "data_shapes", "state_flow", "wiring", "failure_handling", "deletions", "pattern_references", "tests", "verify", "non_goals"],
+      "additionalProperties": false
+    }
+  }
+}

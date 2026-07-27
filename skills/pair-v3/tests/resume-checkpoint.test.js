@@ -5,6 +5,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const {
+  MAX_CHECKPOINT_BYTES,
   createResumeCheckpoint,
   recordResumedTurn,
   serializeResumeCheckpoint,
@@ -58,6 +59,21 @@ test('next action has a hard 512-byte UTF-8 cap', () => {
   const checkpoint = createResumeCheckpoint(input({ nextAction: '🧭'.repeat(400) }));
   assert.ok(Buffer.byteLength(checkpoint.next_action, 'utf8') <= 512);
   assert.doesNotThrow(() => Buffer.from(checkpoint.next_action, 'utf8').toString('utf8'));
+});
+
+test('Resume Checkpoint can carry a digest-only Review Slice Execution Packet reference', () => {
+  const checkpoint = createResumeCheckpoint(input({
+    executionPacket: {
+      path: '.pair/runs/work-checkpoint/attempts/1.1-one/execution-packet.json',
+      sha256: 'd'.repeat(64),
+    },
+  }));
+
+  assert.deepEqual(checkpoint.execution_packet, {
+    path: '.pair/runs/work-checkpoint/attempts/1.1-one/execution-packet.json',
+    sha256: 'd'.repeat(64),
+  });
+  assert.equal(Buffer.byteLength(serializeResumeCheckpoint(checkpoint), 'utf8') <= MAX_CHECKPOINT_BYTES, true);
 });
 
 test('first resumed turn records cached and uncached telemetry and warns above twice the prior median', t => {

@@ -5,7 +5,7 @@ description: Visible, resumable Pair v4 workflow for Codex and Claude. Use when 
 
 # Pair v4 — Visible, Repository-Local Pairing
 
-Pair v4 keeps ordinary implementation in the visible Codex or Claude coordinator, persists one recoverable Work lifecycle in the repository, and uses one reusable independent read-only Review Session. The coordinator owns the whole tests-first Review Slice; do not delegate implementation or reproduce lifecycle state manually.
+Pair v4 keeps ordinary implementation in the visible Codex or Claude coordinator, persists one recoverable Work lifecycle in the repository, and uses one reusable independent read-only Review Session. The coordinator owns the whole tests-first Review Slice; do not delegate implementation or reproduce lifecycle state manually. New compiled plans use the same provider-neutral Implementation Design Contract and Review Slice Execution Packet in Codex and Claude Code.
 
 ## Runtime Topology
 
@@ -48,7 +48,7 @@ One attempt ID survives CLI exits, agent exits, verification-launch failures, an
 1. If `.pair/plan.md` is absent, use brainstorming and `pair-promote` first.
 2. Run `pair-loop --host`, then `pair-loop --doctor`. Resolve only reported `fail` results before dispatch.
 3. Run bare `pair-loop --runtime auto`. `--once`, `--inline`, and `--complete` remain compatibility aliases; the normal lifecycle does not require them.
-4. When Pair prints an inline Review Slice brief, implement it directly in this visible coordinator. Write the failing test first, prove the intended failure, implement the minimum behavior, and run the exact verification.
+4. When Pair prints an inline Review Slice brief, implement it directly in this visible coordinator. For a compiled plan, the embedded Review Slice Execution Packet is the authoritative bounded context: read applicable instructions and only its named repository evidence, symbols, callers, patterns, and tests. Write the failing test first, prove its declared RED signal, implement the minimum behavior, and run the exact verification.
 5. Run bare `pair-loop` yourself. It resumes the saved phase, independently replays verification, invokes the Review Session when policy requires it, records the verdict, accepts the slice, and immediately opens the next Review Slice when one remains.
 6. Continue without asking the user to push ordinary phase transitions. Stop only for an explicit pause, a material plan/security/policy decision, exclusive human editing, or an evidenced blocker with no safe in-scope recovery action.
 
@@ -72,6 +72,7 @@ For canonical Work, all authority lives under `.pair/runs/<work-id>/`:
 - `state.json` — atomic reducer projection used by status, doctor, report, orientation, and Stop adapters.
 - `status.md` — secret-safe human projection.
 - `attempts/<attempt-id>/` — private bounded status, complete patches, verification metadata, and review evidence.
+- `attempts/<attempt-id>/execution-packet.json` — the private digest-checked Review Slice Execution Packet, capped at 16 KiB and at 8,192 compact UTF-8 bytes for cheap-ready routing. It carries the slice constraints, relevant existing repository evidence, mapped decisions, and transitive upstream decisions so execution never depends on an omitted plan/spec reread.
 - `review-session.json` — reusable read-only Review Session identity.
 
 `.pair/current-run.json` is only a locator. `.pair/plan.md` markers are derived scanability: `[ ]` queued, `[-]` active, `[x]` accepted. All three normalize to the same semantic plan digest.
@@ -87,7 +88,9 @@ Legacy home-directory history is optional import evidence, never authority. Miss
 - A material implementation finding returns the same attempt to implementation and waits for the patch digest to change before re-verifying.
 - Pair v4 never silently restores visible coordinator work. `pair-loop --discard-attempt` previews affected paths; only the exact follow-up command with the attempt ID and `--confirm-discard` restores the pre-attempt snapshot. The discarded complete patch remains in attempt evidence.
 
-Routine slice review defaults to critical risk; `PAIR_TASK_REVIEW=high-risk|all|off` is an explicit policy choice. `pair-loop --no-independent-review` (or `PAIR_INDEPENDENT_REVIEW=off`) explicitly disables both slice and cumulative independent review, while preserving verification and recording the operator opt-out in final-review evidence.
+Compiled routing reviews every cheap-ready M Review Slice and a deterministic 20% sample of cheap-ready S Review Slices; `PAIR_S_REVIEW_SAMPLE_RATE` changes that sample. Non-compiled routine slice review retains the critical-risk default. `PAIR_TASK_REVIEW=high-risk|all|off` is an explicit policy choice. `pair-loop --no-independent-review` (or `PAIR_INDEPENDENT_REVIEW=off`) explicitly disables both slice and cumulative independent review, while preserving verification and recording the operator opt-out in final-review evidence.
+
+Cheap-ready is a validated execution property, not another name for S/M. It requires low uncertainty, low/medium risk, local/cross-module scope, closed design mappings, and a packet no larger than 8,192 bytes. Code recommends model strength 2 at minimum; docs may recommend 1. L, high risk, contract/architecture, or high uncertainty recommends strength 3 or 4. Pair reports the target but does not pretend it can change the model inside an already-running visible provider conversation.
 
 `pair-loop --advisory-review` (or `PAIR_REVIEW_MODE=advisory`) keeps independent slice and cumulative review enabled, records every finding as evidence, but does not require the coordinator to remediate findings before the Work proceeds. Reviewer-environment failures still preserve the reviewing phase rather than being accepted.
 
@@ -103,7 +106,7 @@ Codex and Claude Stop adapters use their native response shapes and continue onl
 
 ## Bounded Resume and Privacy
 
-Same-session review resumption receives one Pair-authored Resume Checkpoint capped at 8,192 UTF-8 bytes, including a next action capped at 512 bytes and only digest/path references. Pair sends no cache-warming ping. First-turn cached/uncached usage is measured and reported as nonblocking telemetry.
+Same-session review resumption receives one Pair-authored Resume Checkpoint capped at 8,192 UTF-8 bytes, including a next action capped at 512 bytes and only digest/path references. Pair sends no cache-warming ping. Immediately after the owning conversation invokes Pair, the owner adapter reads the exact Codex or Claude provider transcript to establish a cumulative-token baseline. At the owning Stop, the Stop adapter observes the new model, effort when exposed, and cumulative counters, then persists only safe deltas and cache totals—never transcript content. `pair-report --json` attributes this telemetry to the Review Slice and reports tokens per accepted Review Slice so token efficiency is measured end to end rather than guessed from plan length.
 
 Events, logs, patches, reviews, status, report data, and hook output must omit raw prompts, transcripts, private reasoning, environment maps, credentials, capability tokens, and secret-like values. Runtime files are private. Never weaken redaction to make debugging easier; retain only bounded secret-safe evidence.
 

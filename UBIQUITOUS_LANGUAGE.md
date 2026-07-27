@@ -138,6 +138,14 @@ _Domain glossary for the brainstorming skill's Visual Companion (`skills/brainst
 - Aliases to avoid: "capability slice", "file cluster".
 - Relations: belongs to one **Work ID**; binds expected ownership to an immutable patch set; overlapping and unmapped changes remain explicit rather than being forced into a Review Slice.
 
+**Implementation Design Contract** — an immutable, content-addressed, provider-neutral Work evidence record that closes the exact implementation decisions needed to execute approved intent: symbols and call paths, before/after/error behavior, state flow, wiring, failure handling, deletions, tests, RED signals, and non-goals.
+- Aliases to avoid: "Codex plan", "Claude plan", "hidden plan", "planner prompt".
+- Relations: belongs to one **Work ID**; is indexed as canonical evidence; is digest-bound by the Pair plan; maps each implementation decision to one **Review Slice**.
+
+**Review Slice Execution Packet** — the private bounded projection of one approved Pair task and its mapped Implementation Design Contract decisions that a coordinator needs to execute that Review Slice without rereading the whole plan and specification.
+- Aliases to avoid: "task prompt", "slice capsule".
+- Relations: belongs to one **Review Slice**; carries verbatim Acceptance Criteria, constraints, relevant existing repository evidence, ownership, exact mapped and transitive upstream design decisions, tests, verification, non-goals, and the cheap-ready routing result; is stored only in Pair runtime state.
+
 **Engineering Quality Contract** — the approved set of always-on and fact-activated quality obligations for one Work, including measurable responses, verification evidence, owners, exclusions, residual risks, and approval or veto state.
 - Aliases to avoid: "quality checklist", "NFR list".
 - Relations: belongs to one **Work ID**; activates from observed change facts; governs whole-feature review and may cite Decision Records.

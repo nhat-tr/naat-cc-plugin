@@ -1631,6 +1631,33 @@ function main() {
     console.log(JSON.stringify({ valid: true, id: evidence.id }));
     return;
   }
+  if (command === 'record-evidence') {
+    const file = option(args, '--file');
+    const repositoryRoot = option(args, '--repository-root') || process.cwd();
+    if (!file) throw new Error('--file is required');
+    const candidate = path.resolve(file);
+    const evidence = validateEvidenceFile(candidate);
+    const recorded = appendEvidenceRecord({
+      repositoryRoot: path.resolve(repositoryRoot),
+      record: {
+        schema: evidence.schema,
+        id: evidence.id,
+        workId: evidence.work_id,
+        kind: evidence.kind,
+        acceptanceCriteria: evidence.acceptance_criteria,
+        decisionRecordIds: evidence.decision_record_ids,
+        source: evidence.source,
+        recordedAt: evidence.recorded_at,
+        result: evidence.result,
+      },
+    });
+    console.log(JSON.stringify({
+      recorded: true,
+      id: recorded.id,
+      path: path.relative(path.resolve(repositoryRoot), recorded.path).split(path.sep).join('/'),
+    }));
+    return;
+  }
   if (command === 'validate') {
     const directory = option(args, '--work');
     if (!directory) throw new Error('--work is required');
@@ -1639,7 +1666,7 @@ function main() {
     console.log(JSON.stringify({ valid: true, work_id: work.work_id }));
     return;
   }
-  console.error('Usage: work-lineage.cjs create --work-id ID --spec-file FILE [--repository-root DIR] | validate-evidence --file FILE | validate --work DIRECTORY [--require-evidence a,b]');
+  console.error('Usage: work-lineage.cjs create --work-id ID --spec-file FILE [--repository-root DIR] | record-evidence --file FILE [--repository-root DIR] | validate-evidence --file FILE | validate --work DIRECTORY [--require-evidence a,b]');
   process.exitCode = 1;
 }
 

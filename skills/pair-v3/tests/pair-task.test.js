@@ -20,6 +20,7 @@ const {
   readWorkLinkage,
   reconcileOrphanedAttempts,
   recoverActiveAttempt,
+  reviewPrompt,
   revertToSnapshot,
   runReview,
   shouldRunTaskReview,
@@ -166,6 +167,46 @@ test('Pair-lite uses a conditional task-review policy and always permits an expl
   assert.equal(shouldRunTaskReview({ risk: 'low' }, {}, { PAIR_TASK_REVIEW: 'all' }), true);
   assert.equal(shouldRunTaskReview({ risk: 'critical' }, {}, { PAIR_TASK_REVIEW: 'off' }), false);
   assert.equal(shouldRunTaskReview({ risk: 'low' }, { legacyV3: true }, {}), true);
+});
+
+test('compiled cheap-ready slices review every M slice and a stable sample of S slices', () => {
+  assert.equal(shouldRunTaskReview(
+    { id: '1.1', complexity: 'M', risk: 'medium' },
+    { compiled: true, cheapReady: true },
+    {},
+  ), true);
+  const sampled = Array.from({ length: 20 }, (_, index) => shouldRunTaskReview(
+    { id: `1.${index + 1}`, complexity: 'S', risk: 'low' },
+    { compiled: true, cheapReady: true, planDigest: 'a'.repeat(64) },
+    {},
+  ));
+  assert.equal(sampled.some(Boolean), true);
+  assert.equal(sampled.some(value => !value), true);
+  assert.deepEqual(
+    sampled,
+    Array.from({ length: 20 }, (_, index) => shouldRunTaskReview(
+      { id: `1.${index + 1}`, complexity: 'S', risk: 'low' },
+      { compiled: true, cheapReady: true, planDigest: 'a'.repeat(64) },
+      {},
+    )),
+  );
+});
+
+test('compiled slice review consumes the bounded packet without reopening the full plan and spec', () => {
+  const prompt = reviewPrompt({
+    id: '1.1', text: 'deliver greeting', acceptanceCriteria: ['AC-1'],
+    executionPacket: {
+      schema: 1,
+      review_slice: { id: '1.1', acceptance_criteria: [{ id: 'AC-1', text: 'prints greeting' }] },
+    },
+  }, 'HEAD', '.pair/plan.md', '.pair/review.patch', null);
+
+  assert.match(prompt, /Review Slice Execution Packet/);
+  assert.match(prompt, /prints greeting/);
+  assert.match(prompt, /"schema":1/);
+  assert.doesNotMatch(prompt, /\n\s{2}"schema": 1/, 'the prompt must send the exact compact bytes used by the cheap-ready gate');
+  assert.match(prompt, /do not reread the full plan or canonical spec/i);
+  assert.doesNotMatch(prompt, /Read the Intent Contract, canonical specification/i);
 });
 
 test('Work-level attempt budget spans plan digests and ignores interruptions', () => {
@@ -383,11 +424,13 @@ test('runReview reuses one external Review Session while rebinding each turn to 
     '1.1-snapshot',
     'complete.patch',
   );
+  const executionPacket = path.join(path.dirname(completePatch), 'execution-packet.json');
   fs.mkdirSync(path.dirname(completePatch), { recursive: true });
   fs.mkdirSync(fakeBin, { recursive: true });
   fs.mkdirSync(path.join(root, '.pair'), { recursive: true });
   fs.writeFileSync(path.join(root, '.pair', 'plan.md'), '# Plan\n');
   fs.writeFileSync(completePatch, 'first immutable Review Slice\n');
+  fs.writeFileSync(executionPacket, '{"schema":1,"review_slice":{"id":"1.1"}}\n');
   appendPairEvent(root, {
     event: 'work.opened', workId: 'work-review-snapshot', planDigest: 'a'.repeat(64),
   });
@@ -399,10 +442,14 @@ const output = args[args.indexOf('--output-last-message') + 1];
 const prompt = args.at(-1);
 const resumed = args[0] === 'exec' && args[1] === 'resume';
 let patch;
+let packet;
 if (resumed) {
   const serialized = prompt.slice(prompt.indexOf('{'), prompt.lastIndexOf('}') + 1);
   const checkpoint = JSON.parse(serialized);
   patch = path.resolve(process.cwd(), checkpoint.patch.path);
+  packet = checkpoint.execution_packet
+    ? path.resolve(process.cwd(), checkpoint.execution_packet.path)
+    : null;
 } else {
   patch = prompt.match(/Review Slice patch: (.+)/)?.[1];
 }
@@ -416,6 +463,9 @@ prior.push({
   patch,
   patchExists: Boolean(patch) && fs.existsSync(patch),
   patchContent: Boolean(patch) && fs.existsSync(patch) ? fs.readFileSync(patch, 'utf8') : null,
+  packet,
+  packetExists: Boolean(packet) && fs.existsSync(packet),
+  packetContent: Boolean(packet) && fs.existsSync(packet) ? fs.readFileSync(packet, 'utf8') : null,
   planExists: fs.existsSync(path.join(process.cwd(), '.pair', 'plan.md')),
 });
 fs.writeFileSync(process.env.PAIR_TEST_REVIEW_CAPTURE, JSON.stringify(prior));
@@ -444,7 +494,11 @@ process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: 'review
     runtime: 'codex',
     route: { id: 'codex-default-medium', model: 'default' },
     root,
-    task: { id: '1.1', text: 'review snapshot evidence', risk: 'medium' },
+    task: {
+      id: '1.1', text: 'review snapshot evidence', risk: 'medium',
+      executionPacketPath: path.relative(root, executionPacket),
+      executionPacket: { schema: 1, review_slice: { id: '1.1' } },
+    },
     planPath: '.pair/plan.md',
     scratchDir: scratchRoot,
     timeoutMs: 5_000,
@@ -471,6 +525,9 @@ process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: 'review
   assert.equal(observed[1].patchContent, 'second immutable Review Slice\n');
   assert.equal(observed[1].patch, path.join(observed[1].cwd, '.pair', 'runs', 'work-review-snapshot', 'attempts', '1.1-snapshot', 'complete.patch'));
   assert.notEqual(observed[1].patch, completePatch, 'the resumed reviewer must read the new snapshot copy, never the source patch');
+  assert.equal(observed[1].packetExists, true);
+  assert.equal(observed[1].packetContent, '{"schema":1,"review_slice":{"id":"1.1"}}\n');
+  assert.notEqual(observed[1].packet, executionPacket, 'the resumed reviewer must read the packet from its immutable snapshot');
 });
 
 test('anchor reviews are opt-in instead of silently doubling successful review cost', () => {

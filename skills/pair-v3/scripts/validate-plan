@@ -5,6 +5,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { planContractDigest, validatePlan } = require('./lib/pair-core');
+const {
+  compileReviewSliceExecutionPacket,
+  validatePlanImplementationDesign,
+} = require('./lib/implementation-design');
 
 function defaultPlanPath() {
   const root = childProcess.spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' });
@@ -12,7 +16,12 @@ function defaultPlanPath() {
 }
 
 function main() {
-  const planPath = process.argv[2] || defaultPlanPath();
+  const requested = process.argv[2];
+  if (requested === '--help' || requested === '-h') {
+    console.log('Usage: validate-plan [FILE]');
+    return;
+  }
+  const planPath = requested || defaultPlanPath();
   if (!fs.existsSync(planPath)) {
     console.log(`validate-plan: ${planPath} does not exist`);
     console.log('  ✗ no plan file — run /pair-promote first');
@@ -20,7 +29,14 @@ function main() {
   }
 
   const plan = fs.readFileSync(planPath, 'utf8');
-  const result = validatePlan(plan);
+  const rootResult = childProcess.spawnSync('git', ['-C', path.dirname(path.resolve(planPath)), 'rev-parse', '--show-toplevel'], {
+    encoding: 'utf8',
+  });
+  const root = rootResult.status === 0 ? rootResult.stdout.trim() : process.cwd();
+  const structural = validatePlan(plan);
+  const result = structural.parsed.pairMode === 'compiled'
+    ? validatePlanImplementationDesign({ root, planPath: path.resolve(planPath), plan })
+    : structural;
   for (const warning of result.warnings) console.log(`  ⚠ ${warning}`);
   for (const error of result.errors) console.log(`  ✗ ${error}`);
 
@@ -31,6 +47,20 @@ function main() {
 
   console.log(`validate-plan: OK — ${result.tasksOpen} open / ${result.tasksTotal} total task(s) in ${planPath}`);
   console.log(`plan contract sha256: ${planContractDigest(plan)}`);
+  if (result.design) {
+    console.log(`implementation design sha256: ${result.design.sha256}`);
+    for (const task of result.parsed.tasks) {
+      const packet = compileReviewSliceExecutionPacket({
+        root,
+        planPath: path.resolve(planPath),
+        plan,
+        taskId: task.id,
+      });
+      console.log(
+        `Review Slice ${task.id}: cheap-ready=${packet.routing.cheap_ready ? 'yes' : 'no'} recommended-strength=${packet.routing.recommended_strength} packet-bytes=${packet.routing.packet_bytes}`,
+      );
+    }
+  }
 }
 
 main();

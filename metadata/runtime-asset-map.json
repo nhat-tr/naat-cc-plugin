@@ -333,6 +333,22 @@
         "codex"
       ]
     },
+    "cli.validate-implementation-design": {
+      "type": "cli",
+      "canonical_file": "bin/validate-implementation-design",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
+    "cli.validate-plan": {
+      "type": "cli",
+      "canonical_file": "bin/validate-plan",
+      "supported_runtimes": [
+        "claude",
+        "codex"
+      ]
+    },
     "cli.pair-loop": {
       "type": "cli",
       "canonical_file": "bin/pair-loop",

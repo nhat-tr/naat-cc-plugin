@@ -134,3 +134,36 @@ test('pair-report shows resumed-turn cache telemetry without treating it as a qu
   assert.equal(resume.efficiencyWarnings, 1);
   assert.equal(resume.accepted, 0, 'token efficiency is not a correctness verdict');
 });
+
+test('pair-report attributes observed coordinator tokens to the accepted Review Slice', t => {
+  const dir = scratchDir(t);
+  const ledger = path.join(dir, 'coordinator-usage.jsonl');
+  fs.writeFileSync(ledger, [
+    {
+      event: 'usage.recorded', role: 'coordinator', telemetry_source: 'provider-transcript',
+      attemptId: 'attempt-1', runtime: 'codex', model: 'gpt-5.6-terra', cheap_ready: true,
+      recommended_strength: 2, input_tokens: 600, cached_input_tokens: 400,
+      uncached_input_tokens: 200, output_tokens: 80, reasoning_tokens: 15,
+    },
+    {
+      event: 'attempt.completed', attemptId: 'attempt-1', taskId: '1.1', routeId: 'inline-coordinator',
+      profile: { type: 'feature', risk: 'medium' }, disposition: 'accepted', valid: true,
+      status: 'completed', usage: {}, cheapReady: true, recommendedStrength: 2,
+    },
+  ].map(row => JSON.stringify(row)).join('\n') + '\n');
+
+  const result = run([ledger, '--json']);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const slice = JSON.parse(result.stdout).find(group => group.route === 'inline-coordinator');
+  assert.equal(slice.inputTokens, 600);
+  assert.equal(slice.cachedInputTokens, 400);
+  assert.equal(slice.uncachedInputTokens, 200);
+  assert.equal(slice.outputTokens, 80);
+  assert.equal(slice.reasoningTokens, 15);
+  assert.equal(slice.coordinatorTurns, 1);
+  assert.deepEqual(slice.observedModels, ['codex/gpt-5.6-terra']);
+  assert.equal(slice.cheapReady, true);
+  assert.equal(slice.recommendedStrength, 2);
+  assert.equal(slice.totalTokens, 680, 'reasoning is an output-token breakdown, not an additive token class');
+  assert.equal(slice.tokensPerAccepted, 680);
+});

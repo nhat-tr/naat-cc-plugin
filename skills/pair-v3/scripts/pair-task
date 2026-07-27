@@ -23,6 +23,9 @@ const {
   validateWorkDirectory,
 } = require("../../brainstorming/scripts/work-lineage.cjs");
 const {
+  compileReviewSliceExecutionPacket,
+} = require("./lib/implementation-design");
+const {
   commandExists,
   isNestedCodexSandbox,
   resolveRuntime,
@@ -860,7 +863,10 @@ function chooseRoute(task, runtime, ledger, options, repoId, workId = null, plan
   return selectRoute(task, routes);
 }
 
-function taskContract(task, planPath) {
+function taskContract(task, planPath, executionPacket = task.executionPacket || null) {
+  if (executionPacket) {
+    return `Review Slice Execution Packet (authoritative bounded implementation context):\n${JSON.stringify(executionPacket)}`;
+  }
   return `Task ${task.id}: ${task.text}\nProfile: ${JSON.stringify({ type: task.type, complexity: task.complexity, risk: task.risk, scope: task.scope, uncertainty: task.uncertainty })}\nAcceptance criteria: ${task.acceptanceCriteria?.join(", ") || "read the plan mapping"}\nOwned files: ${task.files.join(", ") || "verification-only; do not expand ownership"}\nTest files: ${(task.testFiles || []).join(", ") || "none"}\nConsumes: ${JSON.stringify(task.consumes || [])}\nProduces: ${JSON.stringify(task.produces || [])}\nDefect class: ${task.defect || "read the plan"}\nReview boundary: ${task.reviewBoundary || "read the plan"}\nRED command: ${task.redVerify || "not applicable"}\nRED expected signal: ${task.redExpected || "not applicable"}\nGREEN verification: ${task.verify || "read the plan"}\nPlan: ${planPath}`;
 }
 
@@ -902,7 +908,25 @@ function workerPrompt(task, planPath, priorReview, approvedTests, singleSession 
     : task.tddMode === "cycle"
     ? "The coordinator has independently reproduced and preserved the RED phase. Implement only the minimum GREEN behavior. Do not modify any RED-verified test file."
     : "Work exactly one pair-plan Review Slice.";
-  return `${phase}\n\n${taskContract(task, planPath)}\n\nRead the applicable AGENTS.md, the plan's Intent Contract, canonical specification, named Repository evidence, exact callers, and existing tests before editing. Legacy strict plans may also provide Capability Evidence, a Simplicity Contract, and explicit interface contracts; honor them when present. Do not invent APIs, wrappers, factories, registries, ports, or orchestration that the approved intent does not justify. If a load-bearing capability is absent, or this slice cannot be completed within its ownership, return blocked with a blocker beginning 'incorrect-plan:' and cite the observed evidence. Make the smallest complete implementation and run the exact verification. Do not edit any file under .pair/ or work on another task.${retainedPlanFindingsContext(task, planReview)}${reviewContext}${hitlContext}\nReturn only the requested structured result.`;
+  const grounding = task.executionPacket
+    ? "Read applicable AGENTS.md, then read only the repository paths, symbols, callers, patterns, and tests named by the Review Slice Execution Packet. The packet already carries the mapped Acceptance Criteria and approved implementation decisions; do not reread the full plan or canonical spec unless packet evidence is missing or stale."
+    : "Read the applicable AGENTS.md, the plan's Intent Contract, canonical specification, named Repository evidence, exact callers, and existing tests before editing. Legacy strict plans may also provide Capability Evidence, a Simplicity Contract, and explicit interface contracts; honor them when present.";
+  return `${phase}\n\n${taskContract(task, planPath)}\n\n${grounding} Do not invent APIs, wrappers, factories, registries, ports, or orchestration that the approved intent does not justify. If a load-bearing capability is absent, or this slice cannot be completed within its ownership, return blocked with a blocker beginning 'incorrect-plan:' and cite the observed evidence. Make the smallest complete implementation and run the exact verification. Do not edit any file under .pair/ or work on another task.${retainedPlanFindingsContext(task, planReview)}${reviewContext}${hitlContext}\nReturn only the requested structured result.`;
+}
+
+function readExecutionPacket(root, attempt) {
+  if (!attempt?.executionPacketPath) return null;
+  const resolvedRoot = path.resolve(root);
+  const candidate = path.resolve(resolvedRoot, attempt.executionPacketPath);
+  const pairRoot = path.join(resolvedRoot, ".pair");
+  if (!candidate.startsWith(`${pairRoot}${path.sep}`)) fail("Review Slice Execution Packet path escapes Pair runtime state");
+  const stat = fs.lstatSync(candidate);
+  if (!stat.isFile() || stat.isSymbolicLink()) fail("Review Slice Execution Packet is not a private regular file");
+  const packet = readJson(candidate);
+  if (!packet || sha256(JSON.stringify(packet)) !== attempt.executionPacketDigest) {
+    fail("Review Slice Execution Packet digest mismatch");
+  }
+  return packet;
 }
 
 // Inside a cmux pane the spawned worker/reviewer must reach the genuine Claude CLI,
@@ -1924,7 +1948,10 @@ function reviewPrompt(
   if (cumulative) {
     return `Independently review the complete cumulative implementation for this Pair Work. This is the single terminal quality verdict, not another task-planning pass.\nBase: ${base}\nPlan: ${planPath}\nCumulative patch: ${reviewSlicePath}\nAcceptance Criteria: ${(task.acceptanceCriteria || []).join(", ")}\nFinal verification evidence: ${redVerification ? JSON.stringify(redVerification) : "not available"}\n\n${reviewMode}\n\nRead the cumulative patch and plan first. Trace only the exact callers, dependencies, contracts, and tests needed to decide every mapped Acceptance Criterion. Perform one bounded sweep (at most 12 batched shell commands) and report every material finding together. Do not reopen plan design choices that the implementation satisfies, and do not report style, optional hardening, speculative edge cases, or improvements without a concrete reachable failure.\n\nReport only BLOCKER or MAJOR findings. BLOCKER means a mapped Acceptance Criterion, declared contract, security/data-integrity invariant, or final verification is not actually satisfied. MAJOR means the cumulative implementation produces wrong behavior in a concrete reachable scenario. Set origin to implementation when the Work can be corrected locally, plan when the approved contract itself must change, or environment when evidence cannot be obtained. Approve with an empty findings array when the Work is acceptable. Do not edit files. Return only the requested structured result.`;
   }
-  return `Independently review the immutable complete changed-file patch for task ${task.id}: ${task.text}.\nBase: ${base}\nPlan: ${planPath}\nReview Slice patch: ${reviewSlicePath}\nAcceptance Criteria: ${(task.acceptanceCriteria || []).join(", ")}\nConsumes: ${JSON.stringify(task.consumes || [])}\nProduces: ${JSON.stringify(task.produces || [])}\nDefect class: ${task.defect || "read the task contract"}\nReview boundary: ${task.reviewBoundary || "read the task contract"}\nRED evidence: ${redVerification ? JSON.stringify(redVerification) : "not applicable"}\n\n${reviewMode}\n\nRead the complete changed-file patch first. It includes expected files and any additional files with advisory attribution; review all of them on their substance. Inspect only those changed files plus the exact callers, dependencies, and contracts needed to verify this slice. Read the Intent Contract, canonical specification, named Repository evidence, mapped Acceptance Criteria, and any legacy strict interface/Simplicity contracts that are actually present. Budget at most 8 shell commands, batching related reads where useful, and report all material findings together.\n\nReport ONLY material findings:\n- BLOCKER: the slice violates a mapped Acceptance Criterion, declared interface, tests-first evidence, security/data integrity, or an approved constraint.\n- MAJOR: the slice produces wrong behavior in a concrete reachable scenario.\n\nA file being additional to the expected-file forecast is not itself a finding. Set origin to implementation for a local correction, plan when ownership/interfaces/acceptance mapping must change, or environment when trustworthy evidence is unavailable. Do not report style, naming, hypothetical edges, optional hardening, performance speculation, or improvement ideas. If no concrete reachable failure exists, approve with an empty findings array. Do not edit files. Return only the requested structured result.`;
+  const executionContext = task.executionPacket
+    ? `Review Slice Execution Packet:\n${JSON.stringify(task.executionPacket)}\n\nThe packet is the approved bounded context. Do not reread the full plan or canonical spec. Inspect only its named paths/symbols plus directly affected callers when the patch requires them.`
+    : `Acceptance Criteria: ${(task.acceptanceCriteria || []).join(", ")}\nConsumes: ${JSON.stringify(task.consumes || [])}\nProduces: ${JSON.stringify(task.produces || [])}\nDefect class: ${task.defect || "read the task contract"}\nReview boundary: ${task.reviewBoundary || "read the task contract"}\nRead the Intent Contract, canonical specification, named Repository evidence, mapped Acceptance Criteria, and any legacy strict interface/Simplicity contracts that are actually present.`;
+  return `Independently review the immutable complete changed-file patch for task ${task.id}: ${task.text}.\nBase: ${base}\nPlan: ${planPath}\nReview Slice patch: ${reviewSlicePath}\n${executionContext}\nRED evidence: ${redVerification ? JSON.stringify(redVerification) : "not applicable"}\n\n${reviewMode}\n\nRead the complete changed-file patch first. It includes expected files and any additional files with advisory attribution; review all of them on their substance. Inspect only those changed files plus the exact callers, dependencies, and contracts needed to verify this slice. Budget at most 8 shell commands, batching related reads where useful, and report all material findings together.\n\nReport ONLY material findings:\n- BLOCKER: the slice violates a mapped Acceptance Criterion, declared interface, tests-first evidence, security/data integrity, or an approved constraint.\n- MAJOR: the slice produces wrong behavior in a concrete reachable scenario.\n\nA file being additional to the expected-file forecast is not itself a finding. Set origin to implementation for a local correction, plan when ownership/interfaces/acceptance mapping must change, or environment when trustworthy evidence is unavailable. Do not report style, naming, hypothetical edges, optional hardening, performance speculation, or improvement ideas. If no concrete reachable failure exists, approve with an empty findings array. Do not edit files. Return only the requested structured result.`;
 }
 
 function runReview({
@@ -1956,9 +1983,15 @@ function runReview({
         ? "high"
         : "medium";
   const resolvedReviewSlicePath = path.resolve(root, reviewSlicePath);
-  const reviewArtifacts = fs.existsSync(resolvedReviewSlicePath)
-    ? [resolvedReviewSlicePath]
-    : [];
+  const resolvedExecutionPacketPath = task.executionPacketPath
+    ? path.resolve(root, task.executionPacketPath)
+    : null;
+  const reviewArtifacts = [
+    ...(fs.existsSync(resolvedReviewSlicePath) ? [resolvedReviewSlicePath] : []),
+    ...(resolvedExecutionPacketPath && fs.existsSync(resolvedExecutionPacketPath)
+      ? [resolvedExecutionPacketPath]
+      : []),
+  ];
   const snapshot = externalSandbox && !dryRun
     ? createReviewSnapshot(root, scratchDir, reviewArtifacts)
     : null;
@@ -1973,6 +2006,12 @@ function runReview({
   const reviewPatchPath = reviewArtifact
     ? path.join(reviewRoot, reviewArtifact.relativePath)
     : reviewSlicePath;
+  const executionPacketArtifact = snapshot?.artifacts.find(
+    artifact => artifact.sourcePath === resolvedExecutionPacketPath,
+  );
+  const reviewExecutionPacketPath = executionPacketArtifact
+    ? path.join(reviewRoot, executionPacketArtifact.relativePath)
+    : resolvedExecutionPacketPath;
   const reviewModel = runtime === "codex"
     ? anchor
       ? process.env.PAIR_CODEX_ANCHOR_MODEL || "default"
@@ -2001,6 +2040,10 @@ function runReview({
       ? path.relative(root, patchFile).split(path.sep).join("/")
       : null;
     if (state.work_id && fs.existsSync(planFile) && relativePatch && fs.existsSync(patchFile)) {
+      const relativeExecutionPacket = reviewExecutionPacketPath
+        && reviewExecutionPacketPath.startsWith(`${path.resolve(reviewRoot)}${path.sep}`)
+        ? path.relative(reviewRoot, reviewExecutionPacketPath).split(path.sep).join("/")
+        : null;
       resumeCheckpoint = createResumeCheckpoint({
         workId: state.work_id,
         runtime,
@@ -2014,6 +2057,9 @@ function runReview({
           sha256: planContractDigest(fs.readFileSync(planFile, "utf8")),
         },
         patch: { path: relativePatch, sha256: sha256(fs.readFileSync(patchFile)) },
+        executionPacket: relativeExecutionPacket && fs.existsSync(reviewExecutionPacketPath)
+          ? { path: relativeExecutionPacket, sha256: sha256(fs.readFileSync(reviewExecutionPacketPath)) }
+          : null,
         resumeTarget: cumulative ? "cumulative-review" : "reviewing",
         nextAction: cumulative
           ? `Read the complete Work patch at ${relativePatch}, verify every mapped Acceptance Criterion, and return one final structured verdict.`
@@ -2146,6 +2192,18 @@ function shouldRunTaskReview(task, options = {}, env = process.env) {
   if (["off", "none", "final-only"].includes(policy)) return false;
   if (policy === "high-risk") {
     return task.risk === "high" || task.risk === "critical";
+  }
+  if (options.compiled && options.cheapReady) {
+    if (task.complexity === "M") return true;
+    if (task.complexity === "S") {
+      const requestedRate = Number(env.PAIR_S_REVIEW_SAMPLE_RATE ?? 0.2);
+      const rate = Number.isFinite(requestedRate)
+        ? Math.max(0, Math.min(1, requestedRate))
+        : 0.2;
+      const sampleKey = `${options.planDigest || ""}\0${task.id || ""}`;
+      const bucket = Number.parseInt(sha256(sampleKey).slice(0, 8), 16) / 0x1_0000_0000;
+      return bucket < rate;
+    }
   }
   return task.risk === "critical";
 }
@@ -2878,7 +2936,10 @@ function proposalPrompt(task, planPath, revisionNotes = null) {
         .map((note) => `- ${note.name}: ${note.notes.join("; ")}`)
         .join("\n")}`
     : "";
-  return `Propose the exact tests-first test set for Pair slice ${task.id} WITHOUT writing or editing any file.\n\n${taskContract(task, planPath)}\n\nRead the Intent Contract, canonical specification, named Repository evidence, relevant callers, and existing tests. Propose the minimum tests that expose only the mapped missing behavior at the declared test boundary. Follow repository naming conventions. For each test return its exact name, one-line behavioral purpose, and one declared test file; optionally add a short \`spec\` — two to four sentences sketching what the test arranges and asserts and why the declared boundary is right. Do not propose structure-mirroring tests or behavior outside this slice.${revisionContext}\n\nReturn only the requested structured result.`;
+  const grounding = task.executionPacket
+    ? 'Use the Review Slice Execution Packet as bounded context; read only its named repository paths, patterns, callers, and tests. Do not reread the full plan or canonical spec.'
+    : 'Read the Intent Contract, canonical specification, named Repository evidence, relevant callers, and existing tests.';
+  return `Propose the exact tests-first test set for Pair slice ${task.id} WITHOUT writing or editing any file.\n\n${taskContract(task, planPath)}\n\n${grounding} Propose the minimum tests that expose only the mapped missing behavior at the declared test boundary. Follow repository naming conventions. For each test return its exact name, one-line behavioral purpose, and one declared test file; optionally add a short \`spec\` — two to four sentences sketching what the test arranges and asserts and why the declared boundary is right. Do not propose structure-mirroring tests or behavior outside this slice.${revisionContext}\n\nReturn only the requested structured result.`;
 }
 
 function runTestProposal({
@@ -3483,6 +3544,8 @@ function resumeActiveAttempt(root, runtime, options, paths) {
   const plan = fs.readFileSync(paths.plan, "utf8");
   const task = parsePlan(plan).tasks.find((item) => item.id === active.taskId);
   if (!task) fail(`task ${active.taskId} no longer exists in the plan`);
+  task.executionPacket = readExecutionPacket(root, active);
+  task.executionPacketPath = active.executionPacketPath || null;
   if (["verifying", "reviewing"].includes(active.phase)) {
     return inlineComplete(root, runtime, options, paths);
   }
@@ -3642,7 +3705,12 @@ function assessAttempt({
       patchDigest: reviewSliceDigest,
     });
   }
-  const taskReviewRequired = eligibleForReview && shouldRunTaskReview(task, options);
+  const taskReviewRequired = eligibleForReview && shouldRunTaskReview(task, {
+    ...options,
+    compiled: Boolean(attempt.executionPacketPath),
+    cheapReady: attempt.cheapReady === true,
+    planDigest: attempt.planDigest,
+  });
   // A verdict already gated for this attempt is reused verbatim on resume; a
   // fresh review could drift and orphan the recorded human decision.
   const gatedReviewEvidence =
@@ -4012,6 +4080,8 @@ function inlineComplete(root, runtime, options, paths) {
   const plan = fs.readFileSync(paths.plan, "utf8");
   const task = parsePlan(plan).tasks.find((item) => item.id === active.taskId);
   if (!task) fail(`task ${active.taskId} no longer exists in the plan`);
+  task.executionPacket = readExecutionPacket(root, active);
+  task.executionPacketPath = active.executionPacketPath || null;
   if (task.checked)
     fail(`task ${active.taskId} is already checked; nothing to complete`);
 
@@ -4213,6 +4283,20 @@ function runOne(root, runtime, options, paths) {
         : `task ${task.id} reached the explicitly configured ${options.maxAttempts}-attempt limit; inspect repository-local evidence before raising --max-attempts`,
     );
   const route = chooseRoute(task, runtime, ledger, options, repoId, linkage.workId, linkage.planDigest);
+  let executionPacket = null;
+  if (parsePlan(plan).pairMode === "compiled") {
+    try {
+      executionPacket = compileReviewSliceExecutionPacket({
+        root,
+        planPath: paths.plan,
+        plan,
+        taskId: task.id,
+      });
+    } catch (error) {
+      fail(`cannot compile Review Slice ${task.id}: ${error.message}`);
+    }
+    task.executionPacket = executionPacket;
+  }
   // HITL: pause for human approval of proposed tests BEFORE opening an attempt.
   const gate = hitlGate({ root, plan, task, runtime, route, paths, options });
   if (gate.action === "await") return { done: false, awaitingApproval: true };
@@ -4242,6 +4326,21 @@ function runOne(root, runtime, options, paths) {
   attempt.phase = "implementing";
   attempt.role = "coordinator";
   attempt.sessionId = coordinatorSessionId();
+  if (executionPacket) {
+    attempt.cheapReady = executionPacket.routing.cheap_ready;
+    attempt.recommendedStrength = executionPacket.routing.recommended_strength;
+    if (!options.dryRun) {
+      const packetDirectory = path.join(
+        pairStatePaths(root, attempt.workId || null).attempts,
+        attempt.attemptId,
+      );
+      fs.mkdirSync(packetDirectory, { recursive: true, mode: 0o700 });
+      const packetFile = path.join(packetDirectory, "execution-packet.json");
+      writePrivateJson(packetFile, executionPacket);
+      attempt.executionPacketPath = path.relative(root, packetFile).split(path.sep).join("/");
+      attempt.executionPacketDigest = sha256(JSON.stringify(executionPacket));
+    }
+  }
   if (!options.dryRun) activateTask(paths.plan, task);
   let snapshot;
   try {
@@ -4269,7 +4368,7 @@ function runOne(root, runtime, options, paths) {
     writePrivateJson(paths.active, attempt);
     appendJsonLine(paths.ledger, { event: "attempt.started", ...attempt });
     console.log(
-      `pair-loop: task ${task.id} | inline coordinator | risk=${task.risk} complexity=${task.complexity}`,
+      `pair-loop: task ${task.id} | inline coordinator | risk=${task.risk} complexity=${task.complexity}${executionPacket ? ` | cheap-ready=${executionPacket.routing.cheap_ready ? "yes" : "no"} recommended-strength=${executionPacket.routing.recommended_strength}` : ""}`,
     );
     console.log(
       inlineBrief(
@@ -5285,6 +5384,7 @@ module.exports = {
   proposalPrompt,
   readTestProposal,
   resolveReviewGate,
+  reviewPrompt,
   reviewGatePath,
   reviewLedgerPath,
   reviewStatusSummary,

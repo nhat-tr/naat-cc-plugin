@@ -4,6 +4,7 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 
 const { appendPairEvent, loadPairState } = require('./lib/pair-state');
+const { recordCoordinatorTelemetry } = require('./lib/coordinator-telemetry');
 
 function readInput() {
   try {
@@ -58,8 +59,26 @@ function main() {
   } catch {
     return;
   }
+  const runtime = runtimeFor(input);
+  const owner = state.continuation?.owner_session_id;
   if (
-    state.continuation?.owner_session_id ||
+    input.transcript_path
+    && state.active
+    && (!owner || owner === input.session_id)
+  ) {
+    try {
+      recordCoordinatorTelemetry(root, {
+        runtime,
+        transcriptPath: input.transcript_path,
+        sessionId: input.session_id,
+        now: input.now,
+      });
+    } catch {
+      // Baseline telemetry is nonblocking; Stop will try again with the exact transcript.
+    }
+  }
+  if (
+    owner ||
     state.continuation?.paused ||
     state.continuation?.human_edit ||
     ['idle', 'paused', 'blocked', 'complete'].includes(state.lifecycle)
@@ -69,7 +88,7 @@ function main() {
     workId: state.work_id,
     attemptId: state.active?.attempt_id || null,
     session_id: input.session_id,
-    runtime: runtimeFor(input),
+    runtime,
     source: 'native-post-tool-owner-capture',
   });
 }

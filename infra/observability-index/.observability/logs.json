@@ -1,7 +1,7 @@
 {
   "metadata": {
-    "generated": "2026-07-13T09:12:14.038Z",
-    "commit": "25fdf32",
+    "generated": "2026-07-27T01:26:29.450Z",
+    "commit": "e62676c",
     "config": "/Volumes/NaatsStore/dev/doing/my-claude-code/infra/observability-index/configs/dotnet.yaml",
     "tier": 1
   },

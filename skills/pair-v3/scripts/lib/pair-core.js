@@ -87,6 +87,23 @@ function parseTestBoundaries(raw) {
   return raw.split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
 }
 
+function parseImplementationDecisionIds(raw) {
+  if (!raw || /^none\.?$/i.test(raw.trim())) return [];
+  return [...new Set(
+    String(raw)
+      .replaceAll('`', '')
+      .split(/[\s,;]+/u)
+      .map(value => value.trim())
+      .filter(Boolean),
+  )];
+}
+
+const PROVIDER_EXECUTOR_INSTRUCTION = /(?:(?:^|[.!?]\s+)(?:do\s+not\s+)?(?:use|ask|invoke)\s+(?:Claude(?:\s+Code)?|Codex|ChatGPT|GPT-[A-Za-z0-9.-]+|Haiku|Sonnet|Opus)\s+to\b|\bdelegate\s+(?:this|the)\s+task\s+to\s+(?:Claude(?:\s+Code)?|Codex|ChatGPT|GPT-[A-Za-z0-9.-]+|Haiku|Sonnet|Opus)\b|^\s*(?:claude|codex)(?:\s|$)[^\r\n]*\b(?:implement|write|edit|review|plan|complete)\b)/iu;
+
+function providerExecutorInstruction(value) {
+  return typeof value === 'string' && PROVIDER_EXECUTOR_INSTRUCTION.test(value);
+}
+
 function taskFromParts(id, rawText, lineNumber, prefix = '') {
   const fileClause = rawText.match(/\s*[-:–—]\s*files?:\s*((?:`[^`]+`(?:\s*,\s*)?)+)/i)?.[1] || '';
   const files = [...fileClause.matchAll(/`([^`]+)`/g)].map(item => item[1]);
@@ -98,14 +115,14 @@ function taskFromParts(id, rawText, lineNumber, prefix = '') {
   const verify = rawText.match(/\s*[-:–—]\s*(?<!extra-)verify:\s*`([^`]+)`/i)?.[1]?.trim() || '';
   const complexityMatch = rawText.match(/\*\*([SML])\*\*/i);
   const complexity = complexityMatch?.[1]?.toUpperCase() || 'M';
-  const tags = Object.fromEntries([...rawText.matchAll(/\[(type|risk|scope|uncertainty|phase|ac|tdd|red|test):([^\]]+)\]/gi)]
+  const tags = Object.fromEntries([...rawText.matchAll(/\[(type|risk|scope|uncertainty|phase|ac|tdd|red|test|design):([^\]]+)\]/gi)]
     .map(item => [item[1].toLowerCase(), item[2].trim()]));
   const acceptanceCriteria = (tags.ac || '')
     .split(',')
     .map(value => value.trim())
     .filter(Boolean);
   const text = rawText
-    .replace(/\s*\[(?:type|risk|scope|uncertainty|phase|ac|tdd|red|test):[^\]]+\]/gi, '')
+    .replace(/\s*\[(?:type|risk|scope|uncertainty|phase|ac|tdd|red|test|design):[^\]]+\]/gi, '')
     .replace(/\s*[-:–—]\s*files?:\s*(?:`[^`]+`(?:\s*,\s*)?)+/i, '')
     .replace(/\s*[-:–—]\s*tests?:\s*(?:`[^`]+`(?:\s*,\s*)?)+/i, '')
     .replace(/\s*[-:–—]\s*red-expect:\s*`[^`]+`/i, '')
@@ -140,6 +157,7 @@ function taskFromParts(id, rawText, lineNumber, prefix = '') {
     redVerify,
     redExpected,
     acceptanceCriteria,
+    implementationDecisionIds: parseImplementationDecisionIds(tags.design || ''),
     files,
     testFiles,
     verify,
@@ -167,6 +185,7 @@ function addTaskMetadata(task, label, value) {
     'red expect': ` - red-expect: ${value}`,
     verify: ` - verify: ${value}`,
     'extra-verify': ` - extra-verify: ${value}`,
+    design: ` [design:${value}]`,
   }[normalized];
   if (!clause) return;
 
@@ -180,6 +199,7 @@ function addTaskMetadata(task, label, value) {
     produces: task.produces,
     defect: task.defect,
     reviewBoundary: task.reviewBoundary,
+    implementationDecisionIds: task.implementationDecisionIds,
   };
   Object.assign(task, reparsed, preserved, {
     metadataRaw: `${task.metadataRaw || ''}${clause}`,
@@ -257,7 +277,7 @@ function parsePlan(plan) {
       continue;
     }
 
-    const taskContract = line.match(/^\s{2,}[-*]\s+\*\*(Consumes|Produces|Defect|Review boundary|Test boundary):\*\*\s*(.+)\s*$/i);
+    const taskContract = line.match(/^\s{2,}[-*]\s+\*\*(Consumes|Produces|Defect|Review boundary|Test boundary|Design):\*\*\s*(.+)\s*$/i);
     if (taskContract && currentTask) {
       const key = taskContract[1].toLowerCase();
       const value = taskContract[2].trim();
@@ -270,10 +290,11 @@ function parsePlan(plan) {
       } else if (key === 'defect') currentTask.defect = value;
       else if (key === 'review boundary') currentTask.reviewBoundary = value;
       else if (key === 'test boundary') currentTask.testBoundaries = parseTestBoundaries(value);
+      else if (key === 'design') currentTask.implementationDecisionIds = parseImplementationDecisionIds(value);
       continue;
     }
 
-    const taskMetadata = line.match(/^\s{2,}[-*]\s+\*\*(Profile|Files|Tests|Red|Red expect|Verify):\*\*\s*(.+)\s*$/i);
+    const taskMetadata = line.match(/^\s{2,}[-*]\s+\*\*(Profile|Files|Tests|Red|Red expect|Verify|Design):\*\*\s*(.+)\s*$/i);
     if (taskMetadata && currentTask) {
       addTaskMetadata(currentTask, taskMetadata[1], taskMetadata[2].trim());
       continue;
@@ -351,6 +372,7 @@ function parsePlan(plan) {
   ).filter(Boolean))];
 
   return {
+    pairMode: plan.match(/^\*\*Pair mode:\*\*\s*([^\s]+)\s*$/im)?.[1]?.toLowerCase() || null,
     lines,
     sections,
     streams,
@@ -364,6 +386,39 @@ function parsePlan(plan) {
     fullVerificationCommands,
     openQuestions,
   };
+}
+
+function validateCompiledPlan(plan, parsed) {
+  const result = validateLitePlan(plan, parsed);
+  const errors = [...result.errors];
+  const intent = sectionContent(parsed.sections.get('intent contract'));
+  const design = intent.match(/\*\*Implementation design:\*\*[ \t]*([^\r\n]*)/i);
+  if (!design) {
+    errors.push('## Intent Contract is missing **Implementation design:**');
+  } else if (!/`docs\/work\/work-[^`/]+\/evidence\/EVD-[^`/]+\.json`\s*\(`sha256:[a-f0-9]{64}`\)/i.test(design[1])) {
+    errors.push('**Implementation design:** must bind one canonical Work evidence path to its raw sha256 digest');
+  }
+  for (const field of ['Purpose', 'Repository evidence', 'Constraints', 'Verification']) {
+    const value = intent.match(new RegExp(`\\*\\*${field}:\\*\\*\\s*(.+)$`, 'imu'))?.[1]?.trim() || '';
+    if (providerExecutorInstruction(value)) errors.push(`**${field}:** contains a provider-specific executor instruction`);
+  }
+  for (const task of parsed.tasks) {
+    if (providerExecutorInstruction(task.description || task.text)) {
+      errors.push(`Task ${task.id} outcome contains a provider-specific executor instruction`);
+    }
+    for (const field of ['type', 'scope', 'uncertainty']) {
+      if (!task.explicitTags.has(field)) errors.push(`Task ${task.id} is missing explicit ${field}`);
+    }
+    if ((task.implementationDecisionIds || []).length === 0) {
+      errors.push(`Task ${task.id} must map at least one implementation decision with **Design:** IMP-NNN`);
+    }
+    for (const id of task.implementationDecisionIds || []) {
+      if (!/^IMP-[0-9]{3}$/u.test(id)) {
+        errors.push(`Task ${task.id} has invalid implementation decision ID ${id}`);
+      }
+    }
+  }
+  return { ...result, valid: errors.length === 0, errors };
 }
 
 function sectionContent(section) {
@@ -526,6 +581,9 @@ function validateLitePlan(plan, parsed) {
 
 function validatePlan(plan) {
   const parsed = parsePlan(plan);
+  if (/^\*\*Pair mode:\*\*\s*compiled\s*$/im.test(plan)) {
+    return validateCompiledPlan(plan, parsed);
+  }
   if (/^\*\*Pair mode:\*\*\s*lite\s*$/im.test(plan)) {
     return validateLitePlan(plan, parsed);
   }
@@ -1116,6 +1174,7 @@ module.exports = {
   planContractDigest,
   parsePlan,
   parseRuntimeUsage,
+  providerExecutorInstruction,
   reviewIsWellFormed,
   selectRoute,
   validatePlan,
