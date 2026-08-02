@@ -13,6 +13,7 @@ process.env.PAIR_REVIEW_TRANSPORT = 'direct';
 const {
   buildReviewCommand,
   classifyChallengeAttempt,
+  parseReview,
   planReviewPrompt,
   recordPlanApproval,
   resolveRuntimeCandidates,
@@ -121,7 +122,7 @@ test('plan challenge resumes the saved Codex and Claude Review Session without a
   assert.equal(claude.args.includes('--session-id'), false);
 });
 
-test('plan challenge defaults to medium effort and one bounded evidence sweep', () => {
+test('plan challenge defaults to high effort and one bounded evidence sweep', () => {
   const prompt = planReviewPrompt({
     planPath: '.pair/plan.md',
     specPath: 'docs/work/example/spec.md',
@@ -134,7 +135,7 @@ test('plan challenge defaults to medium effort and one bounded evidence sweep', 
     outputPath: '/scratch/review.json',
   });
 
-  assert.ok(command.args.includes('model_reasoning_effort="medium"'));
+  assert.ok(command.args.includes('model_reasoning_effort="high"'));
   assert.match(prompt, /at most 8 shell commands/i);
   assert.match(prompt, /at most 250 output lines per command/i);
   assert.match(prompt, /progress-stable contract digest/i);
@@ -1056,6 +1057,7 @@ process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: {
   assert.deepEqual(reviews[0].usage, {
     inputTokens: 100,
     cachedInputTokens: 20,
+    cacheCreationTokens: 0,
     outputTokens: 30,
     reasoningTokens: 10,
     costUsd: null,
@@ -1105,4 +1107,125 @@ process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: {
   assert.match(handoff.stdout, /retained plan challenge findings/i);
   assert.match(handoff.stdout, /Greeting contract is incomplete/);
   assert.equal(fs.readFileSync(runtimeLog, 'utf8'), 'review\nreview\n');
+});
+
+test('an environment failure does not consume a plan-review verdict slot', t => {
+  const fixture = challengeFixture(t, 'envfail-budget-slot');
+  const dataDir = path.join(fixture.root, 'pair-data');
+  const runtimeLog = path.join(fixture.root, 'runtime.log');
+  // First invocation returns a verdict that is not schema-shaped, which
+  // classifyChallengeAttempt treats as an environment-failure. Later
+  // invocations return a real fix-needed verdict.
+  writeExecutable(path.join(fixture.fakeBin, 'codex'), `#!/usr/bin/env node
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const output = args[args.indexOf('--output-last-message') + 1];
+const log = process.env.PAIR_TEST_RUNTIME_LOG;
+const prior = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\\n').filter(Boolean).length : 0;
+fs.appendFileSync(log, 'review\\n');
+if (prior === 0) {
+  fs.writeFileSync(output, JSON.stringify({ verdict: 'approve' }));
+} else {
+  fs.writeFileSync(output, JSON.stringify({
+    verdict: 'fix-needed',
+    summary: 'The first greeting slice lacks the contract the plan names.',
+    findings: [{
+      severity: 'BLOCKER', origin: 'plan', category: 'interfaces', task_id: '1.1', line: 1,
+      title: 'Greeting contract is incomplete',
+      detail: 'The first slice does not establish the contract its later integration consumes.',
+      failure_scenario: 'The coordinator cannot complete the named integration behavior from the plan alone.',
+      suggestion: 'Establish the contract while completing the first Review Slice.',
+    }],
+  }));
+}
+process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: '01900000-0000-7000-8000-000000000098' }) + '\\n');
+process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: {
+  input_tokens: 100, cached_input_tokens: 20, output_tokens: 30, reasoning_output_tokens: 10,
+} }) + '\\n');
+`);
+  const challenge = path.resolve(__dirname, '../scripts/pair-plan-challenge');
+  const run = () => childProcess.spawnSync(
+    process.execPath,
+    [challenge, '--runtime', 'codex'],
+    {
+      cwd: fixture.root,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${fixture.fakeBin}${path.delimiter}${process.env.PATH || ''}`,
+        CLAUDE_SCRATCH_DIR: fixture.scratchRoot,
+        PAIR_DATA_DIR: dataDir,
+        PAIR_MAX_PLAN_REVIEWS: '',
+        PAIR_TEST_RUNTIME_LOG: runtimeLog,
+        CODEX_THREAD_ID: '',
+        CODEX_SANDBOX: '',
+        CLAUDECODE: '',
+      },
+    },
+  );
+
+  const envFailure = run();
+  assert.notEqual(envFailure.status, 0, 'a malformed reviewer verdict must not succeed');
+
+  // The environment failure produced no verdict, so the next real review is
+  // verdict 1 of 2 and must NOT auto-approve with retained findings.
+  const firstVerdict = run();
+  assert.doesNotMatch(
+    firstVerdict.stdout,
+    /approved .* after \d+ plan-review verdicts/i,
+    'an environment failure must not push the first real verdict onto the approval boundary',
+  );
+  assert.equal(firstVerdict.status, 2, firstVerdict.stdout + firstVerdict.stderr);
+});
+
+test('the plan-review budget message does not advertise raising the cap', () => {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '../scripts/pair-plan-challenge'),
+    'utf8',
+  );
+  const message = source.slice(source.indexOf('-verdict plan-review budget'));
+  const line = message.slice(0, message.indexOf('`'));
+  assert.doesNotMatch(
+    line,
+    /--max-plan-reviews/,
+    'the cap message must not offer the model a self-service bypass',
+  );
+  assert.match(line, /--approve-plan|human override/i);
+});
+
+test('parseReview reads the Claude stream-event array envelope', () => {
+  // The Claude CLI returns an array of stream events whose final element is
+  // the result. Treating the array itself as the envelope makes every Claude
+  // review land as an environment-failure, which is invisible on the Codex
+  // path because Codex reads its verdict from a separate output file.
+  const verdict = {
+    verdict: 'fix-needed',
+    summary: 'Task 1.1 consumes a contract that does not exist.',
+    findings: [planReview().findings[0]],
+  };
+  const stdout = JSON.stringify([
+    { type: 'system', subtype: 'init', session_id: 'abc' },
+    { type: 'assistant', message: { role: 'assistant' } },
+    { type: 'result', duration_ms: 61652, result: JSON.stringify(verdict) },
+  ]);
+
+  assert.deepEqual(parseReview('claude', stdout, '/unused.json'), verdict);
+});
+
+test('parseReview reads a structured_output result from the stream array', () => {
+  const verdict = { verdict: 'approve', summary: 'No blockers.', findings: [] };
+  const stdout = JSON.stringify([
+    { type: 'system', subtype: 'init' },
+    { type: 'result', structured_output: verdict },
+  ]);
+
+  assert.deepEqual(parseReview('claude', stdout, '/unused.json'), verdict);
+});
+
+test('parseReview still reads a single-object Claude envelope', () => {
+  const verdict = { verdict: 'approve', summary: 'No blockers.', findings: [] };
+  assert.deepEqual(
+    parseReview('claude', JSON.stringify({ result: JSON.stringify(verdict) }), '/unused.json'),
+    verdict,
+  );
 });

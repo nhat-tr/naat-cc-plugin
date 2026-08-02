@@ -187,6 +187,76 @@ test('unrelated sessions stop normally while pause releases continuation ownersh
   assert.equal(invoke(root, 'codex', 'new-owner'), null, 'paused Work does not auto-continue even after takeover');
 });
 
+function armInFlight(root, { requestId = 'req-live-1', startedAt, loopPid = process.pid } = {}) {
+  appendPairEvent(root, {
+    event: 'request.started',
+    workId: 'work-stop-contract',
+    request_id: requestId,
+    request_pid: 4242,
+    request_kind: 'verification final gate 1/11',
+    phase: 'cumulative-verification',
+    ...(startedAt ? { at: startedAt } : {}),
+  });
+  fs.writeFileSync(
+    path.join(root, '.pair', 'active-loop.json'),
+    `${JSON.stringify({ schema: 1, pid: loopPid })}\n`,
+  );
+}
+
+test('Stop gate advises a wake path once while a request is in flight, then allows Stop', t => {
+  const root = fixture(t);
+  armInFlight(root);
+
+  const advised = invoke(root, 'codex', 'owner-session');
+  assert.equal(advised.decision, 'block');
+  assert.match(advised.reason, /is executing cumulative-verification/u);
+  assert.match(advised.reason, /wake path/u);
+  assert.doesNotMatch(advised.reason, /Run pair-loop --status/u);
+
+  assert.equal(invoke(root, 'codex', 'owner-session'), null, 'second Stop while the same request runs is allowed');
+  assert.equal(invoke(root, 'codex', 'owner-session'), null, 'the allowance is stable across further Stops');
+});
+
+test('Stop gate re-advises when a new request starts in flight', t => {
+  const root = fixture(t);
+  armInFlight(root, { requestId: 'req-live-1' });
+  assert.equal(invoke(root, 'codex', 'owner-session').decision, 'block');
+  assert.equal(invoke(root, 'codex', 'owner-session'), null);
+
+  appendPairEvent(root, {
+    event: 'request.completed', workId: 'work-stop-contract', request_id: 'req-live-1', status: 0,
+  });
+  armInFlight(root, { requestId: 'req-live-2' });
+
+  const readvised = invoke(root, 'codex', 'owner-session');
+  assert.equal(readvised.decision, 'block');
+  assert.match(readvised.reason, /wake path/u);
+  assert.equal(invoke(root, 'codex', 'owner-session'), null);
+});
+
+test('Stop gate keeps demanding advancement when the pair-loop process is gone', t => {
+  const root = fixture(t);
+  // macOS caps pids at 99998, Linux defaults to 4194304: this pid is never alive.
+  armInFlight(root, { loopPid: 99_999_999 });
+
+  const blocked = invoke(root, 'codex', 'owner-session');
+  assert.equal(blocked.decision, 'block');
+  assert.match(blocked.reason, /Run pair-loop --status/u);
+  assert.doesNotMatch(blocked.reason, /wake path/u);
+});
+
+test('Stop gate treats an overaged in-flight request as abandoned', t => {
+  const root = fixture(t);
+  armInFlight(root, {
+    startedAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+  });
+
+  const blocked = invoke(root, 'codex', 'owner-session');
+  assert.equal(blocked.decision, 'block');
+  assert.match(blocked.reason, /Run pair-loop --status/u);
+  assert.doesNotMatch(blocked.reason, /wake path/u);
+});
+
 test('orientation names a material blocker without telling a new session to advance it', t => {
   const root = fixture(t);
   appendPairEvent(root, {
@@ -253,4 +323,45 @@ test('hook infrastructure failure never deletes or rewrites the durable phase', 
   const after = loadPairState(root);
   assert.equal(after.active.attempt_id, before.active.attempt_id);
   assert.equal(after.active.phase, before.active.phase);
+});
+
+test('a dispatching Pair turn keeps the Freshness Gate warm without a Stop, and only a Pair invocation counts', t => {
+  const root = fixture(t);
+  const {
+    FRESHNESS_WINDOW_MS, MAX_UNSTOPPED_ACTIVITY_MS, derivePairCheckpoint, freshnessProjection,
+    readAgentConversationRegistry, registerAgentConversation, updateAgentConversationCheckpoint,
+  } = require('../scripts/lib/handover-state');
+  const identity = { runtime: 'claude', agentConversationId: 'live-dispatch-session', kind: 'pair' };
+  const registered = registerAgentConversation(root, { ...identity, now: 1_000 });
+  updateAgentConversationCheckpoint(root, { ...identity, now: 1_000, checkpoint: derivePairCheckpoint(root) });
+  const stored = () => readAgentConversationRegistry(root).conversations[registered.sourceKey];
+
+  const dispatchedAt = 1_000 + (FRESHNESS_WINDOW_MS / 2);
+  assert.equal(captureOwner(root, 'live-dispatch-session', 'pair-loop', { now: dispatchedAt }).status, 0);
+  assert.equal(stored().last_active_at, new Date(dispatchedAt).toISOString());
+  assert.equal(
+    freshnessProjection(root, 1_000 + FRESHNESS_WINDOW_MS + 60_000).conversations[0].status,
+    'warm',
+    'the gate reads a dispatching turn as live work',
+  );
+
+  const unrelatedAt = dispatchedAt + 60_000;
+  assert.equal(captureOwner(root, 'live-dispatch-session', 'git status', { now: unrelatedAt }).status, 0);
+  assert.equal(stored().last_active_at, new Date(dispatchedAt).toISOString(), 'only Pair dispatch carries liveness');
+
+  const runawayAt = 1_000 + MAX_UNSTOPPED_ACTIVITY_MS + 1;
+  assert.equal(captureOwner(root, 'live-dispatch-session', 'pair-loop', { now: runawayAt }).status, 0);
+  assert.equal(stored().last_active_at, new Date(dispatchedAt).toISOString(), 'a wedged loop stops extending liveness');
+  assert.equal(freshnessProjection(root, runawayAt).conversations[0].status, 'cold');
+});
+
+test('the owner hook stays inert for a conversation the Freshness Gate never registered', t => {
+  const root = fixture(t);
+  const result = captureOwner(root, 'never-registered-session', 'pair-loop', { now: 5_000 });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(
+    Object.keys(require('../scripts/lib/handover-state').readAgentConversationRegistry(root).conversations).length,
+    0,
+    'observed activity never registers a conversation on its own',
+  );
 });

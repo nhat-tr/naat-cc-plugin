@@ -281,13 +281,17 @@ function readJson(file, fallback = null) {
   }
 }
 
+// Returns the sanitized value actually written, so a caller that also has to digest the
+// stored form hashes exactly what landed on disk instead of its own pre-sanitization copy.
 function writePrivateJson(file, value) {
+  const stored = sanitizeValue(value);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.writeFileSync(
     file,
-    `${JSON.stringify(sanitizeValue(value), null, 2)}\n`,
+    `${JSON.stringify(stored, null, 2)}\n`,
     { mode: 0o600 },
   );
+  return stored;
 }
 
 function processAlive(pid) {
@@ -1099,14 +1103,37 @@ function asWorkerResult(candidate, summaryFallback) {
   return parseErrorWorkerResult(summaryFallback);
 }
 
+// `claude --output-format json` emits a stream ARRAY, not a single envelope, so the payload lives on
+// the terminal `result` event. Reading `structured_output`/`result` off the array itself always yields
+// undefined, which silently degrades every well-formed result to a parse error.
+function resultEnvelope(raw) {
+  const parsed = readJsonFromString(raw);
+  if (!Array.isArray(parsed)) return parsed;
+  return parsed.findLast(event => event && event.type === "result") ?? parsed.at(-1) ?? null;
+}
+
+function structuredPayload(raw) {
+  const envelope = resultEnvelope(raw);
+  return envelope?.structured_output || envelope?.result || envelope;
+}
+
 function parseWorkerResult(runtime, raw, outputPath) {
   if (runtime === "codex")
     return asWorkerResult(readJson(outputPath), "missing structured output");
-  const envelope = readJsonFromString(raw);
-  const candidate = envelope?.structured_output || envelope?.result || envelope;
+  const candidate = structuredPayload(raw);
   if (typeof candidate === "string")
     return asWorkerResult(readJsonFromString(candidate), candidate);
   return asWorkerResult(candidate, "missing structured output");
+}
+
+// A review payload carries verdict/recommended_action/summary/findings and has no worker `status`, so
+// it must NOT pass through asWorkerResult — that check rejects every well-formed review as a parse
+// error. Shape validation belongs to reviewIsWellFormed at the call site, which then classifies an
+// unusable result as reviewer-error exactly as before.
+function parseReviewResult(runtime, raw, outputPath) {
+  if (runtime === "codex") return readJson(outputPath);
+  const candidate = structuredPayload(raw);
+  return typeof candidate === "string" ? readJsonFromString(candidate) : candidate ?? null;
 }
 
 function readJsonFromString(raw) {
@@ -1119,6 +1146,48 @@ function readJsonFromString(raw) {
 
 function isExpectedFailingTestTask(task) {
   return task.type === "test" && task.phase === "red" && task.tddMode === "red-contract";
+}
+
+// Dispatch re-opens the Work at the exact saved phase: an active attempt wins,
+// then the recorded resume target, and only a genuinely new Work is "ready".
+// Without the resume target, every pause/resume round-trips through "ready"
+// and status readouts contradict the durable lifecycle.
+function dispatchOpeningPhase(state) {
+  if (state.active?.phase) return state.active.phase;
+  if (!state.continuation.paused && state.continuation.resume_target) {
+    return state.continuation.resume_target;
+  }
+  return "ready";
+}
+
+// Verification defaults are sized for container-heavy suites: Testcontainers
+// integration tiers legitimately run silent for many minutes, and a cap tuned
+// for chatty unit runs turns cumulative verification into an unwinnable phase.
+function verificationTimeouts(env = process.env) {
+  return {
+    hardTimeoutMs: Number(env.PAIR_VERIFY_COMMAND_TIMEOUT_MS || 45 * 60 * 1000),
+    stallTimeoutMs: Number(env.PAIR_VERIFY_STALL_TIMEOUT_MS || 15 * 60 * 1000),
+    heartbeatMs: Number(env.PAIR_VERIFY_HEARTBEAT_MS || 15 * 1000),
+  };
+}
+
+// Journaling verification as an in-flight request lets the Stop gate and
+// --status see that the phase is actively executing rather than abandoned.
+// Repositories without Pair state (legacy v3) must stay inert.
+function verificationStateContext(root) {
+  if (!fs.existsSync(path.join(root, ".pair"))) return null;
+  try {
+    const state = loadPairState(root);
+    if (!state.work_id) return null;
+    return {
+      root,
+      workId: state.work_id,
+      attemptId: state.active?.attempt_id || null,
+      phase: state.lifecycle,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function runVerificationCommand(root, command, label = "verification") {
@@ -1138,13 +1207,8 @@ function runVerificationCommand(root, command, label = "verification") {
     command: { file: "bash", args: ["-lc", command], cwd: root },
     label: `verification ${label}`,
     outputFile,
-    hardTimeoutMs: Number(
-      process.env.PAIR_VERIFY_COMMAND_TIMEOUT_MS || 15 * 60 * 1000,
-    ),
-    stallTimeoutMs: Number(
-      process.env.PAIR_VERIFY_STALL_TIMEOUT_MS || 5 * 60 * 1000,
-    ),
-    heartbeatMs: Number(process.env.PAIR_VERIFY_HEARTBEAT_MS || 15 * 1000),
+    ...verificationTimeouts(),
+    stateContext: verificationStateContext(root),
   });
   return {
     command,
@@ -2131,10 +2195,7 @@ function runReview({
       repositoryDigest(root, scratchDir) !== snapshot.sourceDigest
       || reviewArtifactDigest(snapshot.artifacts) !== snapshot.artifactDigest
     );
-  const parsed =
-    runtime === "codex"
-      ? readJson(outputPath)
-      : parseWorkerResult("claude", result.stdout || "", outputPath);
+  const parsed = parseReviewResult(runtime, result.stdout || "", outputPath);
   if (fs.existsSync(outputPath)) {
     const safeOutput = parsed && typeof parsed === "object"
       ? `${JSON.stringify(sanitizeValue(parsed), null, 2)}\n`
@@ -4336,9 +4397,12 @@ function runOne(root, runtime, options, paths) {
       );
       fs.mkdirSync(packetDirectory, { recursive: true, mode: 0o700 });
       const packetFile = path.join(packetDirectory, "execution-packet.json");
-      writePrivateJson(packetFile, executionPacket);
+      // readExecutionPacket recomputes this digest from the sanitized file, so it must cover
+      // the stored form. Digesting the pre-sanitization packet left every slice whose packet
+      // tripped redaction permanently unresumable and uncompletable.
+      const storedPacket = writePrivateJson(packetFile, executionPacket);
       attempt.executionPacketPath = path.relative(root, packetFile).split(path.sep).join("/");
-      attempt.executionPacketDigest = sha256(JSON.stringify(executionPacket));
+      attempt.executionPacketDigest = sha256(JSON.stringify(storedPacket));
     }
   }
   if (!options.dryRun) activateTask(paths.plan, task);
@@ -5265,7 +5329,7 @@ function main() {
         event: "work.opened",
         workId: canonicalLinkage?.workId || null,
         planDigest: canonicalLinkage?.planDigest || planContractDigest(fs.readFileSync(plan, "utf8")),
-        phase: loadPairState(root).active?.phase || "ready",
+        phase: dispatchOpeningPhase(loadPairState(root)),
       });
       const persisted = loadPairState(root);
       if (persisted.continuation.human_edit) {
@@ -5363,6 +5427,7 @@ module.exports = {
   clearTestProposal,
   collectExtraVerification,
   decideReviewGate,
+  dispatchOpeningPhase,
   extraVerifyPath,
   finalVerificationCommands,
   endActivePairLoop,
@@ -5389,6 +5454,8 @@ module.exports = {
   reviewLedgerPath,
   reviewStatusSummary,
   reviseTestProposal,
+  runVerificationCommand,
+  verificationTimeouts,
   recordBrainstormCheckpoint,
   recordConversationCheckpoint,
   registerBrainstormingBootstrap,

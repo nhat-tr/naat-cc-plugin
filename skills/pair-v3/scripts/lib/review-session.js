@@ -108,8 +108,14 @@ function observedSessionId(runtime, stdout) {
     return null;
   }
   try {
-    const envelope = JSON.parse(String(stdout || ''));
-    return envelope.session_id || envelope.sessionId || null;
+    const parsed = JSON.parse(String(stdout || ''));
+    // `--output-format json` emits a stream ARRAY; the session id lives on the terminal `result`
+    // event. Reading it off the array yields undefined, so no observed id is ever recorded and the
+    // reusable Review Session is never persisted — every review then starts a fresh reviewer session.
+    const envelope = Array.isArray(parsed)
+      ? parsed.findLast(event => event && event.type === 'result') ?? parsed.at(-1)
+      : parsed;
+    return envelope?.session_id || envelope?.sessionId || null;
   } catch {
     return null;
   }

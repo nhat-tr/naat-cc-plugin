@@ -509,3 +509,36 @@ test('compiled Pair dry-run is provider-portable and persists no runtime state',
     assert.equal(fs.existsSync(path.join(root, '.pair', 'runs')), false);
   }
 });
+
+test('preflight validates an unpersisted candidate design so re-slicing does not mint throwaway evidence', t => {
+  // The packet budget is only knowable after the design is immutable, so every
+  // re-slice used to mint a new EVD record. Preflight closes that loop in
+  // scratch: same downstream checks, nothing persisted.
+  const persisted = persistFixture(t);
+  const { validateEvidenceFile } = require('../../brainstorming/scripts/work-lineage.cjs');
+  const record = validateEvidenceFile(persisted.designPath);
+  const bytes = fs.readFileSync(persisted.designPath);
+
+  // A fresh repository with the canonical Work and spec, but no evidence record.
+  const root = scratchRepository(t);
+  createWorkRoot({ repositoryRoot: root, workId: WORK_ID, canonicalSpec: canonicalSpec() });
+  const planPath = path.join(root, '.pair', 'plan.md');
+  fs.writeFileSync(planPath, persisted.plan);
+  const candidateDesign = { path: 'scratch/candidate.json', bytes, record };
+
+  const preflight = validatePlanImplementationDesign({
+    root, planPath, plan: persisted.plan, candidateDesign,
+  });
+  assert.equal(preflight.valid, true, preflight.errors.join('\n'));
+
+  // Packet bytes -- the number that drives re-slicing -- are now available
+  // before anything becomes immutable.
+  const packet = compileReviewSliceExecutionPacket({
+    root, planPath, plan: persisted.plan, taskId: '1.1', candidateDesign,
+  });
+  assert.ok(packet.routing.packet_bytes > 0);
+
+  // The gate of record still refuses an unpersisted, unindexed design.
+  const gate = validatePlanImplementationDesign({ root, planPath, plan: persisted.plan });
+  assert.equal(gate.valid, false, 'preflight must not weaken the gate of record');
+});

@@ -939,9 +939,34 @@ test('parseRuntimeUsage reads Codex turn usage', () => {
   assert.deepEqual(parseRuntimeUsage('codex', raw), {
     inputTokens: 100,
     cachedInputTokens: 40,
+    cacheCreationTokens: 0,
     outputTokens: 20,
     reasoningTokens: 5,
     costUsd: null,
+  });
+});
+
+test('parseRuntimeUsage captures Claude cache-creation tokens separately from cache reads', () => {
+  // Cache writes bill at 1.25x (5m TTL) or 2x (1h TTL) of input, while cache
+  // reads bill at 0.1x. Folding them together understates spend on a cold
+  // reviewer session and overstates it on a warm one.
+  const raw = JSON.stringify({
+    total_cost_usd: 0.42,
+    usage: {
+      input_tokens: 10,
+      cache_read_input_tokens: 2000,
+      cache_creation_input_tokens: 500,
+      output_tokens: 300,
+    },
+  });
+
+  assert.deepEqual(parseRuntimeUsage('claude', raw), {
+    inputTokens: 10,
+    cachedInputTokens: 2000,
+    cacheCreationTokens: 500,
+    outputTokens: 300,
+    reasoningTokens: 0,
+    costUsd: 0.42,
   });
 });
 

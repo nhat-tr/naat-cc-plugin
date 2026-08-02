@@ -358,3 +358,23 @@ test('visual brainstorming is explicit, authenticated, and uses the configured s
   assert.match(shell, /api\/feedback/);
   assert.match(shell, /clientTurnId/);
 });
+
+test('pair promotion delegates the grounding sweep instead of reading the repository into the coordinator', () => {
+  const skill = read('skills/pair-promote/SKILL.md');
+
+  assert.match(skill, /delegate the grounding sweep/i);
+  assert.match(skill, /re-charged on each later turn/i);
+  assert.match(skill, /read-only subagents/i);
+  assert.match(skill, /conclusions with locations/i);
+  assert.match(skill, /forbid pasting file bodies back/i);
+});
+
+test('pair promotion converges the design in scratch before minting an evidence record', () => {
+  const skill = read('skills/pair-promote/SKILL.md');
+
+  assert.match(skill, /converge in scratch before recording anything/i);
+  assert.match(skill, /promote-preflight/);
+  assert.match(skill, /mints a throwaway `EVD-NNN`/i);
+  assert.match(skill, /not the gate of record/i);
+  assert.match(skill, /re-slice in scratch until every slice is within budget/i);
+});

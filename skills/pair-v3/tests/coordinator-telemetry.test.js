@@ -152,3 +152,29 @@ test('coordinator telemetry attributes a completed slice before a newly opened n
   assert.equal(recorded.taskId, '1.1');
   assert.equal(recorded.input_tokens, 150);
 });
+
+test('coordinator telemetry stamps the current Work lifecycle, not the stale attempt phase', t => {
+  const root = scratch(t);
+  appendPairEvent(root, { event: 'work.opened', workId: 'work-20260729-lifecycle', phase: 'ready' });
+  appendPairEvent(root, {
+    event: 'attempt.started', workId: 'work-20260729-lifecycle', attemptId: 'attempt-1', taskId: '3.3',
+    phase: 'implementing', recommendedStrength: 2, cheapReady: true,
+  });
+  appendPairEvent(root, {
+    event: 'work.phase.entered', workId: 'work-20260729-lifecycle', phase: 'cumulative-verification',
+  });
+  const transcript = path.join(root, 'codex-lifecycle.jsonl');
+  writeJsonl(transcript, [
+    { type: 'session_meta', payload: { id: 'owner-session' } },
+    { type: 'turn_context', payload: { model: 'gpt-5.6-terra', effort: 'medium' } },
+    { type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: {
+      input_tokens: 100, cached_input_tokens: 0, output_tokens: 10, reasoning_output_tokens: 0,
+    } } } },
+  ]);
+
+  const recorded = recordCoordinatorTelemetry(root, {
+    runtime: 'codex', transcriptPath: transcript, sessionId: 'owner-session',
+  });
+  assert.equal(recorded.phase, 'cumulative-verification');
+  assert.equal(recorded.attemptId, 'attempt-1', 'attempt attribution is preserved even when the lifecycle moved on');
+});

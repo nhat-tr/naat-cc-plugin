@@ -1,0 +1,154 @@
+#!/usr/bin/env node
+'use strict';
+
+// Reports what a Pair Work actually cost: the coordinator session it runs
+// inside plus every reviewer it spawned. The framework already records
+// reviewer usage in the ledger; the coordinator's own spend was invisible
+// until now, and it is usually the larger half.
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const {
+  attributeSessionUsage,
+  summarizeWorkCost,
+  sumTranscriptUsage,
+} = require('./lib/pair-cost');
+
+function fail(message) {
+  console.error(`pair-cost: ${message}`);
+  process.exit(2);
+}
+
+function parseArgs(argv) {
+  const options = { root: process.cwd(), work: null, session: null, json: false };
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (arg === '--root') options.root = path.resolve(argv[++index]);
+    else if (arg === '--work') options.work = argv[++index];
+    else if (arg === '--session') options.session = argv[++index];
+    else if (arg === '--json') options.json = true;
+    else if (arg === '--help' || arg === '-h') {
+      console.log('Usage: pair-cost [--root DIR] [--work WORK_ID] [--session SESSION_ID] [--json]');
+      process.exit(0);
+    } else fail(`unknown argument ${arg}`);
+  }
+  return options;
+}
+
+function readJsonl(file) {
+  if (!fs.existsSync(file)) return [];
+  return fs.readFileSync(file, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => { try { return JSON.parse(line); } catch { return null; } })
+    .filter(Boolean);
+}
+
+function resolveWorkId(root, explicit) {
+  if (explicit) return explicit;
+  const workFile = path.join(root, '.pair', 'work.json');
+  if (fs.existsSync(workFile)) {
+    try { return JSON.parse(fs.readFileSync(workFile, 'utf8')).work_id || null; } catch { /* fall through */ }
+  }
+  const runs = path.join(root, '.pair', 'runs');
+  if (!fs.existsSync(runs)) return null;
+  const entries = fs.readdirSync(runs)
+    .map((name) => ({ name, mtime: fs.statSync(path.join(runs, name)).mtimeMs }))
+    .sort((a, b) => b.mtime - a.mtime);
+  return entries.length ? entries[0].name : null;
+}
+
+// Claude Code stores transcripts under ~/.claude/projects/<cwd with / and . replaced by ->
+function projectTranscriptDir(root) {
+  return path.join(os.homedir(), '.claude', 'projects', root.replace(/[/.]/g, '-'));
+}
+
+function findTranscripts(root, sessionId, workId) {
+  const dir = projectTranscriptDir(root);
+  if (!fs.existsSync(dir)) return [];
+  if (sessionId) {
+    const file = path.join(dir, `${sessionId}.jsonl`);
+    return fs.existsSync(file) ? [file] : [];
+  }
+  // No session named: attribute every transcript that mentions this Work.
+  return fs.readdirSync(dir)
+    .filter((name) => name.endsWith('.jsonl'))
+    .map((name) => path.join(dir, name))
+    .filter((file) => {
+      try { return workId ? fs.readFileSync(file, 'utf8').includes(workId) : false; } catch { return false; }
+    });
+}
+
+function money(value) {
+  return value === null || value === undefined ? '     -' : `$${value.toFixed(2)}`.padStart(8);
+}
+
+function main() {
+  const options = parseArgs(process.argv.slice(2));
+  const workId = resolveWorkId(options.root, options.work);
+  if (!workId) fail('could not determine a Work ID; pass --work');
+
+  const events = readJsonl(path.join(options.root, '.pair', 'runs', workId, 'events.jsonl'));
+  const sessionId = options.session || process.env.CLAUDE_CODE_SESSION_ID || null;
+  const transcripts = findTranscripts(options.root, options.session ? sessionId : null, workId);
+  // Always include the live session when it is not already matched by Work ID.
+  if (sessionId && !options.session) {
+    const live = path.join(projectTranscriptDir(options.root), `${sessionId}.jsonl`);
+    if (fs.existsSync(live) && !transcripts.includes(live)) transcripts.push(live);
+  }
+
+  // The ledger records model: "default", which no rate table can price. Each
+  // review does carry its reviewerSessionId, so price it from that session's
+  // own transcript instead — the same source used for the coordinator.
+  const transcriptDir = projectTranscriptDir(options.root);
+  const usageBySession = {};
+  for (const event of events) {
+    const id = event.reviewerSessionId;
+    if (!id || usageBySession[id]) continue;
+    const file = path.join(transcriptDir, `${id}.jsonl`);
+    if (!fs.existsSync(file)) continue;
+    const usage = sumTranscriptUsage(readJsonl(file));
+    if (usage.turns) usageBySession[id] = usage;
+  }
+  const priced = attributeSessionUsage(events, usageBySession);
+
+  const reviewerSessions = new Set(
+    priced.map((event) => event.reviewerSessionId).filter(Boolean),
+  );
+  const coordinatorFiles = transcripts.filter(
+    (file) => !reviewerSessions.has(path.basename(file, '.jsonl')),
+  );
+  const coordinator = sumTranscriptUsage(coordinatorFiles.flatMap((file) => readJsonl(file)));
+  const summary = summarizeWorkCost({
+    workId,
+    events: priced,
+    coordinator: coordinator.turns ? coordinator : null,
+  });
+
+  if (options.json) {
+    console.log(JSON.stringify({ ...summary, transcripts }, null, 2));
+    return;
+  }
+
+  console.log(`Pair cost — ${workId}`);
+  console.log('');
+  console.log(`  coordinator   ${money(summary.coordinatorUsd)}   ${summary.coordinatorTurns} turns`);
+  console.log(`  reviewers     ${money(summary.reviewerUsd)}   ${summary.reviews.length} recorded review(s)`);
+  if (summary.wastedUsd > 0) {
+    const wasted = summary.reviews.filter((review) => review.wasted).length;
+    console.log(`  ├─ wasted     ${money(summary.wastedUsd)}   ${wasted} environment failure(s) that produced no verdict`);
+  }
+  console.log(`  TOTAL         ${money(summary.totalUsd)}`);
+  if (summary.unmeasured) {
+    console.log('');
+    console.log('  note: some spend is unmeasured (unknown model and no provider cost); the total is a floor.');
+  }
+  if (!transcripts.length) {
+    console.log('');
+    console.log('  note: no coordinator transcript found; only reviewer spend is counted.');
+  }
+}
+
+main();

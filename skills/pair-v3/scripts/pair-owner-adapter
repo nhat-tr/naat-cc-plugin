@@ -5,6 +5,7 @@ const fs = require('node:fs');
 
 const { appendPairEvent, loadPairState } = require('./lib/pair-state');
 const { recordCoordinatorTelemetry } = require('./lib/coordinator-telemetry');
+const { recordAgentConversationActivity } = require('./lib/handover-state');
 
 function readInput() {
   try {
@@ -53,13 +54,25 @@ function main() {
   const cwd = input.cwd || input.project_dir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const root = repositoryRoot(cwd);
   if (!root) return;
+  const runtime = runtimeFor(input);
+  // A turn that keeps dispatching Pair work reports no Stop until it finishes, so this invocation
+  // is the only evidence the Freshness Gate gets that the conversation is alive rather than
+  // abandoned. Recorded before the Pair state is loaded so a broken ledger cannot cost liveness.
+  try {
+    recordAgentConversationActivity(root, {
+      runtime,
+      agentConversationId: input.session_id,
+      now: input.now,
+    });
+  } catch {
+    // Observed liveness is advisory; Stop remains the authority on activity.
+  }
   let state;
   try {
     state = loadPairState(root);
   } catch {
     return;
   }
-  const runtime = runtimeFor(input);
   const owner = state.continuation?.owner_session_id;
   if (
     input.transcript_path

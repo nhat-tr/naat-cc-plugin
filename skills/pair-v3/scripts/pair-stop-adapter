@@ -40,6 +40,43 @@ function continuationReason(state) {
   return `Pair v4 continuation owns this chat: Work ${state.work_id} remains ${state.lifecycle}. Evidence sequence ${state.sequence}. Run pair-loop --status and advance the next actionable phase.`;
 }
 
+function waitAdviceReason(state, request) {
+  return `Pair v4 continuation owns this chat: request ${request.request_kind || 'request'} (${request.request_id}) is executing ${request.phase || state.lifecycle} for Work ${state.work_id} inside the live pair-loop process. Do not poll for progress. Arrange one wake path for its completion (a harness-tracked background task or a Monitor on the Work's events.jsonl), then stop; further Stops while this request runs are allowed.`;
+}
+
+// The journal owns request liveness (request.completed releases it); the
+// active-loop marker only proves a pair-loop process is still executing, so a
+// crashed loop degrades to the ordinary continuation block instead of allowing
+// Stop forever. The age cap bounds a marker-alive-but-wedged loop the same way.
+function liveRequestWait(root, state, now = Date.now()) {
+  const request = state.in_flight_request;
+  if (!request || !request.request_id) return null;
+  const marker = readActiveLoopMarker(root);
+  if (!marker?.pid || !processAlive(marker.pid)) return null;
+  const startedAt = Date.parse(request.started_at || '');
+  const maxAgeMs = Number(process.env.PAIR_REQUEST_WAIT_MAX_AGE_MS || 2 * 60 * 60 * 1000);
+  if (!Number.isFinite(startedAt) || now - startedAt > maxAgeMs) return null;
+  return request;
+}
+
+function readActiveLoopMarker(root) {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(root, '.pair', 'active-loop.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function response(runtime, reason) {
   return { decision: 'block', reason };
 }
@@ -72,6 +109,23 @@ function continuationResponse(root, input, runtime = runtimeFor(input)) {
     state.continuation.human_edit ||
     ['idle', 'paused', 'blocked', 'complete'].includes(state.lifecycle)
   ) return null;
+  const request = liveRequestWait(root, state);
+  if (request) {
+    // Advise the wake path exactly once per request, then let the
+    // conversation go quiet instead of forcing a poll turn every Stop.
+    if (state.continuation.wait_advised_request_id === request.request_id) return null;
+    try {
+      appendPairEvent(root, {
+        event: 'continuation.wait-advised',
+        workId: state.work_id,
+        request_id: request.request_id,
+      });
+    } catch {
+      // If the advice cannot be journaled, keep blocking; the gate must
+      // never fail open without a recorded advisory.
+    }
+    return response(runtime, waitAdviceReason(state, request));
+  }
   return response(runtime, continuationReason(state));
 }
 
@@ -152,6 +206,8 @@ module.exports = {
   continuationResponse,
   hasPairAuthority,
   hardStopResponse,
+  liveRequestWait,
   response,
   runtimeFor,
+  waitAdviceReason,
 };

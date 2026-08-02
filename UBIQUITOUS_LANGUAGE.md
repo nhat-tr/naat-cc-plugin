@@ -167,6 +167,15 @@ _Domain glossary for the brainstorming skill's Visual Companion (`skills/brainst
 **Agent Conversation Checkpoint** — the bounded semantic state needed to preserve current intent, evidence, decisions, unresolved questions, and the next action while an agent conversation is still warm.
 - Aliases to avoid: "conversation summary", "transcript snapshot" — both imply unbounded or raw conversation content rather than approved semantic state.
 - Relations: maintained at material boundaries; sealed into an **Agent Conversation Handover** when its agent conversation becomes cold.
+- For Pair Work it has two layers with different authorities: a **lifecycle layer** re-derived from the Pair reducer at every Stop, and a **conversation layer** (findings, confirmed choices, rejected alternatives, unresolved decisions) that no repository state can re-derive and that therefore survives every re-derivation.
+
+**Observed Activity** — evidence that a registered agent conversation is still working, reported by a hook that saw it act rather than finish a turn.
+- Aliases to avoid: "heartbeat", "keep-alive" — neither conveys that the evidence is a real unit of work, nor that it is bounded.
+- Relations: advances Freshness Gate activity between Stop boundaries; bounded by the **Unstopped-Turn Ceiling**; never registers, resurrects, or reseals an agent conversation.
+
+**Unstopped-Turn Ceiling** — the maximum span of Observed Activity the Freshness Gate accepts past the last Stop-confirmed turn boundary before it stops extending liveness.
+- Aliases to avoid: "timeout", "idle limit" — the ceiling bounds *credited activity*, not idleness, and expiring it withholds an extension rather than terminating anything.
+- Relations: anchored by the most recent Stop; re-anchored only by another Stop, never by Observed Activity itself; once exceeded, the conversation ages into a **Cold Agent Conversation** on the ordinary 60-minute boundary.
 
 **Agent Conversation Handover** — an immutable, bounded transfer of one Agent Conversation Checkpoint that exactly one fresh agent conversation can adopt without resuming or forking the source history.
 - Aliases to avoid: "session resume", "context replay", "latest handover" — these obscure the fresh-conversation boundary or lose exact identity when several conversations coexist.

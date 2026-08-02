@@ -1085,7 +1085,14 @@ function buildRuntimeCommand({ runtime, root, prompt, model, effort, schemaPath,
 }
 
 function parseRuntimeUsage(runtime, raw) {
-  const empty = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0, costUsd: null };
+  const empty = {
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    cacheCreationTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    costUsd: null,
+  };
   if (!raw.trim()) return empty;
   if (runtime === 'codex') {
     const events = raw.split(/\r?\n/).filter(Boolean).map(line => {
@@ -1095,6 +1102,7 @@ function parseRuntimeUsage(runtime, raw) {
     return {
       inputTokens: usage.input_tokens || 0,
       cachedInputTokens: usage.cached_input_tokens || 0,
+      cacheCreationTokens: usage.cache_creation_input_tokens || 0,
       outputTokens: usage.output_tokens || 0,
       reasoningTokens: usage.reasoning_output_tokens || 0,
       costUsd: null,
@@ -1107,6 +1115,7 @@ function parseRuntimeUsage(runtime, raw) {
   return {
     inputTokens: usage.input_tokens || usage.inputTokens || 0,
     cachedInputTokens: usage.cache_read_input_tokens || usage.cached_input_tokens || 0,
+    cacheCreationTokens: usage.cache_creation_input_tokens || usage.cacheCreationInputTokens || 0,
     outputTokens: usage.output_tokens || usage.outputTokens || 0,
     reasoningTokens: usage.reasoning_tokens || 0,
     costUsd: Number.isFinite(result.total_cost_usd) ? result.total_cost_usd : null,

@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { appendPairEvent, readPairEvents } = require('./pair-state');
+const { appendPairEvent, readPairEvents, reducePairEvents } = require('./pair-state');
 
 const MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024;
 
@@ -142,13 +142,18 @@ function recordCoordinatorTelemetry(root, { runtime, transcriptPath, sessionId, 
     || observed.input_tokens < (previous.cumulative_input_tokens || 0)
     || observed.output_tokens < (previous.cumulative_output_tokens || 0);
   const attempt = latestAttemptMetadata(events, previous);
+  // The lifecycle can move past the attempt (cumulative verification/review
+  // run after the last slice); cost attribution must follow the Work, not the
+  // stale attempt phase, or per-phase spend becomes unattributable.
+  const lifecycle = reducePairEvents(events).lifecycle;
+  const currentPhase = lifecycle && !['idle', 'ready'].includes(lifecycle) ? lifecycle : null;
   const event = {
     event: 'usage.recorded',
     workId: attempt?.workId || attempt?.work_id || events.at(-1)?.workId || events.at(-1)?.work_id || null,
     attemptId: attempt?.attemptId || attempt?.attempt_id || null,
     taskId: attempt?.taskId || attempt?.task_id || null,
     role: 'coordinator',
-    phase: attempt?.phase || 'coordinating',
+    phase: currentPhase || attempt?.phase || 'coordinating',
     runtime,
     session_id: sessionId,
     model: observed.model,

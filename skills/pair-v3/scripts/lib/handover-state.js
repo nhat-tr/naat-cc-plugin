@@ -10,6 +10,11 @@ const { recoverAgentConversationCheckpoint } = require('./conversation-checkpoin
 const HANDOVER_SCHEMA = 1;
 const MAX_CHECKPOINT_BYTES = 32 * 1024;
 const FRESHNESS_WINDOW_MS = 60 * 60 * 1000;
+// Stop is the only turn boundary a runtime reports, so a long autonomous turn produces no Stop
+// for as long as it keeps working. Observed activity (a Pair dispatch) may carry liveness across
+// that gap, but only for a bounded stretch past the last Stop-confirmed boundary — otherwise a
+// wedged dispatch loop would hold the Freshness Gate open indefinitely.
+const MAX_UNSTOPPED_ACTIVITY_MS = 4 * FRESHNESS_WINDOW_MS;
 const LOCK_WAIT_MS = 5;
 const LOCK_TIMEOUT_MS = 10_000;
 const HANDOVER_ID = /^handover-[a-f0-9-]{36}$/u;
@@ -18,8 +23,9 @@ const KINDS = new Set(['pair', 'brainstorming', 'general']);
 const CHECKPOINT_ORIGINS = new Set(['bootstrap', 'derived', 'manual', 'manual-recovered', 'recovered']);
 const CONVERSATION_KEYS = new Set([
   'source_key', 'runtime', 'kind', 'status', 'registered_at', 'last_active_at',
-  'checkpoint', 'checkpoint_revision', 'sealed_handover_id', 'adopted_handover_id',
-  'override', 'checkpoint_origin', 'checkpoint_source_digest', 'checkpoint_updated_at',
+  'activity_anchor_at', 'checkpoint', 'checkpoint_revision', 'sealed_handover_id',
+  'adopted_handover_id', 'override', 'checkpoint_origin', 'checkpoint_source_digest',
+  'checkpoint_updated_at',
 ]);
 const HANDOVER_CLAIM_KEYS = new Set([
   'handover_id', 'source_key', 'status', 'created_at', 'override_used',
@@ -196,6 +202,11 @@ function validRegistry(registry) {
     if (!['warm', 'sealed', 'override-active', 'retired'].includes(conversation.status)) return false;
     if (!Number.isInteger(conversation.checkpoint_revision) || conversation.checkpoint_revision < 0) return false;
     if (!validEventTimestamp(conversation.registered_at) || typeof conversation.last_active_at !== 'string') return false;
+    if (
+      conversation.activity_anchor_at !== undefined &&
+      conversation.activity_anchor_at !== null &&
+      !validEventTimestamp(conversation.activity_anchor_at)
+    ) return false;
     if (conversation.checkpoint === null) {
       if (conversation.checkpoint_revision !== 0 || conversation.status !== 'warm') return false;
       if (
@@ -702,6 +713,7 @@ function registerAgentConversation(root, input) {
       status: existing?.status || 'warm',
       registered_at: existing?.registered_at || at,
       last_active_at: existing?.last_active_at || at,
+      activity_anchor_at: existing?.activity_anchor_at || existing?.last_active_at || at,
       checkpoint: existing?.checkpoint || null,
       checkpoint_revision: existing?.checkpoint_revision || 0,
       sealed_handover_id: existing?.sealed_handover_id || null,
@@ -798,6 +810,29 @@ function mergeArtifacts(existing, recovered) {
   return [...merged.values()];
 }
 
+// A Pair checkpoint has two layers with different authorities. The lifecycle layer (Core Anchor,
+// direction, next action, Work projection) is re-derived from the Pair reducer on every Stop and
+// must always win. The conversation layer (findings, choices, open decisions) cannot be re-derived
+// from `.pair/` at all, so it survives every re-derivation instead of being overwritten by
+// derivePairCheckpoint's placeholders.
+function mergePairCheckpoint(derived, existing) {
+  if (!existing) return derived;
+  const preserved = normalizeCheckpoint(existing);
+  const conversationLayer = key => (preserved[key].length ? preserved[key] : derived[key]);
+  return normalizeCheckpoint({
+    core_anchor: derived.core_anchor,
+    findings: mergeFindings(preserved.findings, derived.findings),
+    confirmed_choices: conversationLayer('confirmed_choices'),
+    rejected_alternatives: conversationLayer('rejected_alternatives'),
+    current_direction: derived.current_direction,
+    unresolved_decisions: preserved.unresolved_decisions,
+    next_action: derived.next_action,
+    // Derived last so the freshly hashed Work projection always wins over a stale copy of itself;
+    // validatePairWorkManifestBinding rejects a handover whose artifact digest has drifted.
+    artifacts: mergeArtifacts(preserved.artifacts, derived.artifacts),
+  });
+}
+
 function mergeRecoveredCheckpoint(conversation, recovered) {
   const existing = conversation.checkpoint || normalizeCheckpoint({});
   const automatic = normalizeCheckpoint(recovered.checkpoint);
@@ -822,7 +857,9 @@ function mergeRecoveredCheckpoint(conversation, recovered) {
       core_anchor: existing.core_anchor || automatic.core_anchor,
       findings: mergeFindings(existing.findings, [
         ...automatic.findings,
-        ...(conversation.kind === 'general' && latestDirectionFinding ? [latestDirectionFinding] : []),
+        // A Pair checkpoint keeps repository-derived direction and next action, so the user's own
+        // steering would be dropped entirely unless it is preserved as a finding.
+        ...(['general', 'pair'].includes(conversation.kind) && latestDirectionFinding ? [latestDirectionFinding] : []),
       ]),
       confirmed_choices: existing.confirmed_choices,
       rejected_alternatives: existing.rejected_alternatives,
@@ -849,7 +886,6 @@ function prepareAgentConversationStop(root, input) {
   }
   const registry = registered ? readAgentConversationRegistry(root) : null;
   const conversation = registry?.conversations[identity.sourceKey] || null;
-  if (conversation?.kind === 'pair') return { status: 'registered', sourceKey: identity.sourceKey };
   if (!input.transcriptPath) {
     const completeCheckpoint = conversation?.checkpoint?.core_anchor
       && conversation.checkpoint.current_direction
@@ -860,17 +896,30 @@ function prepareAgentConversationStop(root, input) {
       && Date.parse(conversation.checkpoint_updated_at) > Date.parse(conversation.last_active_at);
     const completeBrainstormingCheckpoint = conversation?.kind === 'brainstorming'
       && completeCheckpoint;
-    if (manualRefreshAfterLastStop || completeBrainstormingCheckpoint) {
+    // A Pair conversation loses nothing without a transcript: recordAgentConversationStop
+    // re-derives a complete checkpoint from repository authority, so only the recovered
+    // conversation layer is missed.
+    const derivablePairCheckpoint = conversation?.kind === 'pair';
+    if (manualRefreshAfterLastStop || completeBrainstormingCheckpoint || derivablePairCheckpoint) {
       return { status: 'registered', sourceKey: identity.sourceKey };
     }
     return { status: 'recovery-unavailable', sourceKey: identity.sourceKey, registered };
   }
-  const recovered = recoverAgentConversationCheckpoint({
-    root,
-    runtime: identity.runtime,
-    agentConversationId: input.agentConversationId,
-    transcriptPath: input.transcriptPath,
-  });
+  let recovered;
+  try {
+    recovered = recoverAgentConversationCheckpoint({
+      root,
+      runtime: identity.runtime,
+      agentConversationId: input.agentConversationId,
+      transcriptPath: input.transcriptPath,
+    });
+  } catch (error) {
+    // Pair authority never depended on the transcript, so an unreadable or identity-mismatched one
+    // costs only the recovered conversation layer. Failing the Stop here would block a Pair turn
+    // the repository can already checkpoint completely. Every other kind keeps failing visibly.
+    if (conversation?.kind === 'pair') return { status: 'registered', sourceKey: identity.sourceKey };
+    throw error;
+  }
   if (!registered) {
     registerAgentConversation(root, {
       runtime: identity.runtime,
@@ -889,7 +938,7 @@ function prepareAgentConversationStop(root, input) {
     });
     return { status: 'registered', sourceKey: identity.sourceKey, revision: recorded.revision };
   }
-  if (!conversation || !['brainstorming', 'general'].includes(conversation.kind)) {
+  if (!conversation || !['pair', 'brainstorming', 'general'].includes(conversation.kind)) {
     return { status: 'registered', sourceKey: identity.sourceKey };
   }
   const merged = mergeRecoveredCheckpoint(conversation, recovered);
@@ -897,7 +946,9 @@ function prepareAgentConversationStop(root, input) {
     runtime: identity.runtime,
     agentConversationId: input.agentConversationId,
     kind: conversation.kind,
-    checkpoint: merged.checkpoint,
+    checkpoint: conversation.kind === 'pair'
+      ? mergePairCheckpoint(derivePairCheckpoint(root), merged.checkpoint)
+      : merged.checkpoint,
     origin: merged.origin,
     sourceDigest: recovered.sourceDigest,
     now: input.now,
@@ -919,10 +970,11 @@ function recordAgentConversationStop(root, input) {
         return { status: 'override-not-consumed', sourceKey: identity.sourceKey };
       }
       if (conversation.kind === 'pair') {
-        const checkpoint = derivePairCheckpoint(root);
+        const checkpoint = mergePairCheckpoint(derivePairCheckpoint(root), conversation.checkpoint);
         if (JSON.stringify(conversation.checkpoint) !== JSON.stringify(checkpoint)) {
           conversation.checkpoint = checkpoint;
           conversation.checkpoint_revision += 1;
+          conversation.checkpoint_updated_at = at;
         }
         if (conversation.checkpoint_revision <= conversation.override.authorized_checkpoint_revision) {
           conversation.checkpoint_revision += 1;
@@ -955,19 +1007,24 @@ function recordAgentConversationStop(root, input) {
       handoverId: conversation.sealed_handover_id || null,
     };
     if (conversation.kind === 'pair') {
-      const checkpoint = derivePairCheckpoint(root);
+      const checkpoint = mergePairCheckpoint(derivePairCheckpoint(root), conversation.checkpoint);
       if (JSON.stringify(conversation.checkpoint) !== JSON.stringify(checkpoint)) {
         conversation.checkpoint = checkpoint;
         conversation.checkpoint_revision += 1;
+        conversation.checkpoint_updated_at = at;
       }
     } else if (conversation.kind === 'brainstorming') {
       const checkpoint = deriveBrainstormingCheckpoint(root, conversation.checkpoint);
       if (JSON.stringify(conversation.checkpoint) !== JSON.stringify(checkpoint)) {
         conversation.checkpoint = checkpoint;
         conversation.checkpoint_revision += 1;
+        conversation.checkpoint_updated_at = at;
       }
     }
     conversation.last_active_at = at;
+    // Stop is the only confirmed turn boundary, so it also re-anchors how far observed activity
+    // may carry liveness before the gate reclaims an unstopped turn.
+    conversation.activity_anchor_at = at;
     return {
       status: 'warm',
       sourceKey: identity.sourceKey,
@@ -988,6 +1045,47 @@ function recordAgentConversationStop(root, input) {
     kind: identity.kind || input.kind,
     handoverId: recorded.handoverId,
     now: input.now,
+  });
+}
+
+// Observed liveness reported by a hook that saw the conversation act (a Pair dispatch) rather than
+// finish a turn. It only ever moves activity forward, never resurrects a conversation the gate has
+// already sealed, and refuses once the unstopped turn has run past MAX_UNSTOPPED_ACTIVITY_MS from
+// its last Stop-confirmed boundary.
+function recordAgentConversationActivity(root, input) {
+  const identity = conversationIdentity(input);
+  if (!hasAgentConversationRegistration(root, input)) {
+    return { status: 'unregistered', sourceKey: identity.sourceKey };
+  }
+  const at = timestamp(input.now);
+  return withRegistry(root, registry => {
+    const conversation = registry.conversations[identity.sourceKey];
+    if (!conversation) throw new Error('invalid Agent Conversation Handover registry');
+    if (conversation.status !== 'warm') {
+      return {
+        status: conversation.status,
+        sourceKey: identity.sourceKey,
+        handoverId: conversation.sealed_handover_id || null,
+      };
+    }
+    // A registry written before the anchor existed adopts its last Stop as the anchor, and
+    // persists it: falling back to last_active_at on every touch would let the ceiling slide
+    // forward with the activity it is supposed to bound.
+    if (!conversation.activity_anchor_at) conversation.activity_anchor_at = conversation.last_active_at;
+    const anchorAt = Date.parse(conversation.activity_anchor_at);
+    const lastActiveAt = Date.parse(conversation.last_active_at);
+    const observedAt = Date.parse(at);
+    if (!Number.isFinite(anchorAt) || !Number.isFinite(lastActiveAt)) {
+      return { status: 'invalid-activity', sourceKey: identity.sourceKey };
+    }
+    if (observedAt - anchorAt > MAX_UNSTOPPED_ACTIVITY_MS) {
+      return { status: 'unstopped-ceiling', sourceKey: identity.sourceKey, ageMs: observedAt - anchorAt };
+    }
+    if (observedAt <= lastActiveAt) {
+      return { status: 'warm', sourceKey: identity.sourceKey, lastActiveAt: conversation.last_active_at };
+    }
+    conversation.last_active_at = at;
+    return { status: 'warm', sourceKey: identity.sourceKey, lastActiveAt: at };
   });
 }
 
@@ -1925,6 +2023,7 @@ function completeColdResume(root, input) {
 module.exports = {
   HANDOVER_SCHEMA,
   FRESHNESS_WINDOW_MS,
+  MAX_UNSTOPPED_ACTIVITY_MS,
   MAX_CHECKPOINT_BYTES,
   assessAgentConversationFreshness,
   adoptAgentConversationHandover,
@@ -1945,6 +2044,7 @@ module.exports = {
   readAgentConversationHandoverForAdoption,
   readAgentConversationRegistry,
   prepareAgentConversationStop,
+  recordAgentConversationActivity,
   recordAgentConversationStop,
   registerAgentConversation,
   sealAgentConversationHandover,

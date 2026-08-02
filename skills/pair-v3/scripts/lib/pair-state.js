@@ -212,6 +212,7 @@ function initialState() {
       paused: false,
       resume_target: null,
       human_edit: null,
+      wait_advised_request_id: null,
     },
     warnings: [],
     usage: [],
@@ -358,6 +359,8 @@ function reducePairEvents(events) {
     } else if (event.event === 'continuation.claimed') {
       state.continuation.owner_session_id = event.session_id || null;
       state.continuation.owner_runtime = event.runtime || null;
+    } else if (event.event === 'continuation.wait-advised') {
+      state.continuation.wait_advised_request_id = event.request_id || null;
     } else if (event.event === 'request.started') {
       state.in_flight_request = {
         request_id: event.request_id || null,
@@ -380,7 +383,10 @@ function reducePairEvents(events) {
     } else if (['request.completed', 'request.cancelled'].includes(event.event)) {
       const trackedRequestId = state.in_flight_request?.request_id || state.active?.request_id || null;
       const matchesRequest = !event.request_id || !trackedRequestId || event.request_id === trackedRequestId;
-      if (matchesRequest) state.in_flight_request = null;
+      if (matchesRequest) {
+        state.in_flight_request = null;
+        state.continuation.wait_advised_request_id = null;
+      }
       const matchesAttempt = state.active && (!attemptId || attemptId === state.active.attempt_id);
       if (matchesAttempt && matchesRequest) {
         state.active.request_id = null;

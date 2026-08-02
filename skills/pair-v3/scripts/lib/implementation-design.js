@@ -234,7 +234,14 @@ function specCriteria(spec) {
   return result;
 }
 
-function validatePlanImplementationDesign({ root, planPath, plan }) {
+// candidateDesign is preflight-only: it lets a promoter check slice packet
+// budgets and decision mapping against an unpersisted design in scratch. The
+// packet budget is otherwise only knowable after the evidence record is
+// already immutable, so every re-slice mints a throwaway EVD. Supplying it
+// skips the canonical-path, digest-binding, and Work-index checks, which hold
+// only once the record exists -- it is never a substitute for the gate of
+// record.
+function validatePlanImplementationDesign({ root, planPath, plan, candidateDesign = null }) {
   const structural = validatePlan(plan);
   const errors = [...structural.errors];
   const warnings = [...structural.warnings];
@@ -251,6 +258,11 @@ function validatePlanImplementationDesign({ root, planPath, plan }) {
   let designFile;
   let bytes;
   let record;
+  if (candidateDesign) {
+    designFile = candidateDesign.path;
+    bytes = candidateDesign.bytes;
+    record = candidateDesign.record;
+  } else {
   try {
     const pathMatch = designMatch[1].match(EVIDENCE_PATH);
     if (!pathMatch) throw new Error('Implementation design path is not a canonical Work evidence path');
@@ -267,6 +279,7 @@ function validatePlanImplementationDesign({ root, planPath, plan }) {
   } catch (error) {
     errors.push(error.message);
     return { ...structural, valid: false, errors: [...new Set(errors)], warnings, parsed: structural.parsed, design: null };
+  }
   }
   const contractValidation = validateImplementationDesignRecord(record);
   errors.push(...contractValidation.errors);
@@ -410,8 +423,8 @@ function routingFor(task, packetBytes) {
   return { cheap_ready: reasons.length === 0, recommended_strength: recommendedStrength, reasons, packet_bytes: packetBytes };
 }
 
-function compileReviewSliceExecutionPacket({ root, planPath, plan, taskId }) {
-  const validation = validatePlanImplementationDesign({ root, planPath, plan });
+function compileReviewSliceExecutionPacket({ root, planPath, plan, taskId, candidateDesign = null }) {
+  const validation = validatePlanImplementationDesign({ root, planPath, plan, candidateDesign });
   if (!validation.valid) throw new Error(`compiled plan is not executable: ${validation.errors.join('; ')}`);
   const task = validation.parsed.tasks.find(item => item.id === taskId);
   if (!task) throw new Error(`Review Slice ${taskId} does not exist`);

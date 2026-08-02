@@ -66,7 +66,10 @@ function parseArgs(argv) {
   const options = {
     runtime: process.env.PAIR_RUNTIME || "auto",
     model: null,
-    effort: "medium",
+    // The plan-review budget is finite (2 verdicts), so round one has to be a
+    // deep sweep rather than the first of many shallow ones. Depth here is
+    // cheaper than another full reviewer session.
+    effort: "high",
     dryRun: false,
     allowCrossRuntimeFallback:
       process.env.PAIR_ALLOW_CROSS_RUNTIME_FALLBACK === "1",
@@ -192,7 +195,7 @@ function buildReviewCommand({
   prompt,
   outputPath,
   model = null,
-  effort = "medium",
+  effort = "high",
   externalSandbox = false,
   reviewerSessionId = null,
 }) {
@@ -212,7 +215,16 @@ function buildReviewCommand({
 
 function parseReview(runtime, stdout, outputPath) {
   if (runtime === "codex") return readJsonIfPresent(outputPath);
-  const envelope = readJsonFromString(stdout);
+  const parsed = readJsonFromString(stdout);
+  // The Claude CLI emits an array of stream events whose final "result" entry
+  // carries the verdict. Without this, the array itself becomes the candidate,
+  // fails the schema shape check, and every Claude review is recorded as an
+  // environment failure. Codex never hits this path -- it reads its verdict
+  // from a separate output file -- so the bug stays latent until the runtime
+  // switches.
+  const envelope = Array.isArray(parsed)
+    ? [...parsed].reverse().find((event) => event?.type === "result") ?? parsed.at(-1)
+    : parsed;
   const candidate = envelope?.structured_output || envelope?.result || envelope;
   return typeof candidate === "string"
     ? readJsonFromString(candidate)
@@ -949,17 +961,22 @@ async function main() {
     );
     return;
   }
+  // The budget counts substantive verdicts, not attempts. An environment
+  // failure produced no verdict, so charging it a slot both shortens the real
+  // review (challengeNumber = count + 1 reaches the approval boundary early)
+  // and makes the ledger claim verdicts that never happened.
   const planReviewCount = () => readPairEvents(root).filter((record) =>
     record.event === "plan-review.completed" &&
     record.workId === work.work_id &&
-    record.classification !== "human-override",
+    record.classification !== "human-override" &&
+    record.classification !== "environment-failure",
   ).length;
   if (options.maxPlanReviews !== null && (!Number.isInteger(options.maxPlanReviews) || options.maxPlanReviews < 1)) {
     fail("--max-plan-reviews must be a positive integer");
   }
   if (options.maxPlanReviews !== null && planReviewCount() >= options.maxPlanReviews) {
     fail(
-      `Work ${work.work_id} reached its ${options.maxPlanReviews}-verdict plan-review budget across plan digests; use an exact-digest human override or explicitly raise --max-plan-reviews`,
+      `Work ${work.work_id} reached its ${options.maxPlanReviews}-verdict plan-review budget across plan digests; approve the exact current digest with a human override: pair-loop --approve-plan ${"<digest>"} --reason "<concrete reason>"`,
     );
   }
   const runtimes = resolveRuntimeCandidates(options.runtime, {
@@ -1125,6 +1142,7 @@ if (require.main === module) {
 module.exports = {
   buildReviewCommand,
   classifyChallengeAttempt,
+  parseReview,
   planReviewPrompt,
   recordPlanApproval,
   recordManualPlanApproval,

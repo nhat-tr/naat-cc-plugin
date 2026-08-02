@@ -21,7 +21,13 @@ If no approved design exists, stop. Purpose, constraints, stable Acceptance Crit
 
 ## Ground the Design Once
 
-Read applicable `AGENTS.md`, the relevant `UBIQUITOUS_LANGUAGE.md` cluster, manifests/lockfiles, exact callers, existing implementations, and tests before naming a path or contract. Load applicable language skills read-only.
+Ground against applicable `AGENTS.md`, the relevant `UBIQUITOUS_LANGUAGE.md` cluster, manifests/lockfiles, exact callers, existing implementations, and tests before naming a path or contract. Load applicable language skills read-only.
+
+**Delegate the grounding sweep; do not read the repository into the coordinator.** Every file the coordinator reads stays in its context and is re-charged on each later turn, so a single grounding sweep read inline sets the price of every remaining turn in the promotion. Send the lookups to read-only subagents instead (`Explore`, or `general-purpose` at `model=sonnet`), and batch independent lookups into one message so they run concurrently.
+
+Each subagent brief names the question, the paths or symbols to search, and the exact shape of the answer. Require it to return **conclusions with locations** — `file:line`, symbol names, a verdict of exists / absent / differs — and explicitly forbid pasting file bodies back. The coordinator keeps only what it will write into the contract.
+
+Read a source file inline only to resolve a contradiction between two subagent reports, or when a single named line settles the question and briefing would cost more than reading it. Never re-derive inline what a subagent already reported.
 
 For a dependency or framework capability, check in this order:
 
@@ -77,6 +83,15 @@ The `result` contains:
 - Stable `IMP-NNN` decisions. Each decision closes its mapped Acceptance Criteria, dependencies, exact symbols/actions and call paths, before/after/error contract, DTO/API/data shapes, state flow, DI/host wiring, failure handling, deletions, repository pattern references, exact tests and RED signal, focused verification, and non-goals.
 
 No `TODO`, `TBD`, unknown field, provider/model/prompt field, provider-specific executor instruction, or undecided alternative may survive promotion. Provider names remain valid only when they are part of the approved product behavior. A decision maps to exactly one Review Slice; all decisions and Acceptance Criteria must be mapped. Write the candidate under `$CLAUDE_SCRATCH_DIR/<repo>/pair-promote/`, then run:
+
+**Converge in scratch before recording anything.** A revision is a new evidence record, never an in-place edit, so each re-slice after persistence mints a throwaway `EVD-NNN`. Packet bytes and cheap-readiness are what force re-slicing, and `promote-preflight` reports them against the unpersisted candidate plus a draft plan — same downstream checks, nothing written:
+
+```bash
+promote-preflight "$CLAUDE_SCRATCH_DIR/<repo>/pair-promote/draft-plan.md" \
+  --design "$CLAUDE_SCRATCH_DIR/<repo>/pair-promote/implementation-design.json"
+```
+
+Re-slice in scratch until every slice is within budget. Preflight is not the gate of record: it skips the canonical-path, digest-binding, and Work-index checks, which hold only once the evidence exists. When it is clean, persist once:
 
 ```bash
 validate-implementation-design "$CLAUDE_SCRATCH_DIR/<repo>/pair-promote/implementation-design.json"

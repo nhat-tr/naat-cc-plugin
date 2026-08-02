@@ -41,6 +41,32 @@ function childEnvironment(mode, environmentPath = null) {
   return env;
 }
 
+function parseCpuTime(text) {
+  const match = String(text).trim().match(/^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)$/);
+  if (!match) return 0;
+  const [, days, hours, minutes, seconds] = match;
+  return Number(days || 0) * 86_400
+    + Number(hours || 0) * 3_600
+    + Number(minutes) * 60
+    + Number(seconds);
+}
+
+// Cumulative CPU seconds across the child's whole process group; test hosts
+// fork workers that do the real work while the group leader stays silent.
+function processGroupCpuSeconds(processGroupId) {
+  try {
+    const output = childProcess.execFileSync('ps', ['-Ao', 'pgid=,time='], { encoding: 'utf8' });
+    let total = 0;
+    for (const line of output.split('\n')) {
+      const match = line.trim().match(/^(\d+)\s+(\S+)$/);
+      if (match && Number(match[1]) === processGroupId) total += parseCpuTime(match[2]);
+    }
+    return total;
+  } catch {
+    return null;
+  }
+}
+
 function killProcessGroup(child, signal) {
   if (!child?.pid) return;
   try {
@@ -160,7 +186,7 @@ function runChild(requestPath, resultPath) {
     termination = kind;
     const elapsed = Date.now() - startedMs;
     const reason = kind === 'stall-timeout'
-      ? `produced no output for ${stallTimeoutMs}ms`
+      ? `produced no output and no CPU activity for ${stallTimeoutMs}ms`
       : kind === 'interrupted'
         ? `was interrupted by ${signal}`
         : `reached its ${hardTimeoutMs}ms hard timeout`;
@@ -180,6 +206,23 @@ function runChild(requestPath, resultPath) {
     }
   };
   armStall();
+  // A verification suite can be healthy yet silent for minutes (VSTest streams
+  // no per-test output), so CPU accrual in the child's process group counts as
+  // liveness too: only a child that is silent AND idle can stall out.
+  const cpuSampleMs = Number(
+    process.env.PAIR_STALL_ACTIVITY_SAMPLE_MS
+      || Math.min(15_000, Math.max(1_000, Math.floor(stallTimeoutMs / 4))),
+  );
+  let lastCpuSeconds = null;
+  const cpuMonitor = stallTimeoutMs > 0 && cpuSampleMs > 0 && process.platform !== 'win32'
+    ? setInterval(() => {
+        if (settled || termination) return;
+        const cpuSeconds = processGroupCpuSeconds(child.pid);
+        if (cpuSeconds === null) return;
+        if (lastCpuSeconds !== null && cpuSeconds > lastCpuSeconds) armStall();
+        lastCpuSeconds = cpuSeconds;
+      }, cpuSampleMs)
+    : null;
   const hardTimer = setTimeout(() => terminate('hard-timeout'), hardTimeoutMs);
   const heartbeatTimer = heartbeatMs > 0
     ? setInterval(() => {
@@ -226,6 +269,7 @@ function runChild(requestPath, resultPath) {
     settled = true;
     clearTimeout(stallTimer);
     clearTimeout(hardTimer);
+    if (cpuMonitor) clearInterval(cpuMonitor);
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     clearTimeout(forceKillTimer);
     process.removeListener('SIGINT', onSigint);
@@ -236,7 +280,7 @@ function runChild(requestPath, resultPath) {
     const error = spawnError || (termination
       ? {
           message: termination === 'stall-timeout'
-            ? `${label} produced no output for ${stallTimeoutMs}ms`
+            ? `${label} produced no output and no CPU activity for ${stallTimeoutMs}ms`
             : termination === 'interrupted'
               ? `${label} was interrupted`
               : `${label} exceeded ${hardTimeoutMs}ms`,

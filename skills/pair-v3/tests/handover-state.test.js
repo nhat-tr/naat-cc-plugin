@@ -983,3 +983,220 @@ test('formatFreshnessProjection scopes the banner to a provided currentSourceKey
   assert.match(unregistered, /^Freshness Gate \(this Agent Conversation\): .*not registered.*does not gate/iu);
   assert.equal((unregistered.match(/Freshness Gate \(other\)/gu) || []).length, 2, 'both registered conversations render compactly when the current conversation is unregistered');
 });
+
+// A Claude transcript carrying one user direction and one assistant conclusion. The Pair Stop
+// path recovers the conversation layer from exactly this shape (see conversation-checkpoint-
+// recovery.js parseClaude), so these fixtures stand in for the semantic knowledge that
+// derivePairCheckpoint cannot read out of .pair/ state.
+function claudeTranscript(root, sessionId, options = {}) {
+  const {
+    direction = 'Keep the retry budget per defect, not per attempt.',
+    conclusion = 'Root cause: the payload validator counts one edge per node instead of N-1.',
+  } = options;
+  const file = path.join(root, `${sessionId}.jsonl`);
+  fs.writeFileSync(file, `${[
+    {
+      type: 'user', sessionId, timestamp: '2026-07-29T10:00:00.000Z',
+      message: { role: 'user', content: direction },
+    },
+    {
+      type: 'assistant', sessionId, timestamp: '2026-07-29T10:05:00.000Z',
+      message: { role: 'assistant', content: [{ type: 'text', text: conclusion }] },
+    },
+  ].map(entry => JSON.stringify(entry)).join('\n')}\n`);
+  return file;
+}
+
+test('a Pair Stop merges transcript-recovered conversation knowledge into repository-derived authority', t => {
+  const root = fixture(t);
+  const {
+    derivePairCheckpoint, prepareAgentConversationStop, readAgentConversationRegistry,
+    registerAgentConversation, updateAgentConversationCheckpoint,
+  } = handoverApi();
+  const identity = conversation({ runtime: 'claude', agentConversationId: 'pair-recovery-session' });
+  const registered = registerAgentConversation(root, identity);
+  updateAgentConversationCheckpoint(root, { ...identity, checkpoint: derivePairCheckpoint(root) });
+
+  const prepared = prepareAgentConversationStop(root, {
+    ...identity,
+    transcriptPath: claudeTranscript(root, 'pair-recovery-session'),
+    now: 2_000,
+  });
+
+  assert.equal(prepared.status, 'checkpointed');
+  const stored = readAgentConversationRegistry(root).conversations[registered.sourceKey];
+  assert.ok(stored.checkpoint.findings.length > 0, 'the recovered assistant conclusion survives as a finding');
+  assert.match(JSON.stringify(stored.checkpoint.findings), /counts one edge per node/u);
+  assert.equal(
+    stored.checkpoint.core_anchor,
+    'Continue Pair Work work-handover from repository authority.',
+    'repository authority still owns the Core Anchor',
+  );
+  assert.match(stored.checkpoint.current_direction, /Review Slice 1\.1/u, 'repository authority still owns the direction');
+  assert.equal(stored.checkpoint.next_action, 'implementing');
+});
+
+test('a Pair Stop that re-derives repository authority preserves the recovered conversation layer', t => {
+  const root = fixture(t);
+  const {
+    derivePairCheckpoint, prepareAgentConversationStop, readAgentConversationRegistry,
+    recordAgentConversationStop, registerAgentConversation, updateAgentConversationCheckpoint,
+  } = handoverApi();
+  const identity = conversation({ runtime: 'claude', agentConversationId: 'pair-preserve-session' });
+  const registered = registerAgentConversation(root, identity);
+  updateAgentConversationCheckpoint(root, { ...identity, checkpoint: derivePairCheckpoint(root) });
+  prepareAgentConversationStop(root, {
+    ...identity,
+    transcriptPath: claudeTranscript(root, 'pair-preserve-session'),
+    now: 2_000,
+  });
+
+  appendPairEvent(root, {
+    event: 'phase.progressed', workId: 'work-handover', attemptId: '1.1-handover',
+    taskId: '1.1', phase: 'verifying',
+  });
+  recordAgentConversationStop(root, { ...identity, now: 3_000 });
+
+  const stored = readAgentConversationRegistry(root).conversations[registered.sourceKey];
+  assert.match(JSON.stringify(stored.checkpoint.findings), /counts one edge per node/u, 'the recovered layer is not clobbered');
+  assert.match(stored.checkpoint.current_direction, /verifying/u, 'the repository layer still refreshes');
+});
+
+test('a Pair Stop without a provider transcript checkpoints repository authority instead of hard-stopping', t => {
+  const root = fixture(t);
+  const { derivePairCheckpoint, prepareAgentConversationStop, registerAgentConversation, updateAgentConversationCheckpoint } = handoverApi();
+  const identity = conversation({ agentConversationId: 'pair-no-transcript-session' });
+  registerAgentConversation(root, identity);
+  updateAgentConversationCheckpoint(root, { ...identity, checkpoint: derivePairCheckpoint(root) });
+
+  const prepared = prepareAgentConversationStop(root, { ...identity, transcriptPath: null, now: 2_000 });
+
+  assert.equal(prepared.status, 'registered');
+});
+
+test('a Stop that rewrites the checkpoint timestamps the revision it wrote', t => {
+  const root = fixture(t);
+  const {
+    derivePairCheckpoint, readAgentConversationRegistry, recordAgentConversationStop,
+    registerAgentConversation, updateAgentConversationCheckpoint,
+  } = handoverApi();
+  const identity = conversation({ agentConversationId: 'pair-updated-at-session' });
+  const registered = registerAgentConversation(root, identity);
+  updateAgentConversationCheckpoint(root, { ...identity, now: 1_000, checkpoint: derivePairCheckpoint(root) });
+
+  appendPairEvent(root, {
+    event: 'phase.progressed', workId: 'work-handover', attemptId: '1.1-handover',
+    taskId: '1.1', phase: 'verifying',
+  });
+  recordAgentConversationStop(root, { ...identity, now: 5_000 });
+
+  const stored = readAgentConversationRegistry(root).conversations[registered.sourceKey];
+  assert.equal(stored.checkpoint_revision, 2);
+  assert.equal(
+    stored.checkpoint_updated_at,
+    new Date(5_000).toISOString(),
+    'a Stop-path re-derivation timestamps itself so the revision counter never outruns its audit trail',
+  );
+});
+
+test('observed Pair activity inside one unstopped turn keeps the conversation warm', t => {
+  const root = fixture(t);
+  const {
+    FRESHNESS_WINDOW_MS, assessAgentConversationFreshness, derivePairCheckpoint,
+    readAgentConversationRegistry, recordAgentConversationActivity, registerAgentConversation,
+    updateAgentConversationCheckpoint,
+  } = handoverApi();
+  const identity = conversation({ agentConversationId: 'pair-activity-session' });
+  const registered = registerAgentConversation(root, identity);
+  updateAgentConversationCheckpoint(root, { ...identity, checkpoint: derivePairCheckpoint(root) });
+
+  const dispatchedAt = 1_000 + (FRESHNESS_WINDOW_MS / 2);
+  const touched = recordAgentConversationActivity(root, { ...identity, now: dispatchedAt });
+  assert.equal(touched.status, 'warm');
+  assert.equal(
+    readAgentConversationRegistry(root).conversations[registered.sourceKey].last_active_at,
+    new Date(dispatchedAt).toISOString(),
+  );
+
+  const assessed = assessAgentConversationFreshness(root, {
+    ...identity,
+    now: 1_000 + FRESHNESS_WINDOW_MS + 1_000,
+  });
+  assert.equal(assessed.status, 'warm', 'a dispatching turn is live work, not staleness');
+});
+
+test('observed Pair activity stops extending liveness past the unstopped-turn ceiling', t => {
+  const root = fixture(t);
+  const {
+    FRESHNESS_WINDOW_MS, MAX_UNSTOPPED_ACTIVITY_MS, assessAgentConversationFreshness, derivePairCheckpoint,
+    recordAgentConversationActivity, registerAgentConversation, updateAgentConversationCheckpoint,
+  } = handoverApi();
+  const identity = conversation({ agentConversationId: 'pair-runaway-session' });
+  registerAgentConversation(root, identity);
+  updateAgentConversationCheckpoint(root, { ...identity, checkpoint: derivePairCheckpoint(root) });
+
+  // An accepted touch must not become the new ceiling anchor, or a dispatch loop would extend
+  // itself indefinitely one touch at a time.
+  recordAgentConversationActivity(root, { ...identity, now: 1_000 + MAX_UNSTOPPED_ACTIVITY_MS - 1 });
+  const beyond = 1_000 + MAX_UNSTOPPED_ACTIVITY_MS + 1;
+  const touched = recordAgentConversationActivity(root, { ...identity, now: beyond });
+
+  assert.equal(touched.status, 'unstopped-ceiling');
+  const assessed = assessAgentConversationFreshness(root, {
+    ...identity,
+    now: beyond + FRESHNESS_WINDOW_MS,
+  });
+  assert.equal(assessed.status, 'cold', 'a wedged loop cannot hold the gate open forever');
+});
+
+test('observed activity never resurrects a sealed Agent Conversation', t => {
+  const root = fixture(t);
+  const {
+    readAgentConversationRegistry, recordAgentConversationActivity, registerAgentConversation,
+    sealAgentConversationHandover, updateAgentConversationCheckpoint,
+  } = handoverApi();
+  const identity = conversation({ agentConversationId: 'pair-sealed-activity-session' });
+  const registered = registerAgentConversation(root, identity);
+  updateAgentConversationCheckpoint(root, { ...identity, checkpoint: checkpoint() });
+  sealAgentConversationHandover(root, { ...identity, now: 2_000 });
+
+  const touched = recordAgentConversationActivity(root, { ...identity, now: 3_000 });
+
+  assert.equal(touched.status, 'sealed');
+  assert.equal(
+    readAgentConversationRegistry(root).conversations[registered.sourceKey].last_active_at,
+    new Date(1_000).toISOString(),
+  );
+});
+
+// An unregistered conversation whose Stop carries no transcript is deliberately a visible failure
+// when general handovers are enabled, not an inert no-op: the opt-in promises every conversation a
+// handover, so a runtime that cannot supply a transcript must surface rather than silently void it.
+// That contract is covered by handover-gate.integration.test.js ('enabled general handover fails
+// visibly when Stop has no exact provider transcript'); this note records that the coverage gap was
+// closed by the policy switch instead of by weakening that failure.
+
+test('a Pair Stop whose transcript carries no recoverable direction still checkpoints repository authority', t => {
+  const root = fixture(t);
+  const {
+    derivePairCheckpoint, prepareAgentConversationStop, readAgentConversationRegistry,
+    registerAgentConversation, updateAgentConversationCheckpoint,
+  } = handoverApi();
+  const identity = conversation({ runtime: 'claude', agentConversationId: 'pair-empty-transcript-session' });
+  const registered = registerAgentConversation(root, identity);
+  updateAgentConversationCheckpoint(root, { ...identity, checkpoint: derivePairCheckpoint(root) });
+  // A transcript whose entries belong to another conversation identity: recovery rejects it, which
+  // must cost the conversation layer rather than the whole Stop.
+  const foreign = path.join(root, 'pair-empty-transcript-session.jsonl');
+  fs.writeFileSync(foreign, `${JSON.stringify({
+    type: 'assistant', sessionId: 'a-different-conversation', timestamp: '2026-07-29T10:00:00.000Z',
+    message: { role: 'assistant', content: [{ type: 'text', text: 'Unrelated conclusion.' }] },
+  })}\n`);
+
+  const prepared = prepareAgentConversationStop(root, { ...identity, transcriptPath: foreign, now: 2_000 });
+
+  assert.equal(prepared.status, 'registered');
+  const stored = readAgentConversationRegistry(root).conversations[registered.sourceKey];
+  assert.equal(stored.checkpoint.core_anchor, 'Continue Pair Work work-handover from repository authority.');
+  assert.equal(stored.checkpoint_revision, 1, 'an unusable transcript writes no revision');
+});
