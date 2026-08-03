@@ -13,13 +13,48 @@ const {
 } = require('./lib/pair-store');
 
 function parseArgs(argv) {
-  const result = { json: false, workId: null };
+  const result = { json: false, timeline: false, workId: null };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
     if (arg === '--json') result.json = true;
+    else if (arg === '--timeline') result.timeline = true;
     else if (arg === '--work') result.workId = argv[++index];
     else if (arg === '--help' || arg === '-h') result.help = true;
     else throw new Error(`unsupported option ${arg}`);
+  }
+  if (result.timeline && !result.workId) throw new Error('--timeline requires --work WORK_ID');
+  return result;
+}
+
+const TIMELINE_LIMIT_BYTES = 32 * 1024;
+const TIMELINE_EVENTS = new Set([
+  'work-opened',
+  'design-check-recorded',
+  'verification-finished',
+  'checkpoint-created',
+  'review-recorded',
+  'review-feedback-recorded',
+  'slice-accepted',
+  'completion-verification-finished',
+  'work-completed',
+  'review-guidance-proposed',
+  'review-guidance-decided',
+]);
+const TIMELINE_FIELDS = [
+  'sequence', 'at', 'event', 'review_slice_id', 'lifecycle', 'status', 'route',
+  'base_commit', 'checkpoint_commit', 'head_commit', 'changed_path_count',
+  'review_outcome_id', 'finding_id', 'finding_count', 'verdict', 'disposition',
+  'correction_count', 'proposal_id', 'decision',
+];
+
+function timeline(events) {
+  const selected = events.filter(event => TIMELINE_EVENTS.has(event.event)).map(event => Object.fromEntries(
+    TIMELINE_FIELDS.filter(field => event[field] !== undefined && event[field] !== null).map(field => [field, event[field]]),
+  ));
+  const result = { event_count: selected.length, omitted_event_count: 0, events: selected };
+  while (result.events.length > 0 && Buffer.byteLength(JSON.stringify(result), 'utf8') > TIMELINE_LIMIT_BYTES) {
+    result.events.shift();
+    result.omitted_event_count++;
   }
   return result;
 }
@@ -34,7 +69,7 @@ function workIds(root, selected) {
     .sort();
 }
 
-function summarize(root, workId) {
+function summarize(root, workId, options = {}) {
   const paths = workPaths(root, workId);
   const state = readJson(paths.state);
   if (!state) return null;
@@ -54,12 +89,18 @@ function summarize(root, workId) {
     work_id: workId,
     lifecycle: state.lifecycle,
     branch: state.branch,
+    worktree: state.worktree,
+    base_commit: state.base_commit,
     head_commit: state.head_commit,
+    spec_ref: state.spec_ref,
+    manifest_ref: state.manifest_ref,
+    next_action: state.next_action,
     slices: state.slices.map(slice => ({
       id: slice.id,
       status: slice.status,
       route: slice.route,
       correction_count: slice.correction_count,
+      base_commit: slice.base_commit,
       checkpoint_commit: slice.checkpoint_commit,
     })),
     totals,
@@ -68,6 +109,7 @@ function summarize(root, workId) {
       findings: events.filter(event => event.event === 'review-recorded').reduce((sum, event) => sum + (event.finding_count || 0), 0),
       dispositions,
     },
+    ...(options.timeline ? { timeline: timeline(events) } : {}),
     updated_at: state.updated_at,
   };
 }
@@ -80,18 +122,26 @@ function render(report) {
     `  tokens input ${report.totals.input_tokens}, cached ${report.totals.cached_input_tokens}, output ${report.totals.output_tokens}`,
     `  review outcomes ${report.review.outcomes}, findings ${report.review.findings}; feedback ${JSON.stringify(report.review.dispositions)}`,
   ];
+  if (report.timeline) {
+    lines.push(`  timeline ${report.timeline.event_count} events; ${report.timeline.omitted_event_count} omitted from bounded output`);
+    for (const event of report.timeline.events) {
+      const slice = event.review_slice_id ? ` ${event.review_slice_id}` : '';
+      const detail = event.status !== undefined ? ` status=${event.status}` : event.disposition ? ` ${event.disposition}` : '';
+      lines.push(`  ${event.sequence} ${event.at} ${event.event}${slice}${detail}`);
+    }
+  }
   return lines.join('\n');
 }
 
 function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   if (options.help) {
-    console.log('Usage: pair-report [--work WORK_ID] [--json]\n\nSummarize compact Evidence-at-Commit state from the Git common directory.');
+    console.log('Usage: pair-report [--work WORK_ID] [--timeline] [--json]\n\nSummarize compact Evidence-at-Commit state from the Git common directory. Timeline output is bounded and requires --work.');
     return;
   }
   const root = repositoryRoot(process.cwd());
   const selected = options.workId || (workIds(root).length === 0 ? readCurrentWork(root)?.work_id : null);
-  const reports = workIds(root, selected).map(workId => summarize(root, workId)).filter(Boolean);
+  const reports = workIds(root, selected).map(workId => summarize(root, workId, { timeline: options.timeline })).filter(Boolean);
   if (options.json) console.log(JSON.stringify(reports, null, 2));
   else if (reports.length === 0) console.log('pair-report: no Work recorded');
   else console.log(reports.map(render).join('\n\n'));
@@ -104,4 +154,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { main, summarize };
+module.exports = { main, summarize, timeline };

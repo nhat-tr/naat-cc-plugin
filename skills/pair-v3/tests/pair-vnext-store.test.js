@@ -21,7 +21,7 @@ const {
 } = require('../scripts/lib/architecture-routing');
 const { validateManifest } = require('../scripts/lib/review-slice-manifest');
 const { createPairWorktree, hydrateWorktree } = require('../scripts/lib/pair-worktree');
-const { summarize } = require('../scripts/pair-report');
+const { summarize, timeline } = require('../scripts/pair-report');
 const { listReviewOutcomes, recordReviewOutcome } = require('../scripts/lib/review-evidence');
 
 function repository(t) {
@@ -190,6 +190,30 @@ test('Pair report reads compact common-directory state instead of historical att
   assert.equal(report.review.findings, 1);
   assert.equal(report.review.dispositions['false-positive'], 1);
   assert.ok(fs.statSync(workPaths(root, 'work-report').state).size < 16 * 1024);
+});
+
+test('Pair report timeline is bounded and contains only compact review history evidence', t => {
+  const rows = Array.from({ length: 700 }, (_value, index) => ({
+    sequence: index + 1,
+    at: '2026-08-03T00:00:00.000Z',
+    event: index % 2 ? 'review-recorded' : 'review-feedback-recorded',
+    review_slice_id: `S${index % 40}`,
+    review_outcome_id: `review-${index}`,
+    finding_id: `finding-${index}`,
+    disposition: 'false-positive',
+    prompt: 'must not appear',
+    patch: 'must not appear',
+    diagnostic: 'must not appear',
+  }));
+  rows.push({ sequence: 701, at: '2026-08-03T00:00:01.000Z', event: 'provider-finished', input_tokens: 999 });
+
+  const result = timeline(rows);
+  const serialized = JSON.stringify(result);
+  assert.equal(result.event_count, 700);
+  assert.ok(result.omitted_event_count > 0);
+  assert.ok(Buffer.byteLength(serialized, 'utf8') <= 32 * 1024);
+  assert.doesNotMatch(serialized, /must not appear|provider-finished|input_tokens/u);
+  assert.equal(result.events.at(-1).sequence, 700);
 });
 
 test('Pair state stays below 16 KiB with forty compact accepted slices and only recent invocation detail', t => {

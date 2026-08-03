@@ -50,6 +50,7 @@ Pair is a local orchestration layer. It does not run inside the product and intr
 | Component | Responsibility | Must not own |
 |---|---|---|
 | `pair-cli` | Parse commands and render bounded status/evaluation summaries | Workflow policy or model history |
+| `pair-report` | Project all Works or one bounded transition timeline for local history tools | Raw prompts, patches, diagnostics, or provider invocation history |
 | `pair-engine` | Advance one persisted lifecycle transition, dispatch providers, verify, checkpoint, route, and pause | Provider conversation continuity |
 | `review-slice-manifest` | Validate ordered Review Slices and Acceptance Criteria coverage | Design decisions, source excerpts, or tests inventories |
 | `architecture-routing` | Normalize a declared Architecture Risk and inspect a checkpoint diff for risk signals | A closed list of all possible architecture concerns |
@@ -94,6 +95,20 @@ Canonical local Pair data lives under the repository's Git common directory, so 
 `state.json` is the current lifecycle projection used by the engine. `events.jsonl` is an audit trail of small references and deltas; the current implementation does not replay it to reconstruct a missing state file. Git refs keep checkpoint commits and immutable evidence blobs reachable, but local Pair history is intentionally lost when the repository clone is deleted.
 
 Accepted slices retain only identifiers, route, correction count, and base/checkpoint commits. Changed paths are reconstructed from the immutable commit range when composition analysis needs them. Invocation history is reduced to cumulative totals plus the latest three summaries.
+
+## History access
+
+`pair-report --json` is the stable read model for history UIs. A selected Work
+may request `--work <id> --timeline`; this allowlists meaningful lifecycle,
+checkpoint, review, feedback, and guidance transitions while excluding raw event
+payloads and provider/token events. Timeline JSON is capped at 32 KiB by dropping
+the oldest projected rows and reporting `omitted_event_count`.
+
+The Neovim `PairHistory` client also discovers pre-vNext `.pair/runs/*` and
+`.pair-archive/*` directories. Those stores remain read-only. Discovery reads
+only directory metadata; preview reads at most 16 KiB from a small Markdown
+status/spec/plan artifact. Large legacy JSON is neither parsed on picker startup
+nor added to future model context.
 
 ## Review Slice lifecycle
 
@@ -217,6 +232,7 @@ Pair never merges automatically. After completion, the human reviews and merges 
 | Review Feedback row | 2 KiB | yes, append-only | never wholesale |
 | Pair event row | 4 KiB | yes, append-only | never |
 | `state.json` | 16 KiB | yes | status projection, not prompt history |
+| selected history timeline | 32 KiB | derived on demand | never |
 | Review Evaluation Bank | 32 KiB | yes/offline | never in runtime review |
 | Review Evaluation result | 16 KiB | yes | normalized proposal metrics only |
 | Review Guidance index | 32 KiB, 16 active rules | yes | maximum 3 selected rules |
@@ -249,6 +265,7 @@ These are explicit extension seams. Improvements should strengthen deterministic
 ## Code map
 
 - CLI: `skills/pair-v3/scripts/pair-cli`
+- History projection: `skills/pair-v3/scripts/pair-report`
 - Workflow engine: `skills/pair-v3/scripts/lib/pair-engine.js`
 - Git common-directory store: `skills/pair-v3/scripts/lib/pair-store.js`
 - Worktree hydration: `skills/pair-v3/scripts/lib/pair-worktree.js`
