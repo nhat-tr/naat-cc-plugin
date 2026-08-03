@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "status": { "enum": ["completed", "design-required", "blocked"] },
+    "architecture_risk": { "type": ["string", "null"], "minLength": 1, "maxLength": 240 },
+    "design_check": {
+      "type": ["object", "null"],
+      "properties": {
+        "seam": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "ownership": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "runtime": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "contract": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "alternative": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "proof": { "type": "string", "minLength": 1, "maxLength": 180 }
+      },
+      "required": ["seam", "ownership", "runtime", "contract", "alternative", "proof"],
+      "additionalProperties": false
+    },
+    "failure_proof": {
+      "type": ["object", "null"],
+      "properties": {
+        "boundary": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "method": { "enum": ["base-reproduction", "unit", "integration", "contract", "e2e", "runtime", "manual"] },
+        "negative_control": { "type": "string", "minLength": 1, "maxLength": 400 }
+      },
+      "required": ["boundary", "method", "negative_control"],
+      "additionalProperties": false
+    },
+    "blocker": { "type": ["string", "null"], "maxLength": 500 }
+  },
+  "required": ["status", "architecture_risk", "design_check", "failure_proof", "blocker"],
+  "additionalProperties": false
+}

@@ -13,7 +13,6 @@ const hooksFile = path.resolve(__dirname, '../../../hooks/hooks.json');
 const hookValidator = path.resolve(__dirname, '../../../scripts/ci/validate-hooks.js');
 const installer = path.resolve(__dirname, '../../../scripts/install-runtime.js');
 const pairTask = path.resolve(__dirname, '../scripts/pair-task');
-const pairApi = require('../scripts/pair-task');
 const orient = path.resolve(__dirname, '../scripts/pair-orient');
 
 function fixture(t) {
@@ -134,78 +133,6 @@ test('native Codex and Claude stale responses use their exact blocking shapes', 
   assert.deepEqual(Object.keys(claudeResponse).sort(), ['decision', 'reason']);
   assert.equal(claudeResponse.decision, 'block');
   assert.match(claudeResponse.reason, /--fresh-from handover-[a-f0-9-]{36} --runtime claude/u);
-});
-
-test('Pair registers the native coordinator identity independently of worker runtime routing', t => {
-  for (const [nativeRuntime, workerRuntime] of [['claude', 'codex'], ['codex', 'claude']]) {
-    const root = fixture(t);
-    fs.writeFileSync(path.join(root, 'base.txt'), 'base\n');
-    childProcess.spawnSync('git', ['add', 'base.txt'], { cwd: root });
-    childProcess.spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'base'], { cwd: root });
-    fs.writeFileSync(path.join(root, '.claude-loop.md'), [
-      '# Goal: native identity',
-      '## Acceptance Criteria',
-      '- [ ] native hook identity remains registered',
-      '## Tasks',
-      '- [ ] record native coordinator identity - files: `identity.txt`',
-    ].join('\n'));
-    const bin = path.join(root, 'fake-runtime-bin');
-    fs.mkdirSync(bin);
-    for (const runtime of ['codex', 'claude']) {
-      fs.writeFileSync(path.join(bin, runtime), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    }
-    const env = {
-      ...process.env,
-      PATH: `${bin}${path.delimiter}${process.env.PATH || ''}`,
-      CODEX_THREAD_ID: '',
-      CODEX_SANDBOX: '',
-      CLAUDECODE: '',
-      CLAUDE_CODE_SESSION_ID: '',
-      CLAUDE_SESSION_ID: '',
-      CLAUDE_SESSION_ID_OVERRIDE: '',
-      PAIR_REVIEW_TRANSPORT: 'direct',
-    };
-    const sessionId = `${nativeRuntime}-coordinator-with-${workerRuntime}-worker`;
-    if (nativeRuntime === 'codex') env.CODEX_THREAD_ID = sessionId;
-    else env.CLAUDE_CODE_SESSION_ID = sessionId;
-    const started = childProcess.spawnSync(process.execPath, [pairTask, '--runtime', workerRuntime, '--once', '--inline'], {
-      cwd: root, encoding: 'utf8', env,
-    });
-    assert.equal(started.status, 0, started.stdout + started.stderr);
-
-    const before = registry(root);
-    const conversations = Object.values(before.conversations);
-    assert.equal(conversations.length, 1);
-    assert.equal(conversations[0].runtime, nativeRuntime);
-    assert.equal(conversations[0].kind, 'pair');
-    const sourceKey = Object.keys(before.conversations)[0];
-    const stoppedAt = Date.now() + 10_000;
-    invoke(root, nativeRuntime, {
-      hook_event_name: 'Stop', session_id: sessionId, now: stoppedAt,
-    });
-    const after = registry(root);
-    assert.deepEqual(Object.keys(after.conversations), [sourceKey]);
-    assert.equal(after.conversations[sourceKey].last_active_at, new Date(stoppedAt).toISOString());
-    assert.equal(invoke(root, nativeRuntime, {
-      hook_event_name: 'UserPromptSubmit', session_id: sessionId, now: stoppedAt + 1,
-    }), null);
-    const stale = invoke(root, nativeRuntime, {
-      hook_event_name: 'UserPromptSubmit', session_id: sessionId,
-      now: stoppedAt + FRESHNESS_WINDOW_MS,
-    });
-    assert.equal(stale.decision, 'block');
-    const handoverId = stale.reason.match(/handover-[a-f0-9-]{36}/u)?.[0];
-    const bundle = handover.readAgentConversationHandover(root, handoverId);
-    assert.equal(bundle.manifest.pair_work.work_id, null);
-    assert.equal(bundle.manifest.pair_work.projection_path, '.pair/state.json');
-    const adopted = handover.adoptAgentConversationHandover(root, {
-      handoverId,
-      runtime: nativeRuntime,
-      agentConversationId: `${sessionId}-fresh`,
-      now: stoppedAt + FRESHNESS_WINDOW_MS + 1,
-    });
-    assert.equal(adopted.status, 'adopted');
-  }
 });
 
 test('seals one handover on the first stale prompt and records registered Stop activity', t => {
@@ -338,7 +265,8 @@ test('Codex and Claude install one coordinated Stop hook while UserPromptSubmit 
   assert.equal(manifest.hooks.Stop[0].hooks.length, 1);
   assert.match(manifest.hooks.Stop[0].hooks[0].command, /stop-gate\.sh/u);
   assert.doesNotMatch(manifest.hooks.Stop[0].hooks[0].command, /handover-gate\.sh/u);
-  assert.match(installerSource, /hooks\/handover-gate\.sh/u);
+  assert.match(installerSource, /function installRuntimeHooks/u);
+  assert.match(installerSource, /path\.join\(ROOT_DIR, 'hooks', 'hooks\.json'\)/u);
   const coordinatedStopGate = fs.readFileSync(path.resolve(__dirname, '../../../hooks/stop-gate.sh'), 'utf8');
   assert.match(coordinatedStopGate, /^exec node /mu);
 });
@@ -751,34 +679,6 @@ test('exact override permits one prompt and blocks Stop until that turn refreshe
   assert.equal(recovered.status, 'adopted');
 });
 
-test('status orientation doctor and hooks agree on the sealed Agent Conversation Handover', t => {
-  const root = fixture(t);
-  const identity = registerWarmConversation(root);
-  const hook = invoke(root, 'codex', {
-    hook_event_name: 'UserPromptSubmit', session_id: identity.agentConversationId,
-    now: 1_000 + FRESHNESS_WINDOW_MS,
-  });
-  const handoverId = hook.reason.match(/handover-[a-f0-9-]{36}/u)[0];
-  const status = childProcess.spawnSync(process.execPath, [pairTask, '--status', '--json'], {
-    cwd: root, encoding: 'utf8',
-  });
-  const orientation = childProcess.spawnSync(process.execPath, [orient], {
-    cwd: root, encoding: 'utf8', input: `${JSON.stringify({ cwd: root })}\n`,
-  });
-  const doctor = childProcess.spawnSync(process.execPath, [pairTask, '--doctor'], {
-    cwd: root, encoding: 'utf8',
-  });
-  assert.equal(status.status, 0, status.stderr);
-  assert.equal(orientation.status, 0, orientation.stderr);
-  for (const output of [hook.reason, JSON.stringify(JSON.parse(status.stdout)), orientation.stdout]) {
-    assert.match(output, new RegExp(handoverId));
-    assert.match(output, /plain terminal outside any agent conversation/iu);
-    assert.match(output, /--fresh-from/iu);
-    assert.match(output, /--adopt-handover/iu);
-  }
-  assert.match(doctor.stdout, new RegExp(handoverId));
-});
-
 test('SessionStart orientation eagerly seals an abandoned cold Agent Conversation before showing the projection', t => {
   const root = fixture(t);
   const identity = { runtime: 'claude', agentConversationId: 'abandoned-orient-session', kind: 'brainstorming', now: 1_000 };
@@ -850,90 +750,38 @@ test('orientation reports an unregistered Agent Conversation is not gated and st
   assert.equal(identity.agentConversationId, 'registered-not-current');
 });
 
-test('doctor treats unavailable Freshness Gate state as failure and healthy cold state as warning', t => {
+test('freshness status orientation and hooks agree on the sealed Agent Conversation Handover', t => {
   const root = fixture(t);
-  registerWarmConversation(root, 'codex', 'doctor-severity-agent');
-  const healthyCold = handover.freshnessProjection(root, 1_000 + FRESHNESS_WINDOW_MS);
-  assert.equal(healthyCold.unavailable, undefined);
-  assert.equal(pairApi.freshnessDoctorLevel(healthyCold), 'warn');
-
-  const registryFile = handover.handoverPaths(root).registry;
-  fs.writeFileSync(registryFile, '{not-json\n');
-  const unavailable = handover.freshnessProjection(root, 1_000 + FRESHNESS_WINDOW_MS);
-  assert.equal(unavailable.unavailable, true);
-  assert.equal(pairApi.freshnessDoctorLevel(unavailable), 'fail');
+  const identity = registerWarmConversation(root);
+  const hook = invoke(root, 'codex', {
+    hook_event_name: 'UserPromptSubmit', session_id: identity.agentConversationId,
+    now: 1_000 + FRESHNESS_WINDOW_MS,
+  });
+  const handoverId = hook.reason.match(/handover-[a-f0-9-]{36}/u)[0];
+  const status = childProcess.spawnSync(process.execPath, [pairTask, '--freshness-status'], { cwd: root, encoding: 'utf8' });
+  const orientation = childProcess.spawnSync(process.execPath, [orient], {
+    cwd: root, encoding: 'utf8', input: `${JSON.stringify({ cwd: root })}\n`,
+  });
+  assert.equal(status.status, 0, status.stderr);
+  assert.equal(orientation.status, 0, orientation.stderr);
+  for (const output of [hook.reason, status.stdout, orientation.stdout]) {
+    assert.match(output, new RegExp(handoverId));
+    assert.match(output, /--fresh-from/iu);
+    assert.match(output, /--adopt-handover/iu);
+  }
 });
 
-test('human and compact status expose warm age deadline checkpoint digest and next safe action', t => {
+test('freshness status exposes warm age deadline checkpoint digest and next safe action', t => {
   const root = fixture(t);
   registerWarmConversation(root, 'codex', 'visible-warm-agent', 1_000);
-  const human = childProcess.spawnSync(process.execPath, [pairTask, '--status'], {
+  const status = childProcess.spawnSync(process.execPath, [pairTask, '--freshness-status'], {
     cwd: root, encoding: 'utf8', env: { ...process.env, PAIR_NOW_MS: String(1_000 + 30 * 60 * 1000) },
   });
-  const compact = childProcess.spawnSync(process.execPath, [pairTask, '--freshness-status'], {
-    cwd: root, encoding: 'utf8', env: { ...process.env, PAIR_NOW_MS: String(1_000 + 30 * 60 * 1000) },
-  });
-  assert.equal(human.status, 0, human.stderr);
-  assert.equal(compact.status, 0, compact.stderr);
-  for (const output of [human.stdout, compact.stdout]) {
-    assert.match(output, /codex\/pair.*warm/iu);
-    assert.match(output, /age/iu);
-    assert.match(output, /deadline/iu);
-    assert.match(output, /checkpoint.*r1/iu);
-    assert.match(output, /sha256/iu);
-    assert.match(output, /next safe action/iu);
-  }
-});
-
-test('doctor hook inspection rejects missing and broken installs and accepts one coordinated contract', t => {
-  const root = fixture(t);
-  const config = path.join(root, 'runtime-config');
-  const codexHome = path.join(config, 'codex');
-  const claudeHome = path.join(config, 'claude');
-  fs.mkdirSync(codexHome, { recursive: true });
-  fs.mkdirSync(claudeHome, { recursive: true });
-  const env = { ...process.env, CODEX_HOME: codexHome, CLAUDE_HOME: claudeHome };
-
-  for (const runtime of ['codex', 'claude']) {
-    const missing = pairApi.inspectInstalledHookContract(runtime, { root, env });
-    assert.equal(missing.ok, false);
-    assert.match(missing.detail, /missing/iu);
-  }
-
-  const repositoryRoot = path.resolve(__dirname, '../../..');
-  const canonicalClaude = fs.readFileSync(hooksFile, 'utf8')
-    .replaceAll('~/.local/share/my-claude-code', repositoryRoot);
-  const canonicalCodex = canonicalClaude.replaceAll('PAIR_HOOK_RUNTIME=claude', 'PAIR_HOOK_RUNTIME=codex');
-  const codexHooks = path.join(codexHome, 'hooks.json');
-  const claudeSettings = path.join(claudeHome, 'settings.json');
-  fs.writeFileSync(codexHooks, canonicalCodex);
-  fs.writeFileSync(claudeSettings, canonicalClaude);
-  for (const runtime of ['codex', 'claude']) {
-    const installed = pairApi.inspectInstalledHookContract(runtime, { root, env });
-    assert.equal(installed.ok, true, installed.detail);
-    assert.match(installed.detail, /coordinated/iu);
-  }
-
-  const noisyHookDirectory = path.join(root, 'my-claude-code', 'hooks');
-  fs.mkdirSync(noisyHookDirectory, { recursive: true });
-  const noisyStop = path.join(noisyHookDirectory, 'stop-gate.sh');
-  fs.writeFileSync(noisyStop, '#!/bin/sh\nprintf \'{"continue":false,"stopReason":"probe failure"}\\n\'\n', { mode: 0o755 });
-  const noisy = JSON.parse(canonicalCodex);
-  noisy.hooks.Stop[0].hooks[0].command = `PAIR_HOOK_RUNTIME=codex bash ${JSON.stringify(noisyStop)}`;
-  fs.writeFileSync(codexHooks, JSON.stringify(noisy));
-  const noisyProbe = pairApi.inspectInstalledHookContract('codex', { root, env });
-  assert.equal(noisyProbe.ok, false);
-  assert.match(noisyProbe.detail, /probe.*output|broken/iu);
-
-  fs.writeFileSync(codexHooks, canonicalClaude);
-  const wrongRuntime = pairApi.inspectInstalledHookContract('codex', { root, env });
-  assert.equal(wrongRuntime.ok, false);
-  assert.match(wrongRuntime.detail, /runtime.*codex|codex.*runtime/iu);
-
-  const broken = JSON.parse(canonicalCodex);
-  broken.hooks.Stop[0].hooks[0].command = 'PAIR_HOOK_RUNTIME=codex bash /missing/my-claude-code/hooks/stop-gate.sh';
-  fs.writeFileSync(codexHooks, JSON.stringify(broken));
-  const rejected = pairApi.inspectInstalledHookContract('codex', { root, env });
-  assert.equal(rejected.ok, false);
-  assert.match(rejected.detail, /broken/iu);
+  assert.equal(status.status, 0, status.stderr);
+  assert.match(status.stdout, /codex\/pair.*warm/iu);
+  assert.match(status.stdout, /age/iu);
+  assert.match(status.stdout, /deadline/iu);
+  assert.match(status.stdout, /checkpoint.*r1/iu);
+  assert.match(status.stdout, /sha256/iu);
+  assert.match(status.stdout, /next safe action/iu);
 });

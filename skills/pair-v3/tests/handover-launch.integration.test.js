@@ -10,7 +10,7 @@ const task = require('../scripts/pair-task');
 const handover = require('../scripts/lib/handover-state');
 const { blockReason } = require('../scripts/pair-handover-adapter');
 const { appendPairEvent, loadPairState, readPairEvents } = require('../scripts/lib/pair-state');
-const { takeoverWork } = require('../scripts/lib/pair-control');
+const { takeoverWork } = require('../scripts/lib/handover-takeover');
 
 function fixture(t) {
   const scratchBase = process.env.CLAUDE_SCRATCH_DIR || path.join(os.homedir(), '.claude-scratch');
@@ -69,9 +69,9 @@ test('plain provider-affine fresh launch is visible, synchronous, and uses no re
   const args = fs.readFileSync(argsFile, 'utf8');
   assert.doesNotMatch(args, /--(?:resume|continue|fork(?:-session)?)(?:=|\b)/iu);
   assert.match(args, new RegExp(sealed.handoverId));
-  assert.match(args, /prints the recovered bounded Agent Conversation Checkpoint/iu);
-  assert.match(args, /continue directly from its findings/iu);
-  assert.match(args, /without requesting the old transcript/iu);
+  assert.match(args, /Adopt Agent Conversation Handover/iu);
+  assert.match(args, /continue from checkpoint\.next_action/iu);
+  assert.match(args, /without requesting old transcript/iu);
 });
 
 test('explicit cross-provider launch requires an explicit runtime choice', t => {
@@ -261,7 +261,7 @@ test('auto adoption retry recovers an already adopted handover for the same nati
   });
 
   assert.equal(retried.status, 0, retried.stderr);
-  assert.match(retried.stdout, /adopted Agent Conversation Handover/u);
+  assert.equal(JSON.parse(retried.stdout).status, 'adopted');
   assert.equal(handover.readAgentConversationRegistry(root).handovers[sealed.handoverId].status, 'adopted');
 });
 
@@ -345,7 +345,7 @@ test('brainstorming CLI adoption redacts secrets inside accepted checkpoint fiel
   assert.equal(output.checkpoint.findings[0].reference, 'official Claude hook runtime inspection');
   assert.deepEqual(output.checkpoint.confirmed_choices, ['Use a sixty-minute deterministic pre-prompt hard gate.']);
   assert.equal(output.checkpoint.next_action, 'Continue the approved design from the recovered evidence.');
-  assert.match(output.recovery_instruction, /Continue directly.*next_action/iu);
+  assert.match(output.recovery_instruction, /Continue from checkpoint\.next_action/iu);
   assert.doesNotMatch(adopted.stdout, /FINDING_SECRET_CANARY/u);
   assert.equal(loadPairState(root).continuation.owner_session_id, ownerBefore, 'brainstorming adoption must not take Pair ownership');
 });
@@ -425,7 +425,7 @@ test('legacy-only Claude identity is rejected for handover adoption', t => {
     env: freshRuntimeEnv('', { CLAUDE_SESSION_ID: 'legacy-only-claude-session' }),
   });
   assert.notEqual(adopted.status, 0);
-  assert.match(adopted.stderr, /requires a native conversation identity/iu);
+  assert.match(adopted.stderr, /requires a native Agent Conversation identity/iu);
   assert.equal(handover.readAgentConversationRegistry(root).handovers[sealed.handoverId].status, 'sealed');
 });
 

@@ -9,17 +9,6 @@
     "status": { "$ref": "#/$defs/non_blank_text" },
     "spec": { "$ref": "#/$defs/digest_reference" },
     "active_pair_mirror": { "const": ".pair/spec.md" },
-    "plan": {
-      "type": "object",
-      "properties": {
-        "path": { "const": ".pair/plan.md" },
-        "sha256": { "$ref": "#/$defs/sha256" },
-        "status": { "$ref": "#/$defs/non_blank_text" },
-        "independent_review": { "$ref": "#/$defs/non_blank_text" }
-      },
-      "required": ["path", "sha256", "status", "independent_review"],
-      "additionalProperties": false
-    },
     "engineering_quality_contract": {
       "type": "object",
       "properties": {

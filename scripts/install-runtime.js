@@ -172,6 +172,13 @@ function installClaudeGlobal(manifest, pluginDir, dryRun, operations) {
   ensureDir(contextsDir, dryRun, operations);
 
   installRenderedFile(globalInstruction, path.join(claudeDir, 'CLAUDE.md'), pluginDir, dryRun, operations);
+  installRuntimeHooks({
+    target: path.join(claudeDir, 'settings.json'),
+    pluginDir,
+    runtime: 'claude',
+    dryRun,
+    operations,
+  });
 
   const assets = getAssetEntries(manifest);
   for (const asset of assets) {
@@ -226,6 +233,12 @@ function uninstallClaudeGlobal(manifest, dryRun, operations) {
 
   removeManagedPath(path.join(claudeDir, 'CLAUDE.md'), dryRun, operations);
   restoreBackup(path.join(claudeDir, 'CLAUDE.md'), dryRun, operations);
+  uninstallRuntimeHooks({
+    target: path.join(claudeDir, 'settings.json'),
+    pluginDir: ROOT_DIR,
+    dryRun,
+    operations,
+  });
 
   for (const asset of getAssetEntries(manifest)) {
     if (!asset.supported_runtimes.includes('claude')) {
@@ -392,65 +405,110 @@ function declareRuntimeDelivery(manifest, runtime, dryRun, operations) {
   }
 }
 
-function managedPairHook(entry) {
+function managedToolkitHook(entry, pluginDir) {
+  const installedHooksDir = `${path.resolve(pluginDir, 'hooks')}${path.sep}`;
   return (entry.hooks || []).some(hook => typeof hook.command === 'string' && (
-    hook.command.includes('my-claude-code/hooks/stop-gate.sh') ||
-    hook.command.includes('my-claude-code/hooks/handover-gate.sh') ||
-    hook.command.includes('my-claude-code/hooks/pair-owner.sh') ||
-    hook.command.includes('my-claude-code/hooks/brainstorm-register.sh') ||
-    hook.command.includes('/hooks/stop-gate.sh') ||
-    hook.command.includes('/hooks/handover-gate.sh') ||
-    hook.command.includes('/hooks/pair-owner.sh') ||
-    hook.command.includes('/hooks/brainstorm-register.sh')
+    hook.command.includes('my-claude-code/hooks/') ||
+    hook.command.includes(installedHooksDir) ||
+    hook.command.includes('⚠ VERIFY before done')
   ));
 }
 
-function installCodexHooks(codexDir, pluginDir, dryRun, operations) {
+function writeJsonAtomic(target, value) {
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const temporary = path.join(
+    path.dirname(target),
+    `.${path.basename(target)}.${process.pid}.${Date.now()}.tmp`,
+  );
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`);
+    fs.renameSync(temporary, target);
+  } finally {
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+  }
+}
+
+function renderRuntimeHookEntry(entry, pluginDir, runtime) {
+  return {
+    ...entry,
+    hooks: (entry.hooks || []).map(hook => ({
+      ...hook,
+      command: typeof hook.command === 'string'
+        ? hook.command
+          .replace(
+            /~\/\.local\/share\/my-claude-code\/hooks\/([A-Za-z0-9._-]+\.sh)/gu,
+            (_match, file) => JSON.stringify(path.join(pluginDir, 'hooks', file)),
+          )
+          .replaceAll('PAIR_HOOK_RUNTIME=claude', `PAIR_HOOK_RUNTIME=${runtime}`)
+        : hook.command,
+    })),
+  };
+}
+
+function installRuntimeHooks({ target, pluginDir, runtime, dryRun, operations }) {
   const source = path.join(ROOT_DIR, 'hooks', 'hooks.json');
-  const target = path.join(codexDir, 'hooks.json');
-  operations.push({ action: 'merge_hooks', source, target });
+  operations.push({ action: 'merge_hooks', source, target, runtime });
   if (dryRun) return;
 
   let current = { hooks: {} };
   if (fs.existsSync(target)) {
     current = JSON.parse(fs.readFileSync(target, 'utf8'));
-    if (!current.hooks) current = { hooks: current };
+    if (!current.hooks) {
+      current = runtime === 'claude'
+        ? { ...current, hooks: {} }
+        : { hooks: current };
+    }
   }
   const incoming = JSON.parse(fs.readFileSync(source, 'utf8'));
-  for (const [event, entries] of Object.entries(incoming.hooks || incoming)) {
-    const existing = (current.hooks[event] || []).filter(entry => !managedPairHook(entry));
-    const rendered = entries.map(entry => ({
-      ...entry,
-      hooks: (entry.hooks || []).map(hook => ({
-        ...hook,
-        command: typeof hook.command === 'string' && hook.command.includes('my-claude-code/hooks/stop-gate.sh')
-          ? `PAIR_HOOK_RUNTIME=codex bash ${JSON.stringify(path.join(pluginDir, 'hooks', 'stop-gate.sh'))}`
-          : typeof hook.command === 'string' && hook.command.includes('my-claude-code/hooks/handover-gate.sh')
-            ? `PAIR_HOOK_RUNTIME=codex bash ${JSON.stringify(path.join(pluginDir, 'hooks', 'handover-gate.sh'))}`
-          : typeof hook.command === 'string' && hook.command.includes('my-claude-code/hooks/pair-owner.sh')
-            ? `PAIR_HOOK_RUNTIME=codex bash ${JSON.stringify(path.join(pluginDir, 'hooks', 'pair-owner.sh'))}`
-          : typeof hook.command === 'string' && hook.command.includes('my-claude-code/hooks/brainstorm-register.sh')
-            ? `PAIR_HOOK_RUNTIME=codex bash ${JSON.stringify(path.join(pluginDir, 'hooks', 'brainstorm-register.sh'))}`
-            : hook.command,
-      })),
-    }));
+  const events = new Set([
+    ...Object.keys(current.hooks),
+    ...Object.keys(incoming.hooks || incoming),
+  ]);
+  for (const event of events) {
+    const entries = (incoming.hooks || incoming)[event] || [];
+    const existing = (current.hooks[event] || [])
+      .filter(entry => !managedToolkitHook(entry, pluginDir));
+    const rendered = entries.map(entry => renderRuntimeHookEntry(entry, pluginDir, runtime));
     current.hooks[event] = [...existing, ...rendered];
+    if (current.hooks[event].length === 0) delete current.hooks[event];
   }
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, `${JSON.stringify(current, null, 2)}\n`);
+  writeJsonAtomic(target, current);
 }
 
-function uninstallCodexHooks(codexDir, dryRun, operations) {
-  const target = path.join(codexDir, 'hooks.json');
+function uninstallRuntimeHooks({ target, pluginDir, dryRun, operations }) {
   operations.push({ action: 'remove_hooks', target });
   if (dryRun || !fs.existsSync(target)) return;
   const current = JSON.parse(fs.readFileSync(target, 'utf8'));
-  const hooks = current.hooks || current;
+  const hooks = current.hooks && typeof current.hooks === 'object' && !Array.isArray(current.hooks)
+    ? current.hooks
+    : Object.values(current).every(Array.isArray)
+      ? current
+      : null;
+  if (!hooks) return;
   for (const event of Object.keys(hooks)) {
-    hooks[event] = hooks[event].filter(entry => !managedPairHook(entry));
+    hooks[event] = hooks[event].filter(entry => !managedToolkitHook(entry, pluginDir));
     if (hooks[event].length === 0) delete hooks[event];
   }
-  fs.writeFileSync(target, `${JSON.stringify(current, null, 2)}\n`);
+  writeJsonAtomic(target, current);
+}
+
+function installCodexHooks(codexDir, pluginDir, dryRun, operations) {
+  installRuntimeHooks({
+    target: path.join(codexDir, 'hooks.json'),
+    pluginDir,
+    runtime: 'codex',
+    dryRun,
+    operations,
+  });
+}
+
+function uninstallCodexHooks(codexDir, dryRun, operations) {
+  uninstallRuntimeHooks({
+    target: path.join(codexDir, 'hooks.json'),
+    pluginDir: ROOT_DIR,
+    dryRun,
+    operations,
+  });
 }
 
 function installCodexGlobal(manifest, pluginDir, dryRun, operations) {
@@ -669,3 +727,8 @@ function main() {
 // Only run the installer when invoked directly. Requiring this module (for example to unit-test a
 // helper) must never trigger a global install.
 if (require.main === module) main();
+
+module.exports = {
+  installRuntimeHooks,
+  uninstallRuntimeHooks,
+};

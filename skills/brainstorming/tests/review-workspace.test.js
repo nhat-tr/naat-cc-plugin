@@ -10,7 +10,7 @@ const Ajv2020 = require('ajv/dist/2020').default;
 const {
   buildPatchSet,
   updatePatchSetReview,
-} = require('../../pair-v3/scripts/review-index.cjs');
+} = require('../scripts/feature-review-index.cjs');
 const { createBrainstormServer } = require('../scripts/server.cjs');
 const {
   documentRevision,

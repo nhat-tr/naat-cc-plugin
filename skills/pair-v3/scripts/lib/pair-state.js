@@ -205,6 +205,9 @@ function initialState() {
     in_flight_request: null,
     review_session: null,
     attempts: {},
+    settings: {
+      pause_after: 'off',
+    },
     continuation: {
       owner_session_id: null,
       owner_runtime: null,
@@ -313,6 +316,8 @@ function reducePairEvents(events) {
         if (state.active?.attempt_id === attemptId) state.active = null;
         state.lifecycle = ['accepted', 'discarded'].includes(event.disposition) ? 'ready' : 'recovering';
       }
+    } else if (event.event === 'settings.updated') {
+      if (event.settings?.pause_after) state.settings.pause_after = event.settings.pause_after;
     } else if (event.event === 'pause.requested') {
       state.continuation.pause_requested = true;
     } else if (event.event === 'pause.checkpointed') {
@@ -366,6 +371,9 @@ function reducePairEvents(events) {
         request_id: event.request_id || null,
         request_pid: event.request_pid || null,
         request_kind: event.request_kind || null,
+        task_id: taskId,
+        review_slice_id: event.review_slice_id || null,
+        review_round: event.review_round || null,
         attempt_id: attemptId,
         phase: eventPhase(event, state.active?.phase || state.lifecycle),
         started_at: event.at || null,

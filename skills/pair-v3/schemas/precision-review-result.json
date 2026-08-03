@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "verdict": { "enum": ["approve", "findings"] },
+    "findings": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": { "enum": ["BLOCKER", "MAJOR"] },
+          "claim": { "type": "string", "minLength": 1, "maxLength": 180 },
+          "scenario": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "evidence": {
+            "type": "object",
+            "properties": {
+              "commit": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" },
+              "path": { "type": "string", "minLength": 1, "maxLength": 240 },
+              "blob": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" },
+              "line_start": { "type": "integer", "minimum": 1 },
+              "line_end": { "type": "integer", "minimum": 1 }
+            },
+            "required": ["commit", "path", "blob", "line_start", "line_end"],
+            "additionalProperties": false
+          },
+          "impact": { "type": "string", "minLength": 1, "maxLength": 180 },
+          "pass_condition": { "type": "string", "minLength": 1, "maxLength": 240 }
+        },
+        "required": ["severity", "claim", "scenario", "evidence", "impact", "pass_condition"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["verdict", "findings"],
+  "additionalProperties": false
+}

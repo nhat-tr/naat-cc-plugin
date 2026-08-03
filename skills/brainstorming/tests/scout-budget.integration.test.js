@@ -5,8 +5,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const { buildReviewSliceManifest } = require('../../pair-v3/scripts/review-index.cjs');
-const { validPairPlan } = require('../../pair-v3/tests/support/pair-plan-fixture');
 const { createScratchDirectory } = require('./test-support');
 
 const scoutCli = path.resolve(__dirname, '../scripts/evidence-scout.cjs');
@@ -70,85 +68,6 @@ setTimeout(() => {
   return { scratch, root, eventLog, fakeCodex };
 }
 
-function git(root, ...args) {
-  const result = childProcess.spawnSync('git', args, { cwd: root, encoding: 'utf8' });
-  assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
-  return result.stdout.trim();
-}
-
-function sha256(value) {
-  return crypto.createHash('sha256').update(value).digest('hex');
-}
-
-function write(root, relativePath, content) {
-  const file = path.join(root, relativePath);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, content);
-}
-
-function canonicalManifestFixture(t, options = {}) {
-  const harness = createHarness(t, options.purpose || 'scout-canonical-manifest');
-  git(harness.root, 'init', '-q');
-  git(harness.root, 'config', 'user.email', 'scout@example.test');
-  git(harness.root, 'config', 'user.name', 'Scout Test');
-  const plan = options.plan || validPairPlan();
-  write(harness.root, 'src/greeting.js', 'module.exports = () => "hello";\n');
-  write(harness.root, 'tests/greeting.test.js', '// base unit evidence\n');
-  write(harness.root, 'tests/greeting.integration.test.js', '// base integration evidence\n');
-  git(harness.root, 'add', '.');
-  git(harness.root, 'commit', '-qm', 'base');
-  const baseTree = git(harness.root, 'rev-parse', 'HEAD^{tree}');
-
-  write(harness.root, 'src/greeting.js', options.source || [
-    "import { SessionStore } from './session-store.js';",
-    'export function createGreeting(name) {',
-    '  return `hello ${name}`;',
-    '}',
-    '',
-  ].join('\n'));
-  write(harness.root, 'tests/greeting.test.js', options.testSource || '// verifies named greeting\n');
-  git(harness.root, 'add', '.');
-  git(harness.root, 'commit', '-qm', 'head');
-  const headTree = git(harness.root, 'rev-parse', 'HEAD^{tree}');
-  const result = buildReviewSliceManifest({
-    repositoryRoot: harness.root,
-    workId: 'work-20260712-visual-companion-vnext',
-    plan,
-    baseTree,
-    headTree,
-    planDigest: sha256(plan),
-    indexerVersion: 'review-index.v1',
-  });
-  return { ...harness, manifest: result.manifest, baseTree, headTree };
-}
-
-function runCanonicalBatch(harness, options = {}) {
-  const manifestFile = path.join(harness.scratch, 'canonical-manifest.json');
-  const output = options.output || path.join(harness.scratch, 'canonical-result.json');
-  fs.writeFileSync(manifestFile, JSON.stringify(harness.manifest));
-  const result = childProcess.spawnSync(process.execPath, [
-    scoutCli,
-    'run-batch',
-    '--manifest', manifestFile,
-    '--root', harness.root,
-    '--output', output,
-    '--runtime', 'codex',
-    '--model', options.model || 'gpt-5.4-mini',
-    '--effort', 'low',
-    '--timeout-ms', String(options.timeoutMs || 5_000),
-  ], {
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      CLAUDE_SCRATCH_DIR: options.scratchRoot || harness.scratch,
-      BRAINSTORM_SCOUT_CODEX_BIN: harness.fakeCodex,
-      SCOUT_TEST_EVENT_LOG: harness.eventLog,
-      SCOUT_TEST_MODE: options.mode || '',
-    },
-  });
-  return { result, output };
-}
-
 function reviewSlice(index, changedFiles = 1, changedLines = 300) {
   return {
     review_slice_id: `slice-${String(index).padStart(3, '0')}`,
@@ -164,9 +83,9 @@ function reviewSlice(index, changedFiles = 1, changedLines = 300) {
   };
 }
 
-function runBatch(harness, name, reviewSlices) {
+function runBatchRaw(harness, name, reviewSlices, options = {}) {
   const manifest = path.join(harness.scratch, `${name}-manifest.json`);
-  const output = path.join(harness.scratch, `${name}-result.json`);
+  const output = options.output || path.join(harness.scratch, `${name}-result.json`);
   fs.writeFileSync(manifest, JSON.stringify({
     version: 1,
     work_id: 'work-20260712-visual-companion-vnext',
@@ -182,15 +101,23 @@ function runBatch(harness, name, reviewSlices) {
     '--runtime', 'codex',
     '--model', 'gpt-5.4-mini',
     '--effort', 'low',
-    '--timeout-ms', '5000',
+    '--timeout-ms', String(options.timeoutMs || 5_000),
   ], {
     encoding: 'utf8',
     env: {
       ...process.env,
+      CLAUDE_SCRATCH_DIR: options.scratchRoot || harness.scratch,
       BRAINSTORM_SCOUT_CODEX_BIN: harness.fakeCodex,
       SCOUT_TEST_EVENT_LOG: harness.eventLog,
+      SCOUT_TEST_MODE: options.mode || '',
     },
   });
+
+  return { processResult, output };
+}
+
+function runBatch(harness, name, reviewSlices) {
+  const { processResult, output } = runBatchRaw(harness, name, reviewSlices);
 
   assert.equal(processResult.status, 0, processResult.stderr);
   assert.ok(fs.existsSync(output), 'run-batch must write its merged evidence result');
@@ -306,72 +233,9 @@ test('an oversized Review Slice sends a deterministic shortlist and never sends 
   assert.ok(sentPrompts.every(prompt => !prompt.includes('changed line')));
 });
 
-test('run-batch consumes the canonical review-index manifest and derives exact changed lines from Git', t => {
-  const harness = canonicalManifestFixture(t);
-  const { result, output } = runCanonicalBatch(harness);
-
-  assert.equal(result.status, 0, result.stderr);
-  const batch = JSON.parse(fs.readFileSync(output, 'utf8'));
-  const numstat = git(
-    harness.root,
-    'diff',
-    '--no-ext-diff',
-    '--no-textconv',
-    '--no-renames',
-    '--numstat',
-    harness.baseTree,
-    harness.headTree,
-    '--',
-  );
-  const expectedChangedLines = numstat.split(/\r?\n/).filter(Boolean).reduce((total, line) => {
-    const [added, deleted] = line.split('\t');
-    return total + Number(added) + Number(deleted);
-  }, 0);
-
-  assert.equal(batch.work_id, harness.manifest.work_id);
-  assert.equal(batch.packets.reduce((total, packet) => total + packet.changed_line_count, 0), expectedChangedLines);
-  assert.deepEqual(
-    batch.packets.flatMap(packet => packet.review_slice_ids).sort(),
-    harness.manifest.review_slices.filter(slice => slice.actual_changes.length > 0).map(slice => slice.task_id).sort(),
-  );
-});
-
-test('canonical oversized Review Slice derives a useful local shortlist without caller annotations', t => {
-  const filler = Array.from({ length: 1_250 }, (_value, index) => `// changed-${index}`).join('\n');
-  const plan = validPairPlan();
-  const harness = canonicalManifestFixture(t, {
-    purpose: 'scout-canonical-oversized',
-    plan,
-    source: [
-      "import { SessionStore } from './session-store.js';",
-      'export class AgentConversationDelivery {}',
-      'export function createSession() { return new SessionStore(); }',
-      filler,
-      '',
-    ].join('\n'),
-    testSource: "test('createSession delivers once', () => {});\n",
-  });
-  const { result, output } = runCanonicalBatch(harness);
-
-  assert.equal(result.status, 0, result.stderr);
-  const batch = JSON.parse(fs.readFileSync(output, 'utf8'));
-  const oversized = batch.packets.flatMap(packet => packet.oversized_review_slices)
-    .find(item => item.review_slice_id === '1.1');
-  assert.ok(oversized);
-  assert.deepEqual(oversized.shortlist.public_symbols, [
-    'AgentConversationDelivery',
-    'createSession',
-  ]);
-  assert.ok(oversized.shortlist.boundary_crossings.some(item => item.includes('./session-store.js')));
-  assert.ok(oversized.shortlist.tests.some(item => item.includes('tests/greeting.test.js')));
-  assert.ok(oversized.shortlist.unknowns.length > 0);
-  const prompts = readEvents(harness.eventLog).filter(event => event.type === 'start').map(event => event.prompt);
-  assert.ok(prompts.every(prompt => !prompt.includes('changed-1249')));
-});
-
 test('a failed scout call is counted and persisted atomically instead of aborting the batch artifact', t => {
-  const harness = canonicalManifestFixture(t, { purpose: 'scout-failed-artifact' });
-  const { result, output } = runCanonicalBatch(harness, { mode: 'failed' });
+  const harness = createHarness(t, 'scout-failed-artifact');
+  const { processResult: result, output } = runBatchRaw(harness, 'failed', [reviewSlice(1)], { mode: 'failed' });
 
   assert.equal(result.status, 1);
   assert.ok(fs.existsSync(output), result.stderr);
@@ -383,43 +247,20 @@ test('a failed scout call is counted and persisted atomically instead of abortin
 });
 
 test('a timed-out scout call is persisted and run-batch rejects output outside CLAUDE_SCRATCH_DIR', t => {
-  const harness = canonicalManifestFixture(t, { purpose: 'scout-timeout-artifact' });
-  const timedOut = runCanonicalBatch(harness, { mode: 'timed_out', timeoutMs: 50 });
-  assert.equal(timedOut.result.status, 1);
-  assert.ok(fs.existsSync(timedOut.output), timedOut.result.stderr);
+  const harness = createHarness(t, 'scout-timeout-artifact');
+  const timedOut = runBatchRaw(harness, 'timed-out', [reviewSlice(1)], { mode: 'timed_out', timeoutMs: 50 });
+  assert.equal(timedOut.processResult.status, 1);
+  assert.ok(fs.existsSync(timedOut.output), timedOut.processResult.stderr);
   const batch = JSON.parse(fs.readFileSync(timedOut.output, 'utf8'));
   assert.equal(batch.calls[0].status, 'timed_out');
 
   const allowedScratch = path.join(harness.scratch, 'allowed');
   const outsideOutput = path.join(harness.scratch, 'outside', 'result.json');
-  const rejected = runCanonicalBatch(harness, {
+  const rejected = runBatchRaw(harness, 'outside', [reviewSlice(1)], {
     output: outsideOutput,
     scratchRoot: allowedScratch,
   });
-  assert.equal(rejected.result.status, 1);
-  assert.match(rejected.result.stderr, /CLAUDE_SCRATCH_DIR|scratch/i);
+  assert.equal(rejected.processResult.status, 1);
+  assert.match(rejected.processResult.stderr, /CLAUDE_SCRATCH_DIR|scratch/i);
   assert.equal(fs.existsSync(outsideOutput), false);
-});
-
-test('canonical packet evidence is invariant when local Git attributes classify text as binary', t => {
-  const harness = canonicalManifestFixture(t, { purpose: 'scout-git-attribute-invariance' });
-  const before = runCanonicalBatch(harness, {
-    output: path.join(harness.scratch, 'before-attributes.json'),
-  });
-  assert.equal(before.result.status, 0, before.result.stderr);
-
-  const infoAttributes = path.join(harness.root, '.git', 'info', 'attributes');
-  fs.mkdirSync(path.dirname(infoAttributes), { recursive: true });
-  fs.writeFileSync(infoAttributes, '*.js binary\n');
-  git(harness.root, 'config', 'diff.hostile-driver.command', 'false');
-  git(harness.root, 'config', 'diff.algorithm', 'histogram');
-  git(harness.root, 'config', 'diff.indentHeuristic', 'true');
-  const after = runCanonicalBatch(harness, {
-    output: path.join(harness.scratch, 'after-attributes.json'),
-  });
-  assert.equal(after.result.status, 0, after.result.stderr);
-
-  const beforeBatch = JSON.parse(fs.readFileSync(before.output, 'utf8'));
-  const afterBatch = JSON.parse(fs.readFileSync(after.output, 'utf8'));
-  assert.deepEqual(packetProjection(afterBatch), packetProjection(beforeBatch));
 });

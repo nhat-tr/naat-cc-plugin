@@ -66,71 +66,6 @@ with open(settings_file, "w") as f:
 EOF
 }
 
-install_hooks() {
-  local hooks_file="hooks/hooks.json"
-  local settings_file="$CLAUDE_DIR/settings.json"
-
-  [[ -f "$hooks_file" ]] || return 0
-  [[ -f "$settings_file" ]] || return 0
-
-  python3 - "$hooks_file" "$settings_file" <<'EOF'
-import json, sys
-hooks_file, settings_file = sys.argv[1], sys.argv[2]
-with open(hooks_file) as f:
-    plugin_hooks = json.load(f).get("hooks", {})
-with open(settings_file) as f:
-    settings = json.load(f)
-settings.setdefault("hooks", {})
-
-# Replace-by-marker: strip every previously-managed entry first, so hooks
-# removed/renamed in hooks.json can never strand stale copies in settings
-# (an orphaned disabled guard-read.sh hook once ran on every Read this way).
-MARKERS = ("my-claude-code", "⚠ VERIFY before done")
-def managed(entry):
-    return any(m in hook.get("command", "") for hook in entry.get("hooks", []) for m in MARKERS)
-for event in list(settings["hooks"].keys()):
-    settings["hooks"][event] = [e for e in settings["hooks"][event] if not managed(e)]
-
-for event, matchers in plugin_hooks.items():
-    settings["hooks"].setdefault(event, [])
-    existing = settings["hooks"][event]
-    for matcher in matchers:
-        if matcher not in existing:
-            existing.append(matcher)
-with open(settings_file, "w") as f:
-    json.dump(settings, f, indent=2)
-    f.write("\n")
-EOF
-}
-
-uninstall_hooks() {
-  local hooks_file="hooks/hooks.json"
-  local settings_file="$CLAUDE_DIR/settings.json"
-
-  [[ -f "$hooks_file" ]] || return 0
-  [[ -f "$settings_file" ]] || return 0
-
-  python3 - "$hooks_file" "$settings_file" <<'EOF'
-import json, sys
-hooks_file, settings_file = sys.argv[1], sys.argv[2]
-with open(hooks_file) as f:
-    plugin_hooks = json.load(f).get("hooks", {})
-with open(settings_file) as f:
-    settings = json.load(f)
-for event, matchers in plugin_hooks.items():
-    if event not in settings.get("hooks", {}):
-        continue
-    commands = {hook["command"] for matcher in matchers for hook in matcher.get("hooks", [])}
-    settings["hooks"][event] = [
-        entry for entry in settings["hooks"][event]
-        if not ({hook["command"] for hook in entry.get("hooks", [])} & commands)
-    ]
-with open(settings_file, "w") as f:
-    json.dump(settings, f, indent=2)
-    f.write("\n")
-EOF
-}
-
 check_prerequisites() {
   local missing=0
   for cmd in node npm kubectl; do
@@ -158,7 +93,6 @@ install_infra_deps() {
 if [[ "${1:-}" == "--uninstall" ]]; then
   node scripts/install-runtime.js --runtime claude --scope global --uninstall "${@:2}"
   uninstall_permissions
-  uninstall_hooks
   exit 0
 fi
 
@@ -168,5 +102,4 @@ install_infra_deps
 # CLI tools are manifest-driven inside install-runtime.js (installCliTools)
 node scripts/install-runtime.js --runtime claude --scope global "$@"
 install_permissions
-install_hooks
 info "Claude runtime install complete"

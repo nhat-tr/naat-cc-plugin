@@ -4,7 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const { createBrainstormServer } = require('../scripts/server.cjs');
-const reviewIndex = require('../../pair-v3/scripts/review-index.cjs');
+const reviewIndex = require('../scripts/feature-review-index.cjs');
 const { createScratchDirectory } = require('./test-support');
 
 const CAPABILITY = 'transport-current-capability';

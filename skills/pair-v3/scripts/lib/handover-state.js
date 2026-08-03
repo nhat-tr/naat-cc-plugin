@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { loadPairState, pairStatePaths, redactString } = require('./pair-state');
-const { takeoverWork } = require('./pair-control');
+const { takeoverWork } = require('./handover-takeover');
 const { deriveBrainstormingCheckpoint } = require('./brainstorm-checkpoint');
 const { recoverAgentConversationCheckpoint } = require('./conversation-checkpoint-recovery');
 

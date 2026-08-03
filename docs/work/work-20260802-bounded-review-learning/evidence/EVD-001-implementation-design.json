@@ -1,0 +1,785 @@
+{
+  "schema": 1,
+  "id": "EVD-001-implementation-design",
+  "work_id": "work-20260802-bounded-review-learning",
+  "kind": "implementation-design-contract",
+  "acceptance_criteria": [
+    "AC-1",
+    "AC-2",
+    "AC-3",
+    "AC-4",
+    "AC-5",
+    "AC-6",
+    "AC-7",
+    "AC-8",
+    "AC-9",
+    "AC-10",
+    "AC-11"
+  ],
+  "decision_record_ids": [],
+  "source": "pair-promote/repository-grounding",
+  "recorded_at": "2026-08-02T13:11:55Z",
+  "result": {
+    "schema": 1,
+    "spec": {
+      "path": "docs/work/work-20260802-bounded-review-learning/spec.md",
+      "sha256": "b32ef07d851ea9e6001ed5b0b409351b6a191c6f2adf333ba043047b2cb93125"
+    },
+    "repository_evidence": [
+      {
+        "path": "skills/pair-v3/scripts/pair-task",
+        "symbols": [
+          "assessAttempt",
+          "runReview",
+          "reviewPrompt",
+          "shouldRunTaskReview",
+          "shouldRunAnchorReview",
+          "finalizePairPlan",
+          "parseArgs",
+          "runControl"
+        ]
+      },
+      {
+        "path": "skills/pair-v3/scripts/lib/pair-core.js",
+        "symbols": [
+          "classifyOutcome"
+        ]
+      },
+      {
+        "path": "skills/pair-v3/scripts/lib/pair-state.js",
+        "symbols": [
+          "reducePairEvents",
+          "appendPairEvent"
+        ]
+      },
+      {
+        "path": "skills/pair-v3/scripts/lib/pair-control.js",
+        "symbols": [
+          "recordPauseCheckpoint",
+          "pauseWork",
+          "resumeWork"
+        ]
+      },
+      {
+        "path": "skills/pair-v3/scripts/lib/review-session.js",
+        "symbols": [
+          "buildReviewRuntimeCommand",
+          "writeReviewSession"
+        ]
+      },
+      {
+        "path": "skills/pair-v3/scripts/pair-report",
+        "symbols": [
+          "standaloneModelEvents"
+        ]
+      },
+      {
+        "path": "skills/pair-v3/schemas/review-result.json",
+        "symbols": [
+          "review result schema"
+        ]
+      },
+      {
+        "path": "metadata/runtime-asset-map.json",
+        "symbols": [
+          "cli.pair-report"
+        ]
+      },
+      {
+        "path": "skills/pair-v4/SKILL.md",
+        "symbols": [
+          "Review and Boundary Policy"
+        ]
+      },
+      {
+        "path": "UBIQUITOUS_LANGUAGE.md",
+        "symbols": [
+          "Work & Review Lineage"
+        ]
+      },
+      {
+        "path": "skills/pair-v3/tests/loop-modes.test.js",
+        "symbols": [
+          "review and pause integration patterns"
+        ]
+      },
+      {
+        "path": "skills/pair-v3/tests/pair-task.test.js",
+        "symbols": [
+          "review policy unit patterns"
+        ]
+      },
+      {
+        "path": "skills/pair-v3/tests/pair-contract-docs.test.js",
+        "symbols": [
+          "Pair documentation contract tests"
+        ]
+      },
+      {
+        "path": "package.json",
+        "symbols": [
+          "scripts.test:pair"
+        ]
+      }
+    ],
+    "decisions": [
+      {
+        "id": "IMP-001",
+        "outcome": "Count every Review Slice model request and permit one round-1 correction brief only",
+        "acceptance_criteria": [
+          "AC-1",
+          "AC-2"
+        ],
+        "depends_on": [],
+        "symbols": [
+          {
+            "path": "skills/pair-v3/scripts/pair-task",
+            "symbol": "assessAttempt",
+            "action": "modify"
+          },
+          {
+            "path": "skills/pair-v3/scripts/lib/pair-core.js",
+            "symbol": "classifyOutcome",
+            "action": "modify"
+          },
+          {
+            "path": "skills/pair-v3/scripts/lib/pair-state.js",
+            "symbol": "reducePairEvents",
+            "action": "modify"
+          },
+          {
+            "path": "skills/pair-v3/tests/review-rounds.test.js",
+            "symbol": "bounded review round tests",
+            "action": "add"
+          }
+        ],
+        "call_paths": [
+          "assessAttempt -> runReview request -> review.completed -> classifyOutcome -> zero or one correction brief"
+        ],
+        "contract": {
+          "before": [
+            "Review failure or correction can re-enter reviewing without a per-slice request ceiling"
+          ],
+          "after": [
+            "Every attempted reviewer request increments an immutable round; round 1 may emit one fixable implementation correction"
+          ],
+          "errors": [
+            "Invalid output and reviewer infrastructure failure consume the current round and remain evidence"
+          ]
+        },
+        "data_shapes": [
+          "review.completed {reviewOutcomeId, workId, reviewSliceId, attemptId, round, patchDigest, status, review, usage, reviewerSessionId}"
+        ],
+        "state_flow": [
+          "GREEN -> review round 1 -> accepted | one correction | persisted non-fixable outcome"
+        ],
+        "wiring": [
+          "assessAttempt reads round projection from Work events before invoking runReview"
+        ],
+        "failure_handling": [
+          "Reject a third request before model launch; never convert reviewer failure into an uncounted retry"
+        ],
+        "deletions": [
+          "Unbounded retry-review behavior in Pair v4"
+        ],
+        "pattern_references": [
+          {
+            "path": "skills/pair-v3/scripts/lib/pair-state.js",
+            "symbol": "appendPairEvent"
+          },
+          {
+            "path": "skills/pair-v3/tests/pair-task.test.js",
+            "symbol": "review policy unit patterns"
+          }
+        ],
+        "tests": [
+          {
+            "name": "review request counting and correction cap",
+            "file": "skills/pair-v3/tests/review-rounds.test.js",
+            "boundary": "unit",
+            "purpose": "prove at most two requests and one correction brief",
+            "red_signal": "current retry paths permit another request or correction"
+          }
+        ],
+        "verify": "node --test skills/pair-v3/tests/review-rounds.test.js",
+        "non_goals": [
+          "Change plan-review policy",
+          "Change deterministic verification retry behavior"
+        ]
+      },
+      {
+        "id": "IMP-002",
+        "outcome": "Make round 2 evidence-only and complete Work after cumulative deterministic verification without anchor or cumulative model review",
+        "acceptance_criteria": [
+          "AC-3",
+          "AC-9"
+        ],
+        "depends_on": [],
+        "symbols": [
+          {
+            "path": "skills/pair-v3/scripts/pair-task",
+            "symbol": "assessAttempt",
+            "action": "modify"
+          },
+          {
+            "path": "skills/pair-v3/scripts/pair-task",
+            "symbol": "finalizePairPlan",
+            "action": "modify"
+          },
+          {
+            "path": "skills/pair-v3/scripts/pair-task",
+            "symbol": "shouldRunAnchorReview",
+            "action": "delete"
+          },
+          {
+            "path": "skills/pair-v3/scripts/lib/pair-state.js",
+            "symbol": "reducePairEvents",
+            "action": "modify"
+          },
+          {
+            "path": "skills/pair-v3/tests/review-rounds.integration.test.js",
+            "symbol": "two-round lifecycle integration tests",
+            "action": "add"
+          }
+        ],
+        "call_paths": [
+          "corrected GREEN -> round 2 -> persist findings -> accept slice -> final deterministic verification -> work.completed"
+        ],
+        "contract": {
+          "before": [
+            "Anchor sampling and final cumulative review can add model calls; round-2 findings can re-enter correction"
+          ],
+          "after": [
+            "Round 2 never corrects or blocks; Work completion invokes no anchor or cumulative model reviewer"
+          ],
+          "errors": [
+            "Final deterministic verification failure remains blocking and preserves exact resume state"
+          ]
+        },
+        "data_shapes": [
+          "round-two Review Outcome has remediationRequired=false and pendingHumanReview=true when findings exist"
+        ],
+        "state_flow": [
+          "round-1 correction -> verifying -> round-2 -> accepting; final slice -> cumulative-verification -> complete"
+        ],
+        "wiring": [
+          "finalizePairPlan retains finalVerificationCommands and skips runReview"
+        ],
+        "failure_handling": [
+          "Round-2 reviewer failure is persisted and acceptance proceeds only when deterministic verification is green"
+        ],
+        "deletions": [
+          "Pair v4 anchor sampling",
+          "Pair v4 cumulative model review and correction loop"
+        ],
+        "pattern_references": [
+          {
+            "path": "skills/pair-v3/scripts/pair-task",
+            "symbol": "finalizePairPlan"
+          }
+        ],
+        "tests": [
+          {
+            "name": "two-round lifecycle and model-free completion",
+            "file": "skills/pair-v3/tests/review-rounds.integration.test.js",
+            "boundary": "integration",
+            "purpose": "prove corrected patch review and final deterministic gate",
+            "red_signal": "current lifecycle invokes cumulative review or remediates round 2"
+          }
+        ],
+        "verify": "node --test skills/pair-v3/tests/review-rounds.integration.test.js",
+        "non_goals": [
+          "Remove cumulative deterministic verification",
+          "Remove independent plan review"
+        ]
+      },
+      {
+        "id": "IMP-003",
+        "outcome": "Persist immutable addressable Review Outcomes and derive restart-safe pending and all projections",
+        "acceptance_criteria": [
+          "AC-4"
+        ],
+        "depends_on": [],
+        "symbols": [
+          {
+            "path": "skills/pair-v3/scripts/lib/pair-state.js",
+            "symbol": "appendPairEvent",
+            "action": "modify"
+          },
+          {
+            "path": "skills/pair-v3/scripts/lib/review-learning.js",
+            "symbol": "projectReviewInbox",
+            "action": "add"
+          },
+          {
+            "path": "skills/pair-v3/schemas/review-result.json",
+            "symbol": "review result schema",
+            "action": "modify"
+          },
+          {
+            "path": "skills/pair-v3/tests/review-inbox.test.js",
+            "symbol": "Review Inbox projection tests",
+            "action": "add"
+          }
+        ],
+        "call_paths": [
+          "review.completed events -> projectReviewInbox -> pending/all Review Outcome projection"
+        ],
+        "contract": {
+          "before": [
+            "Reviews are embedded inside terminal attempts and lack stable per-request/finding identity"
+          ],
+          "after": [
+            "Every request and finding has deterministic stable identity and is independently queryable after restart"
+          ],
+          "errors": [
+            "Malformed, duplicate, digest-conflicting, or unsupported-version events fail closed without projection mutation"
+          ]
+        },
+        "data_shapes": [
+          "Review Outcome v1 and Review Finding v1 with stable IDs and Work/Review Slice/attempt/round/patch bindings"
+        ],
+        "state_flow": [
+          "append immutable review.completed -> reducer/projector rebuild -> pending until Review Feedback adjudicates all findings"
+        ],
+        "wiring": [
+          "review-learning reads existing per-Work events; it never creates alternate Work authority"
+        ],
+        "failure_handling": [
+          "Validate schema and digest bindings before appending or projecting"
+        ],
+        "deletions": [],
+        "pattern_references": [
+          {
+            "path": "skills/pair-v3/scripts/lib/pair-state.js",
+            "symbol": "reducePairEvents"
+          }
+        ],
+        "tests": [
+          {
+            "name": "restart-safe Review Inbox",
+            "file": "skills/pair-v3/tests/review-inbox.test.js",
+            "boundary": "integration",
+            "purpose": "prove IDs, ordering, pending/all, restart, and malformed-event rejection",
+            "red_signal": "current attempt evidence cannot address individual requests or findings"
+          }
+        ],
+        "verify": "node --test skills/pair-v3/tests/review-inbox.test.js",
+        "non_goals": [
+          "Copy review evidence outside repository Pair authority"
+        ]
+      },
+      {
+        "id": "IMP-004",
+        "outcome": "Record reasoned append-only Review Feedback without rewriting Review Outcomes",
+        "acceptance_criteria": [
+          "AC-5"
+        ],
+        "depends_on": [],
+        "symbols": [
+          {
+            "path": "skills/pair-v3/scripts/lib/review-learning.js",
+            "symbol": "recordReviewFeedback",
+            "action": "add"
+          },
+          {
+            "path": "skills/pair-v3/tests/review-feedback.test.js",
+            "symbol": "Review Feedback tests",
+            "action": "add"
+          }
+        ],
+        "call_paths": [
+          "validated outcome/finding ID + judgment + reason -> review-feedback.recorded -> inbox adjudication projection"
+        ],
+        "contract": {
+          "before": [
+            "Human gate evidence addresses only the latest mutable review"
+          ],
+          "after": [
+            "useful, false-positive, unclear, and missed judgments append against stable historical IDs"
+          ],
+          "errors": [
+            "Unrecognized IDs, empty reasons, invalid judgments, and conflicting duplicate feedback are rejected"
+          ]
+        },
+        "data_shapes": [
+          "Review Feedback v1 {feedbackId, targetType, targetId, judgment, reason, recordedAt}"
+        ],
+        "state_flow": [
+          "pending finding -> feedback recorded -> adjudicated; historical outcome bytes unchanged"
+        ],
+        "wiring": [
+          "recordReviewFeedback resolves target through projectReviewInbox before append"
+        ],
+        "failure_handling": [
+          "Idempotent identical retries; conflicting replay fails visibly"
+        ],
+        "deletions": [],
+        "pattern_references": [
+          {
+            "path": "skills/pair-v3/scripts/lib/pair-state.js",
+            "symbol": "appendPairEvent"
+          }
+        ],
+        "tests": [
+          {
+            "name": "append-only Review Feedback",
+            "file": "skills/pair-v3/tests/review-feedback.test.js",
+            "boundary": "unit",
+            "purpose": "prove validation, identity, idempotence, and immutable history",
+            "red_signal": "no repository capability records feedback against historical findings"
+          }
+        ],
+        "verify": "node --test skills/pair-v3/tests/review-feedback.test.js",
+        "non_goals": [
+          "Automatically trust or promote feedback"
+        ]
+      },
+      {
+        "id": "IMP-005",
+        "outcome": "Generate bounded Review Guidance proposals and inject only active human-approved rules",
+        "acceptance_criteria": [
+          "AC-6",
+          "AC-7"
+        ],
+        "depends_on": [],
+        "symbols": [
+          {
+            "path": "skills/pair-v3/scripts/lib/review-learning.js",
+            "symbol": "proposeReviewGuidance",
+            "action": "add"
+          },
+          {
+            "path": "skills/pair-v3/scripts/lib/review-learning.js",
+            "symbol": "decideReviewGuidance",
+            "action": "add"
+          },
+          {
+            "path": "skills/pair-v3/scripts/pair-task",
+            "symbol": "reviewPrompt",
+            "action": "modify"
+          },
+          {
+            "path": "schemas/review-guidance-proposal.json",
+            "symbol": "Review Guidance proposal schema",
+            "action": "add"
+          },
+          {
+            "path": "skills/pair-v3/tests/review-learning.integration.test.js",
+            "symbol": "guidance proposal integration tests",
+            "action": "add"
+          },
+          {
+            "path": "skills/pair-v3/tests/review-guidance.test.js",
+            "symbol": "guidance prompt-bound tests",
+            "action": "add"
+          }
+        ],
+        "call_paths": [
+          "up to eight unlearned feedback events -> one provider-affine proposal -> human decision -> active guidance projection -> reviewPrompt"
+        ],
+        "contract": {
+          "before": [
+            "Reviewer prompts can receive prior findings but no curated learning"
+          ],
+          "after": [
+            "Only approved active rules, max 20 and 4096 UTF-8 bytes, enter future prompts"
+          ],
+          "errors": [
+            "Malformed/oversized proposals, stale proposal IDs, or absent human decisions cannot activate rules"
+          ]
+        },
+        "data_shapes": [
+          "Review Guidance proposal v1 with proposalId, sourceFeedbackIds, rules[{guidanceId,text,status}] and byte count"
+        ],
+        "state_flow": [
+          "feedback pending-learning -> proposal pending -> approved active | rejected; active may later retire"
+        ],
+        "wiring": [
+          "reuse existing review runtime/session for one explicit on-demand request; reviewPrompt receives serialized active rules"
+        ],
+        "failure_handling": [
+          "Never retry proposal automatically; preserve feedback pending on environment or schema failure"
+        ],
+        "deletions": [
+          "Raw prior-review history injection as future learning"
+        ],
+        "pattern_references": [
+          {
+            "path": "skills/pair-v3/scripts/lib/review-session.js",
+            "symbol": "buildReviewRuntimeCommand"
+          }
+        ],
+        "tests": [
+          {
+            "name": "bounded human-gated guidance proposal",
+            "file": "skills/pair-v3/tests/review-learning.integration.test.js",
+            "boundary": "integration",
+            "purpose": "prove eight-item request and explicit decision lifecycle",
+            "red_signal": "no guidance proposal lifecycle exists"
+          },
+          {
+            "name": "active guidance prompt bounds",
+            "file": "skills/pair-v3/tests/review-guidance.test.js",
+            "boundary": "unit",
+            "purpose": "prove approval, active-only selection, count/byte limits, and injection-safe serialization",
+            "red_signal": "reviewPrompt has no approved bounded guidance projection"
+          }
+        ],
+        "verify": "node --test skills/pair-v3/tests/review-learning.integration.test.js skills/pair-v3/tests/review-guidance.test.js",
+        "non_goals": [
+          "Fine-tune models",
+          "Automatically approve guidance",
+          "Share guidance across repositories"
+        ]
+      },
+      {
+        "id": "IMP-006",
+        "outcome": "Persist optional pause policy and coalesce adjacent round-2 and task boundaries",
+        "acceptance_criteria": [
+          "AC-8"
+        ],
+        "depends_on": [],
+        "symbols": [
+          {
+            "path": "skills/pair-v3/scripts/lib/pair-control.js",
+            "symbol": "recordPauseCheckpoint",
+            "action": "modify"
+          },
+          {
+            "path": "skills/pair-v3/scripts/lib/pair-state.js",
+            "symbol": "reducePairEvents",
+            "action": "modify"
+          },
+          {
+            "path": "skills/pair-v3/scripts/pair-task",
+            "symbol": "runControl",
+            "action": "modify"
+          },
+          {
+            "path": "skills/pair-v3/tests/loop-modes.test.js",
+            "symbol": "review and pause integration patterns",
+            "action": "modify"
+          }
+        ],
+        "call_paths": [
+          "persist pause mode -> review/task transition -> existing pauseWork checkpoint -> resume exact pending transition"
+        ],
+        "contract": {
+          "before": [
+            "Pause is explicit and generic with no repository policy"
+          ],
+          "after": [
+            "off, review, task, both pause at defined boundaries and both emits one adjacent round-2/task pause"
+          ],
+          "errors": [
+            "Unsupported mode or corrupt setting fails visibly; resume never reruns persisted review"
+          ]
+        },
+        "data_shapes": [
+          "Pair settings v1 {pauseAfter: off|review|task|both}; pause checkpoint includes pending transition identity"
+        ],
+        "state_flow": [
+          "review.completed/attempt accepted -> optional work.paused -> work.resumed -> saved transition"
+        ],
+        "wiring": [
+          "runControl persists setting; assess/final transition consults reducer-projected policy"
+        ],
+        "failure_handling": [
+          "Write setting atomically and preserve prior valid mode on failure"
+        ],
+        "deletions": [],
+        "pattern_references": [
+          {
+            "path": "skills/pair-v3/scripts/lib/pair-control.js",
+            "symbol": "pauseWork"
+          }
+        ],
+        "tests": [
+          {
+            "name": "persistent pause modes and coalescing",
+            "file": "skills/pair-v3/tests/loop-modes.test.js",
+            "boundary": "integration",
+            "purpose": "prove four modes, exact resume, and one adjacent pause",
+            "red_signal": "current loop has no automatic boundary policy"
+          }
+        ],
+        "verify": "node --test skills/pair-v3/tests/loop-modes.test.js",
+        "non_goals": [
+          "Create a second pause reducer"
+        ]
+      },
+      {
+        "id": "IMP-007",
+        "outcome": "Expose a strict versioned pair-review JSON backend and install it for Claude and Codex",
+        "acceptance_criteria": [
+          "AC-10"
+        ],
+        "depends_on": [],
+        "symbols": [
+          {
+            "path": "skills/pair-v3/scripts/pair-review",
+            "symbol": "main",
+            "action": "add"
+          },
+          {
+            "path": "skills/pair-v3/scripts/lib/review-learning.js",
+            "symbol": "pairReviewOperation",
+            "action": "add"
+          },
+          {
+            "path": "bin/pair-review",
+            "symbol": "portable wrapper",
+            "action": "add"
+          },
+          {
+            "path": "metadata/runtime-asset-map.json",
+            "symbol": "cli.pair-report",
+            "action": "modify"
+          },
+          {
+            "path": "schemas/pair-review-v1.json",
+            "symbol": "Pair Review JSON contract",
+            "action": "add"
+          },
+          {
+            "path": "skills/pair-v3/tests/pair-review-cli.integration.test.js",
+            "symbol": "Pair Review CLI tests",
+            "action": "add"
+          }
+        ],
+        "call_paths": [
+          "Neovim argv -> installed pair-review -> strict operation -> repository projection/mutation -> JSON v1 stdout"
+        ],
+        "contract": {
+          "before": [
+            "No backend exists for durable review management"
+          ],
+          "after": [
+            "list/detail/feedback/propose/edit/approve/reject/guidance/pause/resume operations return versioned JSON"
+          ],
+          "errors": [
+            "Unsupported operation, malformed input, stale ID, non-repository cwd, or internal failure returns nonzero secret-safe JSON"
+          ]
+        },
+        "data_shapes": [
+          "Pair Review response v1 {schema:1, operation, ok, repository, data|error}; contract schema and representative fixture"
+        ],
+        "state_flow": [
+          "read operations never mutate; write operations append/atomically update then return refreshed projection"
+        ],
+        "wiring": [
+          "runtime asset manifest installs bin/pair-review; wrapper executes skills/pair-v3/scripts/pair-review"
+        ],
+        "failure_handling": [
+          "Never print raw model events, prompts, private paths, or stack traces in JSON errors"
+        ],
+        "deletions": [],
+        "pattern_references": [
+          {
+            "path": "metadata/runtime-asset-map.json",
+            "symbol": "cli.pair-report"
+          },
+          {
+            "path": "skills/pair-v3/scripts/pair-report",
+            "symbol": "standaloneModelEvents"
+          }
+        ],
+        "tests": [
+          {
+            "name": "versioned Pair Review CLI",
+            "file": "skills/pair-v3/tests/pair-review-cli.integration.test.js",
+            "boundary": "integration",
+            "purpose": "prove all operations, schema version, installation declaration, status codes, and redaction",
+            "red_signal": "pair-review executable and contract are absent"
+          }
+        ],
+        "verify": "node --test skills/pair-v3/tests/pair-review-cli.integration.test.js",
+        "non_goals": [
+          "Make CLI syntax the primary human interface"
+        ]
+      },
+      {
+        "id": "IMP-008",
+        "outcome": "Align canonical review-learning vocabulary and Pair v4 documentation",
+        "acceptance_criteria": [
+          "AC-11"
+        ],
+        "depends_on": [],
+        "symbols": [
+          {
+            "path": "UBIQUITOUS_LANGUAGE.md",
+            "symbol": "Work & Review Lineage",
+            "action": "modify"
+          },
+          {
+            "path": "skills/pair-v4/SKILL.md",
+            "symbol": "Review and Boundary Policy",
+            "action": "modify"
+          },
+          {
+            "path": "skills/pair-v3/tests/pair-contract-docs.test.js",
+            "symbol": "Pair documentation contract tests",
+            "action": "modify"
+          }
+        ],
+        "call_paths": [
+          "canonical vocabulary -> Pair skill guidance -> generated/runtime contract tests"
+        ],
+        "contract": {
+          "before": [
+            "Review Outcome, Review Feedback, and Review Guidance are undefined"
+          ],
+          "after": [
+            "Each term has one canonical definition and relation to Work and Review Slice"
+          ],
+          "errors": [
+            "Generated docs or old cumulative-review claims fail contract tests"
+          ]
+        },
+        "data_shapes": [
+          "Canonical glossary entries with aliases-to-avoid and relations"
+        ],
+        "state_flow": [
+          "approved vocabulary -> generated instructions and runbook"
+        ],
+        "wiring": [
+          "documentation tests enforce two-round and Neovim-primary backend wording"
+        ],
+        "failure_handling": [
+          "Validation fails on contradictory review-until-approved or cumulative AI-review language"
+        ],
+        "deletions": [
+          "Pair v4 cumulative AI review instructions"
+        ],
+        "pattern_references": [
+          {
+            "path": "UBIQUITOUS_LANGUAGE.md",
+            "symbol": "Work & Review Lineage"
+          },
+          {
+            "path": "skills/pair-v4/SKILL.md",
+            "symbol": "Review and Boundary Policy"
+          },
+          {
+            "path": "package.json",
+            "symbol": "scripts.test:pair"
+          }
+        ],
+        "tests": [
+          {
+            "name": "review-learning documentation contract",
+            "file": "skills/pair-v3/tests/pair-contract-docs.test.js",
+            "boundary": "integration",
+            "purpose": "prove vocabulary and Pair v4 runbook alignment",
+            "red_signal": "current docs require cumulative review and omit new terms"
+          }
+        ],
+        "verify": "node --test skills/pair-v3/tests/pair-contract-docs.test.js",
+        "non_goals": [
+          "Document dotfiles implementation details"
+        ]
+      }
+    ]
+  }
+}

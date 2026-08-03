@@ -96,7 +96,6 @@ Notes:
 | `/generate-index` | Generate `.observability/logs.json` + `traces.json` for the current project |
 | `/kibana-logs` | Search Elasticsearch logs — natural language to ES Query DSL (delegates to `kibana-analyst`) |
 | `/loop-plan` | Seed `.claude-loop.md` (goal, acceptance criteria, tasks) so the stop-gate guards a long `/loop` run |
-| `/pair-promote` | Promote a spec (or plan-mode output) into an implementable `.pair/plan.md` |
 | `/verify` | Cross-language build/lint/test gate — PASS/FAIL report |
 
 ### Claude Code Skills
@@ -109,7 +108,7 @@ Notes:
 | `kube-vuln` | Triage container-image vulnerabilities (Trivy reports) in a Kubernetes namespace |
 | `mermaid-validate` | Validate Mermaid diagram blocks right after they're written or edited |
 | `module-deepening` | Tactical refactoring heuristics — deletion test, depth-as-leverage, two-adapter rule |
-| `pair-v4` | Visible Codex/Claude coordinator, durable per-Work state, reusable Review Session, verification, review, and recovery controls |
+| `pair-v4` | Token-bounded Evidence-at-Commit implementation and precision review loop |
 | `session-replay-note` | Turn a coding-agent session into a teaching-oriented Obsidian demo (notes + Canvas) |
 | `typescript` | TypeScript implementation guidance — React/Next.js, Node, type safety, testing |
 | `ubiquitous-language` | Extract a domain-term glossary from the conversation into `UBIQUITOUS_LANGUAGE.md` |
@@ -123,45 +122,46 @@ and compile a minimal Draft directly into a render-preflighted v2 session.
 
 #### Pair workflows
 
-Pair v4 is the runtime-neutral execution path for an implementable Pair plan.
-Ordinary tests-first implementation stays in the visible Codex or Claude
-coordinator, while one independent read-only Review Session is reused for plan,
-slice, and cumulative review. Authoritative events, atomic status, and attempt
-evidence live under `.pair/runs/<work-id>/`; home-directory history is optional
-legacy import only.
+Pair v4 now implements the breaking Evidence-at-Commit protocol. It consumes an
+approved specification plus one compact Review Slice Manifest; it has no separate
+model-planning phase, large design artifact, generated packet, reusable model
+session, or transcript replay.
 
-New promotions use `**Pair mode:** compiled`. `pair-promote` records one
-provider-neutral, content-addressed Implementation Design Contract in canonical
-Work, and the validator compiles a private bounded Review Slice Execution Packet
-for each task. The packet carries verbatim Acceptance Criteria, exact symbols and
-call paths, behavior/state/wiring/failure contracts, tests and RED signals,
-verification, constraints, relevant repository evidence, upstream decision
-contracts, and non-goals, so either Codex or Claude Code can execute the slice
-without rediscovering the whole implementation design.
+See the [Pair vNext architecture](docs/work/work-20260803-pair-evidence-at-commit/architecture.md)
+for component boundaries, lifecycle, state ownership, evidence stability, and
+current limitations.
 
-`S` and `M` remain size labels. A slice is reported as cheap-ready only when its
-risk, scope, uncertainty, closed mappings, and 8,192-byte packet bound all pass;
-the validator also prints the recommended model-strength floor. Compiled policy
-reviews every cheap-ready M slice and a deterministic sample of cheap-ready S
-slices. The Pair owner hook captures a provider-token baseline immediately after
-Pair invocation, and the owning Stop hook records the safe delta—not transcript
-content. `pair-report --json` attributes those tokens to accepted slices.
+Each Review Slice runs in a dedicated `pair/<work-id>` linked worktree. A fresh
+implementation session receives only the slice outcome, mapped Acceptance
+Criteria, relevant repository paths, and verification command. Pair creates an
+immutable checkpoint commit, runs deterministic verification, and routes by facts:
+architecture-sensitive changes require a bounded Design Check and independent
+read-only review; routine changes can use deterministic proof plus configured
+sampling. Review JSON is capped at 6 KiB; its durable outcome is capped at 8 KiB.
+Findings are capped at three and must cite the checkpoint commit, path, blob, and
+exact line range.
 
-Start the three-pane host with `pair-loop --host`, inspect it with
-`pair-loop --status`, then run bare `pair-loop --runtime auto`. Attempts survive
-process exits at their exact phase. Additional repository files are advisory,
-evidence-infrastructure failures preserve work, and visible work is discarded
-only through the previewed `--discard-attempt ... --confirm-discard` operation.
-`pair-report` summarizes repository-local quality, findings, tokens, resumptions,
-and cost evidence.
+Pair state lives outside every worktree in the repository Git common directory at
+`<git-common-dir>/pair/works/<work-id>/`. State is capped at 16 KiB and retains
+invocation totals plus only three recent summaries. Git refs under `refs/pair/<work-id>/`
+retain compact spec, manifest, Design Check, Review Outcome, and Review Feedback
+evidence after a linked worktree is removed. Dependency hydration uses package
+manager caches and copy-on-write seeds where available; submodules are initialized
+only when explicitly named.
 
-Pair v2 and Pair v3 are retired as skills — the agent no longer surfaces them,
-and the pair-v3 directory remains only as the pair-v4 runtime engine (scripts,
-not a skill). `pair-loop --legacy-v3` is still the explicit CLI route to the old
-split headless lifecycle; existing `pair-loop`, `--once`, `--inline`, and
-`--complete` entry points still work against v4 state.
+Reviewer findings never trigger automatic edits. A human records `valid`,
+`false-positive`, `not-worth-fixing`, or `missing-context`; one bounded correction
+is allowed only for deterministic failure or accepted findings. Review Guidance
+can enter future prompts only after a 20–50 case offline evaluation improves
+precision or escapes without regression, explicit approval, and relevance
+selection capped at three rules. The repository retains at most 16 active rules
+in 32 KiB. The bank/result caps are 32/16 KiB; detailed trials never enter
+persisted results, CLI output, or future review prompts.
 
-Registered Pair and brainstorming Agent Conversations are protected by the
+The old Pair v3 compiled-plan lifecycle is removed. The `skills/pair-v3` directory
+name remains solely as an internal installation path for the new engine.
+
+Registered brainstorming and opt-in general Agent Conversations are protected by the
 Freshness Gate after 60 minutes idle. General Agent Conversations can opt in once
 per repository with `pair-loop --enable-general-handover`; their Stop hook then
 maintains a bounded checkpoint automatically from the exact provider transcript.
@@ -243,32 +243,30 @@ pair-loop --handover-now
 
 ##### Pair v4 quick start
 
-1. **Spec and promote** — use `brainstorming`, then `pair-promote`, to publish
-   canonical Work and `.pair/plan.md` with tests-first Review Slices.
-2. **Host and diagnose** — run `pair-loop --host`, `pair-loop --attach` when
-   needed, then `pair-loop --doctor`.
-3. **Implement** — run bare `pair-loop --runtime auto`; complete the printed
-   Review Slice in the visible coordinator and let the owning Stop adapter keep
-   ordinary phase continuation in that chat.
-4. **Control** — use `--pause`, same-invocation `--resume`, `--cancel-now`,
-   `--takeover`, or the exclusive human-edit commands without losing state.
-5. **Complete** — Pair replays verification, reviews complete patches, advances
-   Review Slices, then runs cumulative verification/review and records completion.
+1. Publish approved Work and `.pair/review-slices.json`.
+2. Run `pair-loop open --work <work-id>`; Pair creates the linked worktree.
+3. Run bare `pair-loop`; each invocation advances one bounded transition.
+4. Inspect with `pair-loop status` and `pair-report --work <work-id>`.
+5. Accept required human review with `pair-loop accept --slice <id>`, or classify
+   a finding with `pair-loop feedback --finding <id> --disposition <value> --reason <text>`.
+6. Review and merge or cherry-pick `pair/<work-id>` with ordinary Git from the
+   primary worktree. Pair never merges automatically.
+7. Run `pair-loop remove-worktree` after completion; the branch, commits, and
+   common-directory evidence remain until you remove them explicitly.
 
 ### Hooks
 
-Installed by `install.sh` via `hooks/hooks.json` — deterministic enforcement
+Installed by the canonical runtime installer via `hooks/hooks.json`, including
+when Claude has no existing `settings.json` — deterministic enforcement
 of rules that instructions alone under-deliver:
 
 | Hook | Event | Does |
 |------|-------|------|
 | `handover-gate.sh` | UserPromptSubmit | Blocks only a stale registered Agent Conversation before model processing and seals its bounded Agent Conversation Handover; it never persists submitted prompts or compaction summaries. |
-| `pair-owner.sh` | PostToolUse (Pair command) | Claims the invoking Codex or Claude conversation as the Pair owner and captures its provider-token baseline before implementation continues. |
-| `stop-gate.sh` | Stop | The single coordinated Stop hook: records registered activity, safely recovers enabled General Agent Conversation checkpoints from the exact provider transcript, and continues only the Agent Conversation that owns active Pair Work. |
-| `delegation-nudge.sh` | PostToolUse (edits) | Once per session at the 8th main-session edit, reminds the model to batch mechanical remainders into a subagent (mech/haiku, general-purpose/sonnet). Opt-out `CLAUDE_DELEGATION_NUDGE=off`; threshold `CLAUDE_DELEGATION_NUDGE_AT` |
+| `stop-gate.sh` | Stop | Records registered activity and safely recovers enabled General Agent Conversation checkpoints from the exact provider transcript. |
 | `commit-guard.sh` | PreToolUse (git commit) | Blocks commits containing attribution trailers (Co-Authored-By / Generated with Claude) before they run |
 | `scratch-guard.sh` | PreToolUse (Write) | Blocks writes to raw `/tmp` and throwaway `tmp-*.spec/test.*` files in repo trees; points to `$CLAUDE_SCRATCH_DIR` |
-| `gate-orient.sh` | SessionStart (incl. post-compaction) | Reads the Pair v4 reducer and injects the exact Work, attempt, phase, Resume target, and evidence sequence into fresh contexts — silent elsewhere |
+| `gate-orient.sh` | SessionStart (incl. post-compaction) | Reports only bounded Freshness Gate state for registered brainstorming or opt-in general conversations. |
 | `await-notify.sh` | Notification | macOS notification when Claude needs attention (permission prompt, waiting for input). Opt-out `CLAUDE_AWAIT_NOTIFY=off` |
 
 ### Codex-Compatible Skills

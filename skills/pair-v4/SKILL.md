@@ -1,151 +1,110 @@
 ---
 name: pair-v4
-description: Visible, resumable Pair v4 workflow for Codex and Claude. Use when implementing `.pair/plan.md`, running pair-loop, reviewing Work, recovering an attempt, inspecting Pair status/history, pausing, taking over, or evaluating generated-code quality.
+description: Token-bounded Evidence-at-Commit Pair workflow for implementing approved Work through minimal Review Slices, dedicated Git worktrees, fresh implementation/review sessions, deterministic Failure Proof, human-adjudicated findings, and compact evaluated Review Guidance. Use when running pair-loop, implementing approved Work, reviewing a checkpoint, resuming Pair state, or inspecting Pair cost and quality.
 ---
 
-# Pair v4 — Visible, Repository-Local Pairing
+# Pair Evidence-at-Commit Loop
 
-Pair v4 keeps ordinary implementation in the visible Codex or Claude coordinator, persists one recoverable Work lifecycle in the repository, and uses one reusable independent read-only Review Session. The coordinator owns the whole tests-first Review Slice; do not delegate implementation or reproduce lifecycle state manually. New compiled plans use the same provider-neutral Implementation Design Contract and Review Slice Execution Packet in Codex and Claude Code.
+Use current `pair-loop`. Do not create `.pair/plan.md`, large design JSON, generated execution packets, test proposals, plan challenges, warm provider sessions, or autonomous review-fix loops.
 
-## Runtime Topology
+## Required inputs
 
-`pair-loop --host` creates or reuses exactly three tmux panes:
+Keep one approved canonical specification and one compact `.pair/review-slices.json`:
 
-```text
-┌────────────────┬──────────────────────────┬──────────────────────────┐
-│ editor         │ coordinator              │ reviewer                 │
-│ Neovim/control │ active Codex/Claude chat │ read-only Review Session │
-│ human edits    │ implementation + tests   │ plan/slice/final review  │
-└────────────────┴──────────────────────────┴──────────────────────────┘
-                         │                              │
-                         └──── .pair/runs/<work-id> ───┘
+```json
+{
+  "schema": 1,
+  "work_id": "work-example",
+  "slices": [
+    {
+      "id": "S1",
+      "acceptance_criteria": ["AC-1"],
+      "outcome": "One observable behavior works.",
+      "depends_on": [],
+      "verify": "node --test test/example.test.js"
+    }
+  ]
+}
 ```
 
-The Review Session command itself runs in the reviewer pane; the pane is not a decorative log mirror. Plan review, Review Slice review, and cumulative review resume the same provider session and bind each verdict to the supplied digest. No implementation worker or worktree exists in v4.
+Manifest is navigation only: 1–40 slices and below 16 KiB. Do not embed source excerpts, architecture decisions, test inventories, patches, or review history.
 
-## Canonical Lifecycle
-
-```text
-plan validation → plan review → implementing → verifying → reviewing → accepting
-                                         ↑          │            │
-                                         └──────────┴ local fix ─┘
-                                                              │
-                                            next Review Slice ┘
-
-after final slice: cumulative verification → cumulative review ─────────→ complete
-                              ↑                 │
-                              └─ local fix ← cumulative-correction
-
-any active phase ── pause boundary ──→ paused ── resume ──→ exact saved phase
-in-flight request ── Cancel now ─────→ last completed checkpoint
-verifying/reviewing ── material decision/hard boundary ──→ blocked (files preserved)
-```
-
-One attempt ID survives CLI exits, agent exits, verification-launch failures, and Review Session failures. Those are evidence events, not terminal attempt outcomes. A later correction remains on the same attempt. Only accepted, explicitly discarded, or legacy isolated-headless work is terminal.
-
-## Coordinator Runbook
-
-1. If `.pair/plan.md` is absent, use brainstorming and `pair-promote` first.
-2. Run `pair-loop --host`, then `pair-loop --doctor`. Resolve only reported `fail` results before dispatch.
-3. Run bare `pair-loop --runtime auto`. `--once`, `--inline`, and `--complete` remain compatibility aliases; the normal lifecycle does not require them.
-4. When Pair prints an inline Review Slice brief, implement it directly in this visible coordinator. For a compiled plan, the embedded Review Slice Execution Packet is the authoritative bounded context: read applicable instructions and only its named repository evidence, symbols, callers, patterns, and tests. Write the failing test first, prove its declared RED signal, implement the minimum behavior, and run the exact verification.
-5. Run bare `pair-loop` yourself. It resumes the saved phase, independently replays verification, invokes the Review Session when policy requires it, records the verdict, accepts the slice, and immediately opens the next Review Slice when one remains.
-6. Continue without asking the user to push ordinary phase transitions. Stop only for an explicit pause, a material plan/security/policy decision, exclusive human editing, or an evidenced blocker with no safe in-scope recovery action.
-
-Plan challenge is automatic when canonical approval is missing or stale. `auto` remains provider-affine. Cross-provider fallback requires explicit user authorization.
-
-## Cold Agent Conversation Handover
-
-The Freshness Gate protects registered Pair and brainstorming Agent Conversations. General Agent Conversations opt in once per repository with `pair-loop --enable-general-handover` (or environment-wide with `AGENT_CONVERSATION_HANDOVER=auto`) and are then registered and checkpointed automatically at Stop. At the exact 60-minute idle boundary the gate seals an immutable Agent Conversation Handover before model processing; unregistered conversations remain inert. The handover contains bounded semantic state, never a raw transcript, compact summary, private reasoning, environment map, credential, or capability token.
-
-Stop is the only turn boundary a provider reports, so a long autonomous turn would otherwise age toward the gate while it is working. Every Pair dispatch is recorded as Observed Activity and advances the gate's activity time, bounded by the Unstopped-Turn Ceiling of four freshness windows past the last Stop; a wedged dispatch loop therefore cannot hold the gate open indefinitely. Observed Activity never registers a conversation, never revives a sealed one, and only ever moves activity forward.
-
-A Pair Agent Conversation Checkpoint keeps repository authority for its lifecycle layer — Core Anchor, current direction, next action, and the Work projection digest are re-derived from the Pair reducer at every Stop — and merges a conversation layer recovered from the exact provider transcript for the state `.pair/` cannot express: assistant conclusions as findings, the latest explicit user direction, confirmed choices, rejected alternatives, and unresolved decisions. Re-derivation refreshes the lifecycle layer without discarding the conversation layer, and a Stop without a provider transcript still checkpoints repository authority rather than failing. Every Stop that rewrites the checkpoint timestamps the revision it wrote, so the revision counter never outruns its audit trail.
-
-General checkpoint recovery binds the exact provider transcript to the native Agent Conversation identity, keeps bounded user direction, assistant conclusions, and repository artifact digests, and excludes system/developer content, thinking, reasoning, and raw tool results. A missing or mismatched transcript fails visibly instead of advancing stale checkpoint activity. For a manually reviewed checkpoint, pipe one strict JSON object to `pair-loop --conversation-checkpoint`; unknown fields, wrong field types, conflicting aliases, and malformed digests fail, findings use `finding`/`reference`/`digest`, and artifacts use `path`/`sha256`. Interactive TTY stdin is rejected: use file redirection or a here-document in the same shell invocation, never a command started before its JSON is streamed. Later transcript progress preserves the reviewed Core Anchor and stable choices while refreshing current direction, unresolved decisions, and next action. `pair-loop --handover-now` seals it immediately. Disable repository automation with `pair-loop --disable-general-handover` or override it environment-wide with `AGENT_CONVERSATION_HANDOVER=off`.
-
-Use `pair-loop --fresh-from <handover-id> --runtime auto` to launch a plain provider-affine fresh conversation. In that new conversation, adopt exactly that handover with `pair-loop --adopt-handover <handover-id> --runtime codex|claude`; choosing a different provider is always explicit. Fresh launch arguments never use provider resume, continue, or fork flags.
-
-Only an explicit recovery command permits one old-conversation turn: `pair-loop --allow-cold-resume <handover-id> --once --confirm-cost-risk`. Its next Stop boundary refreshes and seals the Agent Conversation Checkpoint, then returns the source to Retired Agent Conversation status; continue by launching and adopting that exact refreshed Agent Conversation Handover. Successful direct adoption is the other retirement route and continues in the adopter.
-
-## Repository Authority
-
-For canonical Work, all authority lives under `.pair/runs/<work-id>/`:
-
-- `events.jsonl` — append-only authoritative events.
-- `state.json` — atomic reducer projection used by status, doctor, report, orientation, and Stop adapters.
-- `status.md` — secret-safe human projection.
-- `attempts/<attempt-id>/` — private bounded status, complete patches, verification metadata, and review evidence.
-- `attempts/<attempt-id>/execution-packet.json` — the private digest-checked Review Slice Execution Packet, capped at 16 KiB and at 8,192 compact UTF-8 bytes for cheap-ready routing. It carries the slice constraints, relevant existing repository evidence, mapped decisions, and transitive upstream decisions so execution never depends on an omitted plan/spec reread.
-- `review-session.json` — reusable read-only Review Session identity.
-
-`.pair/current-run.json` is only a locator. `.pair/plan.md` markers are derived scanability: `[ ]` queued, `[-]` active, `[x]` accepted. All three normalize to the same semantic plan digest.
-
-Legacy home-directory history is optional import evidence, never authority. Missing or unwritable legacy storage warns once and cannot block new Work. `pair-report --json` reads repository events by default.
-
-## Review and Boundary Policy
-
-- Expected files are advisory ownership evidence. Additional in-repository files stay in the patch, receive expected/cross-slice/unmapped attribution, and are reviewed on substance.
-- Hard boundaries are narrow: Pair mutable control state, the canonical active Work contract, credential or policy-forbidden paths, and paths outside the repository. A hard result names the exact path and governing rule.
-- Verification or reviewer infrastructure failure preserves code and resumes only the failed evidence phase. Green verification remains cached when review infrastructure fails.
-- The reusable Review Session self-heals. A reviewer run that never completes never persists a resumable session, and a stored session the provider can no longer resume is invalidated so the next invocation starts a fresh reviewer session instead of resuming a dead one. An unresumable session is a reviewer-environment event, never a plan or code defect.
-- A material implementation finding returns the same attempt to implementation and waits for the patch digest to change before re-verifying.
-- Pair v4 never silently restores visible coordinator work. `pair-loop --discard-attempt` previews affected paths; only the exact follow-up command with the attempt ID and `--confirm-discard` restores the pre-attempt snapshot. The discarded complete patch remains in attempt evidence.
-
-Compiled routing reviews every cheap-ready M Review Slice and a deterministic 20% sample of cheap-ready S Review Slices; `PAIR_S_REVIEW_SAMPLE_RATE` changes that sample. Non-compiled routine slice review retains the critical-risk default. `PAIR_TASK_REVIEW=high-risk|all|off` is an explicit policy choice. `pair-loop --no-independent-review` (or `PAIR_INDEPENDENT_REVIEW=off`) explicitly disables both slice and cumulative independent review, while preserving verification and recording the operator opt-out in final-review evidence.
-
-Cheap-ready is a validated execution property, not another name for S/M. It requires low uncertainty, low/medium risk, local/cross-module scope, closed design mappings, and a packet no larger than 8,192 bytes. Code recommends model strength 2 at minimum; docs may recommend 1. L, high risk, contract/architecture, or high uncertainty recommends strength 3 or 4. Pair reports the target but does not pretend it can change the model inside an already-running visible provider conversation.
-
-`pair-loop --advisory-review` (or `PAIR_REVIEW_MODE=advisory`) keeps independent slice and cumulative review enabled, records every finding as evidence, but does not require the coordinator to remediate findings before the Work proceeds. Reviewer-environment failures still preserve the reviewing phase rather than being accepted.
-
-## Pause, Resume, Takeover, and Human Editing
-
-- `pair-loop --pause` waits for the current model/tool boundary, records the exact phase, releases continuation ownership, and preserves tmux processes and files.
-- `pair-loop --resume` resumes and dispatches the exact saved phase in the same invocation.
-- `pair-loop --cancel-now` terminates only the journaled in-flight process group and returns to the last completed checkpoint. It never freezes or discards code.
-- `pair-loop --takeover [SESSION]` explicitly transfers automatic continuation ownership.
-- Human plan/code editing requires pause, `--begin-human-edit plan|code`, then `--end-human-edit`. Semantic plan edits invalidate exact-digest approval; marker-only progress does not. Code edits stale only affected evidence and resume verification.
-
-Codex and Claude Stop adapters use their native response shapes and continue only the owning chat. Codex claims from its command thread identity; Claude captures the guaranteed hook `session_id` only after that chat invokes Pair. Unrelated commands and chats cannot claim or continue the Work. There is no checkbox counter or interruption counter. A blocked lifecycle releases automatic continuation.
-
-While a journaled request is executing inside a live pair-loop process, the owning Stop adapter blocks exactly once to advise a wake path (a harness-tracked background task or a Monitor on the Work's events.jsonl), then allows Stop until that request completes; polling `--status` on a timer is never the continuation contract. A dead pair-loop process or an in-flight request older than `PAIR_REQUEST_WAIT_MAX_AGE_MS` (default 2 hours) restores the ordinary continuation block. Verification gates journal `request.started`/`request.completed` like reviewer requests, so the wait covers cumulative verification too.
-
-Verification commands run under `PAIR_VERIFY_COMMAND_TIMEOUT_MS` (default 45 minutes) and `PAIR_VERIFY_STALL_TIMEOUT_MS` (default 15 minutes); CPU activity in the command's process group counts as liveness, so a container-heavy suite that is silent but working never stalls out. Set the caps in the environment that launches `pair-loop` when a suite needs more.
-
-## Bounded Resume and Privacy
-
-Same-session review resumption receives one Pair-authored Resume Checkpoint capped at 8,192 UTF-8 bytes, including a next action capped at 512 bytes and only digest/path references. Pair sends no cache-warming ping. Immediately after the owning conversation invokes Pair, the owner adapter reads the exact Codex or Claude provider transcript to establish a cumulative-token baseline. At the owning Stop, the Stop adapter observes the new model, effort when exposed, and cumulative counters, then persists only safe deltas and cache totals—never transcript content. `pair-report --json` attributes this telemetry to the Review Slice and reports tokens per accepted Review Slice so token efficiency is measured end to end rather than guessed from plan length.
-
-Events, logs, patches, reviews, status, report data, and hook output must omit raw prompts, transcripts, private reasoning, environment maps, credentials, capability tokens, and secret-like values. Runtime files are private. Never weaken redaction to make debugging easier; retain only bounded secret-safe evidence.
-
-## Review Results and Genuine Blockers
-
-Reviewers report only BLOCKER or MAJOR findings with a concrete reachable failure scenario and `origin: implementation|plan|environment`. Style, optional hardening, speculative edges, and a file merely being additional are not findings. A cross-task ordering conflict the coordinator can resolve during implementation without a plan or spec change is likewise not a material plan defect; it is not reported as a finding, though the review summary may note it.
-
-Pair challenges a plan at most twice across plan digests by default. If the second reviewer verdict has material plan findings, Pair records an exact-digest `human-override`, retains the reviewer findings in `.pair/plan-review.*`, and gives task-relevant findings to the visible coordinator as mandatory implementation work; it does not start a third plan challenge. Reviewer-environment failures are never approved. `PAIR_MAX_PLAN_REVIEWS` or `--max-plan-reviews` can select a different positive challenge cap. Each CLI invocation remains finite, unchanged rejected patches do not re-dispatch, and explicit `--max-*` options remain optional operator ceilings. Report `blocked` only for a material decision or when the same evidenced cause remains after every safe in-scope recovery action.
-
-## Commands
+## Start and run
 
 ```bash
-pair-loop --host
-pair-loop --attach
-pair-loop --doctor
-pair-loop --runtime auto
-pair-loop --status
-pair-loop --status --json
-pair-loop --pause
-pair-loop --resume
-pair-loop --cancel-now
-pair-loop --no-independent-review
-pair-loop --advisory-review
-pair-loop --takeover [SESSION]
-pair-loop --begin-human-edit plan|code
-pair-loop --end-human-edit
-pair-loop --discard-attempt
-pair-loop --discard-attempt <ATTEMPT> --confirm-discard
-pair-loop --challenge-plan --runtime auto
-pair-loop --approve-plan <digest> --reason "..."
-pair-report --json
+pair-loop open --work <work-id> --spec .pair/spec.md --manifest .pair/review-slices.json
+pair-loop run --runtime auto
+pair-loop status
 ```
 
-`pair-v4` is a CLI alias for `pair-loop`. `pair-loop --legacy-v3 ...` is the only explicit route to the old split headless lifecycle.
+Each `run` performs at most one fresh model action except deterministic verification. Run again for next saved action. Pair owns dedicated linked worktree and checkpoint commits. Product branch receives no Pair artifacts.
+
+## Routing
+
+Implementation session first names one bounded Architecture Risk or explicitly returns none. The structured result is transient, capped at 2 KiB, and deleted after ingestion.
+
+- Use Routine Path only when runtime responsibilities remain unchanged.
+- Use Architecture-Sensitive Path for a changed or unknown owner/lifetime/state, public or data contract, middleware order, remote boundary, event ordering/idempotency, background-job lifecycle, concurrency/transaction/retry behavior, security boundary, replica/load-balancer behavior, deployment topology, or React state owner.
+- Record the Design Check as Markdown under 2 KiB with six lines: seam/callers, ownership/state/lifetime, runtime/failure/deployment, contract/compatibility, rejected alternative, and proof.
+- Reinspect checkpoint diff. Escalate a misrouted Routine Path before acceptance.
+- Treat existing code as evidence. Reuse pattern only when responsibility, ownership, lifetime, failure behavior, and concurrency match.
+
+Every implementation and review invocation is fresh. Never resume provider session or pass prior transcript/history.
+
+## Failure Proof
+
+Use narrowest proof that observes real failure boundary: base reproduction, unit, integration, contract, end-to-end, runtime, or recorded manual evidence. State negative control, mutation, base failure, or equivalent observation. Pair runs exact manifest verification after handoff and again cumulatively at completion.
+
+Do not freeze exact test names before code. Do not use test count, coverage, or synthetic RED output as proof by itself.
+
+## Review
+
+Architecture-Sensitive checkpoints always receive fresh review. Routine checkpoints use deterministic proof plus configured conditional sampling.
+
+Reviewer receives only checkpoint diff command, mapped behavior, Design Check when applicable, named callers/contracts, verification result, and at most three relevant approved Review Guidance rules.
+
+Approval contains no prose. Transient reviewer JSON is capped at 6 KiB. Durable Review Outcome is capped at 8 KiB and contains at most three BLOCKER/MAJOR findings. Each finding must include falsifiable claim, reachable scenario, immutable checkpoint commit/path/blob/line anchor, impact, and pass condition.
+
+Model finding never edits code. Human disposition required:
+
+```bash
+pair-loop feedback --finding <id> \
+  --disposition valid|false-positive|not-worth-fixing|missing-context \
+  --reason "<evidence>"
+```
+
+Only valid finding or deterministic failure permits one bounded fresh correction. Second failure pauses for human control. Architecture-Sensitive checkpoint requires human acceptance:
+
+```bash
+pair-loop accept --slice <id>
+```
+
+## Review learning
+
+Review Feedback stays as compact immutable references. Runtime prompts never receive raw history.
+
+Review Guidance requires a 20–50 case offline evaluation. The bank is capped at 32 KiB and references fixtures instead of embedding them. Its persisted result is a metrics-and-ID summary capped at 16 KiB; case trials never enter the result or CLI output. The repository retains at most 16 active rules in a 32-KiB index. Guidance needs measured precision/escapes/token improvement and explicit approval. At most three scope-relevant rules enter one review.
+
+```bash
+pair-loop evaluate --bank <bank.json>
+pair-loop guidance propose --feedback <id,...> --scope <tag,...> \
+  --rule "<bounded rule>" --evaluation <result.json>
+pair-loop guidance approve --proposal <id> --reason "<decision evidence>"
+```
+
+## Worktree and state
+
+Canonical local state lives under Git common directory. `state.json` is capped at 16 KiB; accepted slices retain commit identities instead of changed-path copies, invocation history is reduced to totals plus the latest three summaries, and append-only events never enter model prompts. `refs/pair/<work-id>/*` keep base, checkpoints, reviewed evidence, and completion reachable after linked worktree deletion. Deleting whole repository intentionally deletes local Pair history.
+
+Dependency hydration is lazy. Package-manager caches are fingerprinted by lockfile/runtime/platform. Mutable `node_modules` is never shared directly; copy-on-write reuse is isolated when filesystem supports it. Initialize only named submodules.
+
+```bash
+pair-loop hydrate [--submodule <path> ...]
+pair-loop remove-worktree
+```
+
+Pair never merges automatically. After completion, review and merge or cherry-pick `pair/<work-id>` from the primary worktree, then remove the linked worktree. Worktree removal does not delete the branch or Pair refs.
+
+## Stop conditions
+
+Stop for human input when architecture checkpoint awaits acceptance, findings await disposition, one correction failed, provider/verification evidence is untrustworthy, cumulative verification fails, or Work is blocked. Preserve worktree and refs.

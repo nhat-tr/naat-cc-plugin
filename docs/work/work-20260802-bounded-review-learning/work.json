@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "work_id": "work-20260802-bounded-review-learning",
+  "title": "Bounded Pair Review Learning",
+  "status": "design-approved",
+  "spec": {
+    "path": "docs/work/work-20260802-bounded-review-learning/spec.md",
+    "sha256": "b32ef07d851ea9e6001ed5b0b409351b6a191c6f2adf333ba043047b2cb93125"
+  },
+  "active_pair_mirror": ".pair/spec.md",
+  "engineering_quality_contract": {
+    "path": "docs/work/work-20260802-bounded-review-learning/spec.md",
+    "section": "Engineering Quality Contract",
+    "status": "approved"
+  },
+  "decision_records": [],
+  "decision_supersessions": [],
+  "changes": [],
+  "outcomes": [],
+  "evidence_records": [
+    "docs/work/work-20260802-bounded-review-learning/evidence/EVD-001-implementation-design.json",
+    "docs/work/work-20260802-bounded-review-learning/evidence/EVD-002-implementation-design.json"
+  ]
+}

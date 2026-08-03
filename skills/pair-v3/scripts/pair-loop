@@ -2,11 +2,9 @@
 set -euo pipefail
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
-if [[ "${1:-}" == "--challenge-plan" ]]; then
-  shift
-  exec node "$script_dir/pair-plan-challenge" "$@"
-fi
-if [[ "${1:-}" == "--approve-plan" ]]; then
-  exec node "$script_dir/pair-plan-challenge" "$@"
-fi
-exec node "$script_dir/pair-task" "$@"
+case "${1:-}" in
+  --fresh-from|--adopt-handover|--allow-cold-resume|--handover-now|--conversation-checkpoint|--brainstorm-checkpoint|--register-brainstorming|--enable-general-handover|--disable-general-handover|--freshness-status|--handover-help)
+    exec node "$script_dir/pair-task" "$@"
+    ;;
+esac
+exec node "$script_dir/pair-cli" "$@"

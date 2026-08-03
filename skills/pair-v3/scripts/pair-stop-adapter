@@ -2,131 +2,26 @@
 
 const childProcess = require('node:child_process');
 const fs = require('node:fs');
-const path = require('node:path');
 
-const { loadPairState } = require('./lib/pair-state');
-const { appendPairEvent } = require('./lib/pair-state');
-const { recordCoordinatorTelemetry } = require('./lib/coordinator-telemetry');
 const { prepareAgentConversationStop, recordAgentConversationStop } = require('./lib/handover-state');
 
 function readInput() {
-  try {
-    return JSON.parse(fs.readFileSync(0, 'utf8') || '{}');
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch { return null; }
 }
 
 function repositoryRoot(cwd) {
-  const result = childProcess.spawnSync('git', ['rev-parse', '--show-toplevel'], {
-    cwd,
-    encoding: 'utf8',
-  });
+  const result = childProcess.spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' });
   return result.status === 0 ? result.stdout.trim() : null;
 }
 
 function runtimeFor(input) {
   const configured = String(process.env.PAIR_HOOK_RUNTIME || input?.runtime || '').toLowerCase();
   if (configured === 'codex' || configured === 'claude') return configured;
-  if (process.env.CLAUDE_PROJECT_DIR || process.env.CLAUDECODE) return 'claude';
-  return 'codex';
-}
-
-function continuationReason(state) {
-  const active = state.active;
-  if (active) {
-    return `Pair v4 continuation owns this chat: resume attempt ${active.attempt_id} for task ${active.task_id} at ${active.phase}. Evidence sequence ${state.sequence}. Run pair-loop --status, preserve the current patch, and continue the exact saved phase.`;
-  }
-  return `Pair v4 continuation owns this chat: Work ${state.work_id} remains ${state.lifecycle}. Evidence sequence ${state.sequence}. Run pair-loop --status and advance the next actionable phase.`;
-}
-
-function waitAdviceReason(state, request) {
-  return `Pair v4 continuation owns this chat: request ${request.request_kind || 'request'} (${request.request_id}) is executing ${request.phase || state.lifecycle} for Work ${state.work_id} inside the live pair-loop process. Do not poll for progress. Arrange one wake path for its completion (a harness-tracked background task or a Monitor on the Work's events.jsonl), then stop; further Stops while this request runs are allowed.`;
-}
-
-// The journal owns request liveness (request.completed releases it); the
-// active-loop marker only proves a pair-loop process is still executing, so a
-// crashed loop degrades to the ordinary continuation block instead of allowing
-// Stop forever. The age cap bounds a marker-alive-but-wedged loop the same way.
-function liveRequestWait(root, state, now = Date.now()) {
-  const request = state.in_flight_request;
-  if (!request || !request.request_id) return null;
-  const marker = readActiveLoopMarker(root);
-  if (!marker?.pid || !processAlive(marker.pid)) return null;
-  const startedAt = Date.parse(request.started_at || '');
-  const maxAgeMs = Number(process.env.PAIR_REQUEST_WAIT_MAX_AGE_MS || 2 * 60 * 60 * 1000);
-  if (!Number.isFinite(startedAt) || now - startedAt > maxAgeMs) return null;
-  return request;
-}
-
-function readActiveLoopMarker(root) {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(root, '.pair', 'active-loop.json'), 'utf8'));
-  } catch {
-    return null;
-  }
-}
-
-function processAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function response(runtime, reason) {
-  return { decision: 'block', reason };
+  return process.env.CLAUDE_PROJECT_DIR || process.env.CLAUDECODE ? 'claude' : 'codex';
 }
 
 function hardStopResponse(reason) {
   return { continue: false, stopReason: reason };
-}
-
-function hasPairAuthority(root) {
-  const pairDirectory = path.join(root, '.pair');
-  return [
-    path.join(pairDirectory, 'events.jsonl'),
-    path.join(pairDirectory, 'current-run.json'),
-    path.join(pairDirectory, 'runs'),
-  ].some(candidate => fs.existsSync(candidate));
-}
-
-function continuationResponse(root, input, runtime = runtimeFor(input)) {
-  if (!hasPairAuthority(root)) return null;
-  let state;
-  try {
-    state = loadPairState(root);
-  } catch {
-    return null;
-  }
-  const owner = state.continuation?.owner_session_id;
-  if (!owner || !input.session_id || owner !== input.session_id) return null;
-  if (
-    state.continuation.paused ||
-    state.continuation.human_edit ||
-    ['idle', 'paused', 'blocked', 'complete'].includes(state.lifecycle)
-  ) return null;
-  const request = liveRequestWait(root, state);
-  if (request) {
-    // Advise the wake path exactly once per request, then let the
-    // conversation go quiet instead of forcing a poll turn every Stop.
-    if (state.continuation.wait_advised_request_id === request.request_id) return null;
-    try {
-      appendPairEvent(root, {
-        event: 'continuation.wait-advised',
-        workId: state.work_id,
-        request_id: request.request_id,
-      });
-    } catch {
-      // If the advice cannot be journaled, keep blocking; the gate must
-      // never fail open without a recorded advisory.
-    }
-    return response(runtime, waitAdviceReason(state, request));
-  }
-  return response(runtime, continuationReason(state));
 }
 
 function main() {
@@ -136,43 +31,16 @@ function main() {
   const cwd = input.cwd || input.project_dir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const root = repositoryRoot(cwd);
   if (!root) return;
-  const runtime = runtimeFor(input);
-  let ownsPairWork = false;
-  if (hasPairAuthority(root)) {
-    try {
-      ownsPairWork = loadPairState(root).continuation?.owner_session_id === input.session_id;
-    } catch {
-      // Invalid Pair state remains inert here; the existing continuation path handles it below.
-    }
-  }
-  if (ownsPairWork && input.transcript_path) {
-    try {
-      recordCoordinatorTelemetry(root, {
-        runtime,
-        transcriptPath: input.transcript_path,
-        sessionId: input.session_id,
-        now: input.now,
-      });
-    } catch (error) {
-      try {
-        appendPairEvent(root, {
-          event: 'warning.recorded',
-          code: 'coordinator-telemetry-unavailable',
-          detail: `Observed coordinator usage was unavailable (${error.code || error.name || 'parse-error'}); Pair correctness is unaffected`,
-        });
-      } catch {
-        // Telemetry and its warning are both nonblocking.
-      }
-    }
-  }
-  let recorded;
   try {
-    const preparation = prepareAgentConversationStop(root, {
-      runtime,
+    const options = {
+      runtime: runtimeFor(input),
       agentConversationId: input.session_id,
       kind: input.agent_conversation_kind || null,
-      transcriptPath: input.transcript_path || null,
       now: input.now,
+    };
+    const preparation = prepareAgentConversationStop(root, {
+      ...options,
+      transcriptPath: input.transcript_path || null,
     });
     if (preparation.status === 'recovery-unavailable') {
       process.stdout.write(`${JSON.stringify(hardStopResponse(
@@ -180,34 +48,15 @@ function main() {
       ))}\n`);
       return;
     }
-    recorded = recordAgentConversationStop(root, {
-      runtime,
-      agentConversationId: input.session_id,
-      kind: input.agent_conversation_kind || null,
-      now: input.now,
-    });
+    recordAgentConversationStop(root, options);
   } catch (error) {
     const checkpointFailure = /checkpoint|not consumed/iu.test(error.message || '');
-    const reason = checkpointFailure
+    process.stdout.write(`${JSON.stringify(hardStopResponse(checkpointFailure
       ? 'Freshness Gate stopped this turn without scheduling another old-conversation prompt: refresh the Agent Conversation Checkpoint during the one authorized turn before Stop.'
-      : 'Freshness Gate stopped this registered Agent Conversation because its handover state is invalid.';
-    process.stdout.write(`${JSON.stringify(hardStopResponse(reason))}\n`);
-    return;
+      : 'Freshness Gate stopped this registered Agent Conversation because its handover state is invalid.'))}\n`);
   }
-  if (['sealed', 'retired', 'override-active', 'override-consumed'].includes(recorded.status)) return;
-  const continuation = continuationResponse(root, input, runtime);
-  if (continuation) process.stdout.write(`${JSON.stringify(continuation)}\n`);
 }
 
 if (require.main === module) main();
 
-module.exports = {
-  continuationReason,
-  continuationResponse,
-  hasPairAuthority,
-  hardStopResponse,
-  liveRequestWait,
-  response,
-  runtimeFor,
-  waitAdviceReason,
-};
+module.exports = { hardStopResponse, runtimeFor };

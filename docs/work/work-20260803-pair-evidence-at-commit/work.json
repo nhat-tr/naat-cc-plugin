@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "work_id": "work-20260803-pair-evidence-at-commit",
+  "title": "Pair Evidence-at-Commit Loop",
+  "status": "design-approved",
+  "spec": {
+    "path": "docs/work/work-20260803-pair-evidence-at-commit/spec.md",
+    "sha256": "43649ed08a0f2b23760e0eab9902c043f9e54084be4449e31d34736b70f5efd7"
+  },
+  "active_pair_mirror": ".pair/spec.md",
+  "engineering_quality_contract": {
+    "path": "docs/work/work-20260803-pair-evidence-at-commit/spec.md",
+    "section": "Engineering Quality Contract",
+    "status": "approved"
+  },
+  "decision_records": [],
+  "decision_supersessions": [],
+  "changes": [],
+  "outcomes": [],
+  "evidence_records": []
+}

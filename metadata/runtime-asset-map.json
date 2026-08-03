@@ -130,13 +130,6 @@
         "claude"
       ]
     },
-    "command.pair-promote": {
-      "type": "command",
-      "canonical_file": "commands/pair-promote.md",
-      "supported_runtimes": [
-        "claude"
-      ]
-    },
     "command.verify": {
       "type": "command",
       "canonical_file": "commands/verify.md",
@@ -220,14 +213,6 @@
     "skill.pair-v4": {
       "type": "workflow_skill",
       "canonical_file": "skills/pair-v4/SKILL.md",
-      "supported_runtimes": [
-        "claude",
-        "codex"
-      ]
-    },
-    "skill.pair-promote": {
-      "type": "skill",
-      "canonical_file": "skills/pair-promote/SKILL.md",
       "supported_runtimes": [
         "claude",
         "codex"
@@ -333,22 +318,6 @@
         "codex"
       ]
     },
-    "cli.validate-implementation-design": {
-      "type": "cli",
-      "canonical_file": "bin/validate-implementation-design",
-      "supported_runtimes": [
-        "claude",
-        "codex"
-      ]
-    },
-    "cli.validate-plan": {
-      "type": "cli",
-      "canonical_file": "bin/validate-plan",
-      "supported_runtimes": [
-        "claude",
-        "codex"
-      ]
-    },
     "cli.pair-loop": {
       "type": "cli",
       "canonical_file": "bin/pair-loop",
@@ -365,17 +334,17 @@
         "codex"
       ]
     },
-    "cli.pair-plan-challenge": {
+    "cli.pair-report": {
       "type": "cli",
-      "canonical_file": "bin/pair-plan-challenge",
+      "canonical_file": "bin/pair-report",
       "supported_runtimes": [
         "claude",
         "codex"
       ]
     },
-    "cli.pair-report": {
+    "cli.pair-review": {
       "type": "cli",
-      "canonical_file": "bin/pair-report",
+      "canonical_file": "bin/pair-review",
       "supported_runtimes": [
         "claude",
         "codex"

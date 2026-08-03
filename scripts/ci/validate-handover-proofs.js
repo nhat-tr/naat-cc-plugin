@@ -6,11 +6,8 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '../..');
 const files = {
   brainstorm: 'skills/brainstorming/tests/handover-checkpoint.integration.test.js',
-  contracts: 'skills/pair-v3/tests/pair-contract-docs.test.js',
   gate: 'skills/pair-v3/tests/handover-gate.integration.test.js',
   launch: 'skills/pair-v3/tests/handover-launch.integration.test.js',
-  modes: 'skills/pair-v3/tests/loop-modes.test.js',
-  pairState: 'skills/pair-v3/tests/pair-state.integration.test.js',
   state: 'skills/pair-v3/tests/handover-state.test.js',
 };
 
@@ -18,7 +15,6 @@ const proofs = [
   {
     id: 'AC-1',
     clauses: [
-      [files.gate, 'Pair registers the native coordinator identity independently of worker runtime routing'],
       [files.brainstorm, 'brainstorming registers the documented Claude identity and refreshes a bounded semantic checkpoint'],
       [files.gate, 'clean unregistered UserPromptSubmit and Stop are byte-for-byte inert'],
       [files.state, 'brainstorming handover never captures an unrelated active Pair Work reference'],
@@ -47,14 +43,13 @@ const proofs = [
       [files.gate, 'native Codex and Claude stale responses use their exact blocking shapes'],
       [files.gate, 'seals one handover on the first stale prompt and records registered Stop activity'],
       [files.gate, 'submitted prompt is never persisted'],
-      [files.gate, 'status orientation doctor and hooks agree on the sealed Agent Conversation Handover'],
+      [files.gate, 'freshness status orientation and hooks agree on the sealed Agent Conversation Handover'],
     ],
   },
   {
     id: 'AC-5',
     clauses: [
       [files.state, 'handover references canonical Work state and persists no duplicate lifecycle authority'],
-      [files.pairState, 'one reducer retains Work authority and freshness projection survives restart'],
       [files.launch, 'adoption cannot transfer a sealed handover across a changed current Pair Work'],
     ],
   },
@@ -110,18 +105,14 @@ const proofs = [
       [files.gate, 'PreCompact and PostCompact cannot bypass freshness and compact summary is never persisted'],
       [files.launch, 'known event with an extra secret field makes the handover fail closed before launch or adoption'],
       [files.launch, 'brainstorming CLI adoption redacts secrets inside accepted checkpoint fields'],
-      [files.modes, 'Pair-authored logs, patches, reviews, reports, and status redact credential canaries'],
     ],
   },
   {
     id: 'AC-11',
     excluded_by_operator: ['tmux warning and attach-output clauses'],
     clauses: [
-      [files.gate, 'status orientation doctor and hooks agree on the sealed Agent Conversation Handover'],
-      [files.gate, 'human and compact status expose warm age deadline checkpoint digest and next safe action'],
-      [files.gate, 'doctor hook inspection rejects missing and broken installs and accepts one coordinated contract'],
-      [files.gate, 'doctor treats unavailable Freshness Gate state as failure and healthy cold state as warning'],
-      [files.gate, 'Pair registers the native coordinator identity independently of worker runtime routing'],
+      [files.gate, 'freshness status orientation and hooks agree on the sealed Agent Conversation Handover'],
+      [files.gate, 'freshness status exposes warm age deadline checkpoint digest and next safe action'],
       [files.brainstorm, 'brainstorming registers CODEX_THREAD_ID and rejects a runtime that lies about the native conversation'],
     ],
   },
@@ -136,9 +127,6 @@ const proofs = [
   {
     id: 'AC-13',
     clauses: [
-      [files.contracts, 'cold agent conversation vocabulary and commands stay aligned without mutating DR-003'],
-      [files.contracts, 'Pair CLI help exposes the exact handover launch adoption and one-shot recovery commands'],
-      [files.contracts, 'new Decision Record supersedes DR-003 without mutation'],
       [files.brainstorm, 'brainstorming skill requires the executable checkpoint command at material research and decision boundaries'],
     ],
   },

@@ -2,7 +2,7 @@
 
 Use one lower-tier scout only when repository reconnaissance would otherwise flood the main conversation. Small or already-localized work stays with the coordinator.
 
-For approved Review Slice manifests, use the bounded batch command. Deterministic indexing happens before delegation; the model never chooses packet ownership or grouping.
+For a bounded list of Review Slices, use the batch command. Deterministic packet grouping happens before delegation; the model never chooses packet ownership or grouping.
 
 ## Contract
 
@@ -58,9 +58,7 @@ Use `--runtime claude` only when Claude is the intended lower-tier worker. Overr
 
 ## Run a Review Slice Batch
 
-Pass the canonical `review-index.cjs` Review Slice manifest (`schema: 1`) with its Work ID, base/head trees, plan digest, indexer version, stable task IDs, and actual changes. `run-batch` verifies change identities and derives paths, exact line deltas, changed public symbols, imports or boundary crossings, tests, and unknowns from the named Git trees. Attribute-free blob comparisons keep local or global Git attributes and diff drivers from changing packets; NUL detection on the tree blobs determines binary status. Caller-authored counts and shortlist annotations are not part of the canonical contract.
-
-The earlier `version: 1` scout manifest remains readable as a compatibility adapter for existing integrations. New callers must use the canonical Review Slice manifest; only the canonical path has Git-derived evidence authority.
+Pass a compact `version: 1` scout manifest with a Work ID and Review Slices. Each slice names its acceptance criteria and changed-file summaries: path, changed-line count, public symbols, boundary crossings, tests, and unknowns. This is an offline reconnaissance input, not Pair runtime state or a substitute for commit-addressed review evidence.
 
 ```bash
 node <skill-dir>/scripts/evidence-scout.cjs run-batch \

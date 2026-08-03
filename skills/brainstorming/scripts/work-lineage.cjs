@@ -285,13 +285,6 @@ function validatePersistedWork(value, expectedWorkId = null) {
     throw new TypeError('Work.engineering_quality_contract must reference the approved canonical section');
   }
 
-  if (value.plan !== undefined) {
-    assertSchemaObject(value.plan, WORK_SCHEMA.properties.plan, 'Work.plan');
-    if (value.plan.path !== '.pair/plan.md') throw new TypeError('Work.plan.path must be .pair/plan.md');
-    identifier(value.plan.sha256, 'Work.plan.sha256', SHA256_PATTERN, true);
-    requiredText(value.plan.status, 'Work.plan.status', 100, true);
-    requiredText(value.plan.independent_review, 'Work.plan.independent_review', 100, true);
-  }
   if (value.approved_visual_revision !== undefined) {
     identifier(value.approved_visual_revision, 'Work.approved_visual_revision', /^[a-f0-9]{8,64}$/, true);
   }

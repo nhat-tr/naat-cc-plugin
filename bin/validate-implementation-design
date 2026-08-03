@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-exec node "$SCRIPT_DIR/../skills/pair-v3/scripts/validate-implementation-design" "$@"

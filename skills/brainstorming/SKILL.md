@@ -1,6 +1,6 @@
 ---
 name: brainstorming
-description: Turn a vague idea into an approved, evidence-grounded design before implementation. Use for feature design, requirement exploration, specification, architectural choices, requests such as "I have an idea" or "before we build", and explicitly requested live visual interviews with selectable, annotatable visual documents including UI screen prototypes (typed mockup elements) and UML diagrams (component, state machine, activity, sequence). Any visual, mockup, UML, or UI-prototype need during brainstorming is served by this skill's own visual companion — never by artifact-design or frontend-design. Produces a canonical Work specification plus generated `.pair/spec.md` mirror for pair-v3 work, or a generic design doc otherwise.
+description: Turn a vague idea into an approved, evidence-grounded design before implementation. Use for feature design, requirement exploration, specification, architectural choices, requests such as "I have an idea" or "before we build", and explicitly requested live visual interviews with selectable, annotatable visual documents including UI screen prototypes (typed mockup elements) and UML diagrams (component, state machine, activity, sequence). Any visual, mockup, UML, or UI-prototype need during brainstorming is served by this skill's own visual companion — never by artifact-design or frontend-design. Produces a canonical Work specification plus generated `.pair/spec.md` and compact `.pair/review-slices.json` for Pair work, or a generic design doc otherwise.
 ---
 
 # Brainstorm Ideas Into an Approved Design
@@ -24,7 +24,7 @@ Every visual during brainstorming routes through this skill's Visual Companion. 
 5. Compare only viable approaches, beginning with the framework-native baseline.
 6. Present one integrated design and obtain approval.
 7. Write and self-review the specification.
-8. Reconfirm only semantic changes, then hand pair work to `pair-promote`.
+8. Reconfirm only semantic changes, then emit the compact Review Slice Manifest for Pair work.
 
 ## Core Anchor
 
@@ -151,17 +151,18 @@ Use this structure, scaled to the work. Write for a human reviewer first: start 
 ```
 
 Every acceptance criterion must have a stable ID and a matching verification entry. Keep the acceptance criterion itself outcome-only; put the proof under its matching `### AC-<n>` verification heading. Do not leave TODO/TBD placeholders.
-For pair-v3 Work, replace the Work ID and both Engineering Quality Contract entries with approved concrete content before publishing. Generic designs may omit the Work-only metadata when it is not applicable.
+For Pair Work, replace the Work ID and both Engineering Quality Contract entries with approved concrete content before publishing. Generic designs may omit the Work-only metadata when it is not applicable.
 
 ### Destination
 
-- Pair-v3 work explicitly requested by the user or already active: assign a stable `work-YYYYMMDD-<slug>` Work ID and put that exact Work ID in the approved specification.
+- Pair work explicitly requested by the user or already active: assign a stable `work-YYYYMMDD-<slug>` Work ID and put that exact Work ID in the approved specification.
 - Write the approved candidate under `$CLAUDE_SCRATCH_DIR/<repo>/brainstorming/`, then run `work-lineage.cjs create --repository-root "$PWD" --work-id <work-id> --spec-file <approved-candidate>` from the repository root. The runtime installer puts this portable helper on `PATH`; in an uninstalled toolkit checkout, invoke the same script from `skills/brainstorming/scripts/work-lineage.cjs`.
 - The command publishes `docs/work/<work-id>/spec.md` and `work.json` as the Git-trackable canonical Work root, then writes `.pair/spec.md` as the generated active mirror with `Canonical:` and `Canonical SHA-256:` headers.
+- Write `.pair/review-slices.json` directly after publication. It contains only `schema`, `work_id`, and ordered `slices`; each slice contains exactly `id`, `acceptance_criteria`, `outcome`, `depends_on`, and `verify`. Map every Acceptance Criterion exactly once. Keep each outcome behavioral, each dependency explicit, and each verification command executable. Do not include symbols, files, classes, architecture, test designs, prompts, or implementation steps. Keep the whole manifest below 16 KiB and each slice below 1,400 UTF-8 bytes.
 - Commit only the canonical Work artifacts when a later workflow requests a commit. Do not commit `.pair/`, `.artifacts/`, the scratch candidate, or other raw workflow state.
 - Generic work: write `docs/specs/YYYY-MM-DD-<topic>-design.md` or the user's requested location. Leave it uncommitted unless the user asks for a commit.
 
-Never overwrite an existing Work root. A later semantic choice belongs in an immutable Decision Record or a new explicitly approved Work. Do not infer pair mode merely because a stale `.pair/` directory exists. Do not design or approve implementation streams here; `pair-promote` owns code-grounded decomposition.
+Never overwrite an existing Work root. A later semantic choice belongs in an immutable Decision Record or a new explicitly approved Work. Do not infer Pair work merely because a stale `.pair/` directory exists. The Review Slice Manifest is scheduling metadata, not an implementation design.
 
 If terminology needs updating, propose the glossary change. Invoke `ubiquitous-language` only with the user's approval or when their request already includes glossary maintenance.
 
@@ -176,7 +177,7 @@ If terminology needs updating, propose the glossary change. Invoke `ubiquitous-l
 
 ## Transition
 
-For pair-v3 work, invoke `pair-promote` only after the canonical Work root and generated active mirror exist. Do not implement directly from the specification.
+For Pair work, stop after the canonical Work root, active spec mirror, and Review Slice Manifest exist. Implementation starts only when the user invokes `pair-loop open` or explicitly asks to implement.
 
 ## Visual Companion
 

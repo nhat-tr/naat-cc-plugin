@@ -53,29 +53,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "PAIR_HOOK_RUNTIME=claude bash ~/.local/share/my-claude-code/hooks/pair-owner.sh",
-            "if": "Bash(*pair-*)",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
             "command": "PAIR_HOOK_RUNTIME=claude bash ~/.local/share/my-claude-code/hooks/brainstorm-register.sh",
             "if": "Bash(*visual-session*)",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.local/share/my-claude-code/hooks/delegation-nudge.sh",
             "timeout": 10
           }
         ]

@@ -90,7 +90,7 @@ interface ReviewDocument extends Record<string, unknown> {
 
 const fs = require("node:fs") as FileSystem;
 const { createBrainstormServer } = require("../scripts/server.cjs") as ReviewServerFactory;
-const reviewIndex = require("../../pair-v3/scripts/review-index.cjs") as ReviewIndex;
+const reviewIndex = require("../scripts/feature-review-index.cjs") as ReviewIndex;
 const fixtureFile = require.resolve("../fixtures/feature-review-work.json");
 const budgetFile = require.resolve("../fixtures/performance-budgets.json");
 

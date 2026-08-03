@@ -134,17 +134,49 @@ _Domain glossary for the brainstorming skill's Visual Companion (`skills/brainst
 - Aliases to avoid: unqualified "Decision" — **Decision** is already the selectable Visual Document Section.
 - Relations: belongs to one **Work ID**; may supersede another Decision Record; links to Acceptance Criteria, implementation changes, findings, and outcomes.
 
-**Review Slice** — a stable review unit whose identity comes from an approved plan task and its Acceptance Criteria mapping, not from inferred graph clustering or prose similarity.
+**Review Slice** — a stable implementation and review unit declared by a **Review Slice Manifest** and mapped to approved Acceptance Criteria, not inferred from files, graph clustering, or prose similarity.
 - Aliases to avoid: "capability slice", "file cluster".
-- Relations: belongs to one **Work ID**; binds expected ownership to an immutable patch set; overlapping and unmapped changes remain explicit rather than being forced into a Review Slice.
+- Relations: belongs to one **Work ID**; produces one immutable checkpoint commit and one **Failure Proof** before acceptance.
 
-**Implementation Design Contract** — an immutable, content-addressed, provider-neutral Work evidence record that closes the exact implementation decisions needed to execute approved intent: symbols and call paths, before/after/error behavior, state flow, wiring, failure handling, deletions, tests, RED signals, and non-goals.
-- Aliases to avoid: "Codex plan", "Claude plan", "hidden plan", "planner prompt".
-- Relations: belongs to one **Work ID**; is indexed as canonical evidence; is digest-bound by the Pair plan; maps each implementation decision to one **Review Slice**.
+**Review Slice Manifest** — the sub-16-KiB minimal ordered execution index for one Work: 1–40 stable Review Slice IDs, Acceptance Criteria IDs, intended outcomes, dependency IDs, and verification entrypoints.
+- Aliases to avoid: "implementation plan", "execution packet" — the manifest carries navigation, not speculative design.
+- Relations: belongs to one **Work ID**; never embeds repository excerpts, implementation decisions, tests, patches, prompts, or review history.
 
-**Review Slice Execution Packet** — the private bounded projection of one approved Pair task and its mapped Implementation Design Contract decisions that a coordinator needs to execute that Review Slice without rereading the whole plan and specification.
-- Aliases to avoid: "task prompt", "slice capsule".
-- Relations: belongs to one **Review Slice**; carries verbatim Acceptance Criteria, constraints, relevant existing repository evidence, ownership, exact mapped and transitive upstream design decisions, tests, verification, non-goals, and the cheap-ready routing result; is stored only in Pair runtime state.
+**Architecture Risk** — one bounded statement naming a changed or unknown runtime responsibility that could make an implementation locally correct but operationally unsafe, including ownership, contract, ordering, failure, deployment, replica, middleware, eventing, or UI state behavior.
+- Aliases to avoid: "architecture facts list", "risk checklist" — the signal is intentionally open-ended rather than a finite technology enum.
+- Relations: activates the **Architecture-Sensitive Path** and is supported by current-code evidence in its **Design Check**.
+
+**Architecture-Sensitive Path** — the Review Slice path activated by one observed or declared **Architecture Risk**, regardless of change size.
+- Aliases to avoid: "high complexity path" — activation comes from a changed or unknown runtime responsibility, not size estimates.
+- Relations: requires a **Design Check**, a thin vertical checkpoint, fresh model review, and human acceptance before expansion.
+
+**Routine Path** — the Review Slice path allowed only when feature ownership, lifetime, public and persistence behavior, concurrency, and a high-fidelity proof boundary remain unchanged.
+- Aliases to avoid: "small change path" — line count does not establish routine risk.
+- Relations: escalates to the **Architecture-Sensitive Path** when intent or checkpoint facts violate any routine condition.
+
+**Design Check** — sub-2-KiB Markdown evidence for an Architecture-Sensitive Path: seam/callers, ownership/state/lifetime, runtime/failure/deployment, contract/compatibility, rejected alternative, and proof.
+- Aliases to avoid: "Implementation Design Contract", "mini design document".
+- Relations: belongs to one Review Slice checkpoint and is reviewed against actual code rather than treated as architecture authority.
+
+**Failure Proof** — the narrowest observed evidence capable of detecting the Review Slice's real failure at its production boundary, such as base reproduction, unit, integration, contract, end-to-end, runtime, or recorded manual evidence.
+- Aliases to avoid: "test count", "coverage", "RED signal" — none proves that broken behavior is observable.
+- Relations: belongs to one Review Slice; uses a negative control, mutation, base failure, or equivalent observation when feasible.
+
+**Review Outcome** — immutable, addressable, sub-8-KiB evidence from one fresh model review of one Review Slice checkpoint, including status, at most three evidence-gated findings, usage, and stable Work/Review Slice/commit/blob bindings.
+- Aliases to avoid: "latest review", "review file" — both lose historical identity.
+- Relations: belongs to one **Review Slice**; proposes evidence for human disposition and never triggers code changes by itself.
+
+**Review Feedback** — append-only human adjudication of one Review Outcome finding, expressed as valid, false-positive, not-worth-fixing, or missing-context with a reason.
+- Aliases to avoid: "review override" — feedback never mutates historical Review Outcomes.
+- Relations: targets one stable finding ID; only valid feedback may authorize one bounded correction.
+
+**Review Guidance** — compact repository-local reviewer rules derived from Review Feedback, proven in a **Review Evaluation Bank**, scope-tagged, and activated only by explicit human approval.
+- Aliases to avoid: "model memory", "global review prompt".
+- Relations: cites source Review Feedback and evaluation results; a 32-KiB repository index retains at most 16 active rules, and at most three relevant rules enter one fresh review.
+
+**Review Evaluation Bank** — a bounded repository-local set of 20–50 representative accepted findings, false positives, missed defects, and manual escapes used offline to compare reviewer guidance or policy changes.
+- Aliases to avoid: "review memory", "finding archive" — runtime review never receives the bank.
+- Relations: capped at 32 KiB and references fixtures; measures known-defect detection, blocking precision, escapes, token use, duration, attempts, and human rework before Review Guidance activation or Pair rollout. Its sub-16-KiB result retains aggregate metrics, digests, and failing IDs rather than trial payloads.
 
 **Engineering Quality Contract** — the approved set of always-on and fact-activated quality obligations for one Work, including measurable responses, verification evidence, owners, exclusions, residual risks, and approval or veto state.
 - Aliases to avoid: "quality checklist", "NFR list".

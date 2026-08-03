@@ -1,0 +1,231 @@
+#!/usr/bin/env node
+
+const fs = require('node:fs');
+const path = require('node:path');
+
+const {
+  acceptHumanReview,
+  adjudicateFinding,
+  advanceWork,
+  currentState,
+  openWork,
+  removeWorktree,
+} = require('./lib/pair-engine');
+const { EVALUATION_RESULT_LIMIT_BYTES, evaluateBank } = require('./lib/review-evaluation');
+const {
+  activeReviewGuidance,
+  decideReviewGuidance,
+  proposeReviewGuidance,
+} = require('./lib/review-guidance');
+const { readCurrentWork, readJson, repositoryRoot, workPaths, writeJson } = require('./lib/pair-store');
+const { hydrateWorktree } = require('./lib/pair-worktree');
+
+function fail(message) {
+  console.error(`pair-loop: ${message}`);
+  process.exitCode = 1;
+}
+
+function evaluationSummary(result, output) {
+  return {
+    path: output,
+    bank_digest: result.bank_digest,
+    case_count: result.case_count,
+    guidance_improved: result.guidance_improved,
+    migration_passed: result.migration_passed,
+    baseline_precision: result.baseline.precision,
+    candidate_precision: result.candidate.precision,
+    baseline_escapes: result.baseline.escapes,
+    candidate_escapes: result.candidate.escapes,
+    failed_case_count: result.failed_case_ids.length,
+  };
+}
+
+function valueAfter(argv, index, flag) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith('-')) throw new Error(`${flag} requires a value`);
+  return value;
+}
+
+function parseArgs(argv) {
+  const options = {
+    command: null,
+    runtime: process.env.PAIR_RUNTIME || 'auto',
+    effort: 'medium',
+    json: false,
+    submodules: [],
+  };
+  const positional = [];
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (!arg.startsWith('-')) { positional.push(arg); continue; }
+    if (arg === '--work' || arg === '--work-id') options.workId = valueAfter(argv, index++, arg);
+    else if (arg === '--spec') options.specPath = valueAfter(argv, index++, arg);
+    else if (arg === '--manifest') options.manifestPath = valueAfter(argv, index++, arg);
+    else if (arg === '--base') options.base = valueAfter(argv, index++, arg);
+    else if (arg === '--worktree') options.destination = valueAfter(argv, index++, arg);
+    else if (arg === '--runtime') options.runtime = valueAfter(argv, index++, arg);
+    else if (arg === '--model') options.model = valueAfter(argv, index++, arg);
+    else if (arg === '--effort') options.effort = valueAfter(argv, index++, arg);
+    else if (arg === '--review-policy') options.reviewPolicy = valueAfter(argv, index++, arg);
+    else if (arg === '--sample-rate') options.sampleRate = Number(valueAfter(argv, index++, arg));
+    else if (arg === '--slice') options.sliceId = valueAfter(argv, index++, arg);
+    else if (arg === '--finding') options.findingId = valueAfter(argv, index++, arg);
+    else if (arg === '--disposition') options.disposition = valueAfter(argv, index++, arg);
+    else if (arg === '--reason') options.reason = valueAfter(argv, index++, arg);
+    else if (arg === '--submodule') options.submodules.push(valueAfter(argv, index++, arg));
+    else if (arg === '--bank') options.bankPath = valueAfter(argv, index++, arg);
+    else if (arg === '--evaluation') options.evaluationPath = valueAfter(argv, index++, arg);
+    else if (arg === '--feedback') options.sourceFeedbackIds = valueAfter(argv, index++, arg).split(',').filter(Boolean);
+    else if (arg === '--scope') options.scopes = valueAfter(argv, index++, arg).split(',').filter(Boolean);
+    else if (arg === '--rule') options.rule = valueAfter(argv, index++, arg);
+    else if (arg === '--proposal') options.proposalId = valueAfter(argv, index++, arg);
+    else if (arg === '--decision') options.decision = valueAfter(argv, index++, arg);
+    else if (arg === '--allow-incomplete') options.allowIncomplete = true;
+    else if (arg === '--json') options.json = true;
+    else if (arg === '--status') options.command = 'status';
+    else if (arg === '--help' || arg === '-h') options.command = 'help';
+    else throw new Error(`unsupported option ${arg}`);
+  }
+  options.command ||= positional.shift() || 'run';
+  options.subcommand = positional.shift() || null;
+  if (positional.length > 0) throw new Error(`unexpected arguments: ${positional.join(' ')}`);
+  return options;
+}
+
+function workIdFromSpec(file) {
+  const text = fs.readFileSync(file, 'utf8');
+  return text.match(/\*\*Work ID:\*\*\s*`([^`]+)`/u)?.[1] || null;
+}
+
+function selectedState(root, options) {
+  return currentState(root, options.workId || readCurrentWork(root)?.work_id || null);
+}
+
+function printStatus(state, json = false) {
+  if (json) {
+    console.log(JSON.stringify(state, null, 2));
+    return;
+  }
+  const active = state.slices.find(slice => !['queued', 'accepted'].includes(slice.status));
+  const next = active || state.slices.find(slice => slice.status === 'queued');
+  console.log([
+    `Pair ${state.lifecycle}`,
+    `Work: ${state.work_id}`,
+    `Branch: ${state.branch}`,
+    `Worktree: ${state.worktree}`,
+    `Review Slice: ${next?.id || 'none'} (${next?.status || 'none'})`,
+    `Head: ${state.head_commit}`,
+    `Next: ${state.next_action || 'none'}`,
+  ].join('\n'));
+}
+
+function help() {
+  console.log(`Pair Evidence-at-Commit Loop
+
+  pair-loop open --work <id> [--spec .pair/spec.md] [--manifest .pair/review-slices.json]
+  pair-loop run [--runtime auto] [--review-policy architecture|sample|all|off]
+  pair-loop status [--json]
+  pair-loop accept --slice <id>
+  pair-loop feedback --finding <id> --disposition valid|false-positive|not-worth-fixing|missing-context --reason <text>
+  pair-loop hydrate [--submodule <path> ...]
+  pair-loop remove-worktree [--allow-incomplete]
+  pair-loop evaluate --bank <review-evaluation-bank.json>
+  pair-loop guidance propose --feedback <id,...> --scope <tag,...> --rule <text> --evaluation <result.json>
+  pair-loop guidance approve|reject --proposal <id> --reason <text>
+
+Bare pair-loop means run. Runtime Work/spec/review evidence stays in Git common directory; product branch receives code only.`);
+}
+
+function main(argv = process.argv.slice(2)) {
+  let options;
+  try { options = parseArgs(argv); } catch (error) { fail(error.message); return; }
+  if (options.command === 'help') { help(); return; }
+  let root;
+  try { root = repositoryRoot(process.cwd()); } catch (error) { fail(error.message); return; }
+  try {
+    if (options.command === 'open') {
+      const specPath = path.resolve(root, options.specPath || '.pair/spec.md');
+      const manifestPath = path.resolve(root, options.manifestPath || '.pair/review-slices.json');
+      const workId = options.workId || workIdFromSpec(specPath);
+      if (!workId) throw new Error('open requires --work or a **Work ID:** in the specification');
+      const opened = openWork(root, { ...options, workId, specPath, manifestPath });
+      printStatus(opened.state, options.json);
+      return;
+    }
+    if (options.command === 'run') {
+      printStatus(advanceWork(root, options), options.json);
+      return;
+    }
+    if (options.command === 'status') {
+      printStatus(selectedState(root, options), options.json);
+      return;
+    }
+    if (options.command === 'accept') {
+      if (!options.sliceId) throw new Error('accept requires --slice');
+      printStatus(acceptHumanReview(root, options), options.json);
+      return;
+    }
+    if (options.command === 'feedback') {
+      if (!options.findingId || !options.disposition || !options.reason) throw new Error('feedback requires --finding, --disposition, and --reason');
+      printStatus(adjudicateFinding(root, options), options.json);
+      return;
+    }
+    if (options.command === 'hydrate') {
+      const state = selectedState(root, options);
+      console.log(JSON.stringify(hydrateWorktree(root, { workId: state.work_id, worktree: state.worktree, submodules: options.submodules }), null, 2));
+      return;
+    }
+    if (options.command === 'remove-worktree') {
+      console.log(JSON.stringify(removeWorktree(root, options), null, 2));
+      return;
+    }
+    if (options.command === 'evaluate') {
+      if (!options.bankPath) throw new Error('evaluate requires --bank');
+      const state = selectedState(root, options);
+      const result = evaluateBank(readJson(path.resolve(options.bankPath)));
+      const paths = workPaths(root, state.work_id);
+      fs.mkdirSync(paths.evaluations, { recursive: true, mode: 0o700 });
+      const output = path.join(paths.evaluations, `${result.bank_digest}.json`);
+      writeJson(output, result, EVALUATION_RESULT_LIMIT_BYTES);
+      console.log(JSON.stringify(evaluationSummary(result, output), null, 2));
+      return;
+    }
+    if (options.command === 'guidance') {
+      const state = selectedState(root, options);
+      if (options.subcommand === 'propose') {
+        if (!options.evaluationPath) throw new Error('guidance propose requires --evaluation');
+        const proposal = proposeReviewGuidance(root, {
+          workId: state.work_id,
+          sourceFeedbackIds: options.sourceFeedbackIds,
+          scopes: options.scopes,
+          rule: options.rule,
+          evaluation: readJson(path.resolve(options.evaluationPath)),
+        });
+        console.log(JSON.stringify(proposal, null, 2));
+        return;
+      }
+      if (['approve', 'reject'].includes(options.subcommand)) {
+        const decided = decideReviewGuidance(root, {
+          workId: state.work_id,
+          proposalId: options.proposalId,
+          decision: options.subcommand,
+          reason: options.reason,
+        });
+        console.log(JSON.stringify(decided, null, 2));
+        return;
+      }
+      if (options.subcommand === 'active') {
+        console.log(JSON.stringify(activeReviewGuidance(root, state.work_id, options.scopes || ['all']), null, 2));
+        return;
+      }
+      throw new Error('guidance requires propose, approve, reject, or active');
+    }
+    throw new Error(`unsupported command ${options.command}`);
+  } catch (error) {
+    fail(error.message);
+  }
+}
+
+if (require.main === module) main();
+
+module.exports = { evaluationSummary, main, parseArgs, printStatus, workIdFromSpec };

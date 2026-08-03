@@ -2,297 +2,106 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const childProcess = require('node:child_process');
-const { pairStatePaths } = require('./lib/pair-state');
 
-function repositoryRoot() {
-  const result = childProcess.spawnSync('git', ['rev-parse', '--show-toplevel'], {
-    cwd: process.cwd(),
-    encoding: 'utf8',
-  });
-  return result.status === 0 ? result.stdout.trim() : process.cwd();
+const {
+  pairCommonDirectory,
+  readCurrentWork,
+  readEvents,
+  readJson,
+  repositoryRoot,
+  workPaths,
+} = require('./lib/pair-store');
+
+function parseArgs(argv) {
+  const result = { json: false, workId: null };
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (arg === '--json') result.json = true;
+    else if (arg === '--work') result.workId = argv[++index];
+    else if (arg === '--help' || arg === '-h') result.help = true;
+    else throw new Error(`unsupported option ${arg}`);
+  }
+  return result;
 }
 
-const reportRoot = repositoryRoot();
-const defaultLedger = pairStatePaths(reportRoot).events;
-const args = process.argv.slice(2);
-if (args.includes('--help') || args.includes('-h')) {
-  console.log([
-    'Usage: pair-report [LEDGER_PATH] [--json]',
-    '',
-    'Summarize the Pair v4 repository event history by route/type/risk.',
-    `Default event store: ${defaultLedger} (pass a LEDGER_PATH only to inspect legacy history).`,
-    'Columns: attempts, quality, findings, all model-role tokens (input/cached/output/reasoning), elapsed time, cost.',
-    'Interrupted attempts (crashes/kills reconciled on the next run) are reported separately from real tries.',
-  ].join('\n'));
-  process.exit(0);
-}
-// A flag must never be mistaken for the ledger path; only a non-flag argument selects it.
-const asJson = args.includes('--json');
-const ledger = args.find(arg => !arg.startsWith('-')) || defaultLedger;
-if (!fs.existsSync(ledger)) {
-  console.log('pair-report: no attempts recorded');
-  process.exit(0);
+function workIds(root, selected) {
+  if (selected) return [selected];
+  const directory = path.join(pairCommonDirectory(root), 'works');
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => entry.name)
+    .sort();
 }
 
-const records = fs.readFileSync(ledger, 'utf8')
-  .split(/\r?\n/)
-  .filter(Boolean)
-  .map(line => {
-    try { return JSON.parse(line); } catch { return null; }
-  })
-  .filter(Boolean);
-
-const terminalByAttempt = new Map();
-for (const record of records) {
-  if (!['attempt.completed', 'attempt.outcome'].includes(record.event)) continue;
-  if (!record.attemptId || record.terminal === false) continue;
-  terminalByAttempt.set(record.attemptId, {
-    ...record,
-    event: 'attempt.completed',
-  });
-}
-const attempts = [...terminalByAttempt.values()];
-
-const groups = new Map();
-const attemptGroupKeys = new Map();
-for (const attempt of attempts) {
-  const key = `${attempt.routeId}|${attempt.profile?.type || '?'}|${attempt.profile?.risk || '?'}`;
-  const group = groups.get(key) || {
-    route: attempt.routeId,
-    type: attempt.profile?.type || '?',
-    risk: attempt.profile?.risk || '?',
-    attempts: 0,
-    interrupted: 0,
-    valid: 0,
-    accepted: 0,
-    localFix: 0,
-    escalated: 0,
-    rewrites: 0,
-    redesigns: 0,
-    regenerations: 0,
-    humanTakeovers: 0,
-    anchorSamples: 0,
-    reviewerMisses: 0,
-    blockers: 0,
-    majors: 0,
-    inputTokens: 0,
-    cachedInputTokens: 0,
-    uncachedInputTokens: 0,
-    outputTokens: 0,
-    reasoningTokens: 0,
-    elapsedMs: 0,
-    costUsd: 0,
-    measuredCosts: 0,
-    coordinatorTurns: 0,
-    observedModels: [],
-    cheapReady: attempt.cheapReady ?? attempt.cheap_ready ?? null,
-    recommendedStrength: attempt.recommendedStrength ?? attempt.recommended_strength ?? null,
+function summarize(root, workId) {
+  const paths = workPaths(root, workId);
+  const state = readJson(paths.state);
+  if (!state) return null;
+  const events = readEvents(root, workId);
+  const invocations = state.invocations || events.filter(event => event.event === 'provider-finished');
+  const totals = state.invocation_totals || invocations.reduce((sum, invocation) => ({
+    calls: sum.calls + 1,
+    input_tokens: sum.input_tokens + (invocation.input_tokens || 0),
+    cached_input_tokens: sum.cached_input_tokens + (invocation.cached_input_tokens || 0),
+    output_tokens: sum.output_tokens + (invocation.output_tokens || 0),
+    duration_ms: sum.duration_ms + (invocation.duration_ms || 0),
+  }), { calls: 0, input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, duration_ms: 0 });
+  const feedback = events.filter(event => event.event === 'review-feedback-recorded');
+  const dispositions = Object.fromEntries(['valid', 'false-positive', 'not-worth-fixing', 'missing-context']
+    .map(value => [value, feedback.filter(event => event.disposition === value).length]));
+  return {
+    work_id: workId,
+    lifecycle: state.lifecycle,
+    branch: state.branch,
+    head_commit: state.head_commit,
+    slices: state.slices.map(slice => ({
+      id: slice.id,
+      status: slice.status,
+      route: slice.route,
+      correction_count: slice.correction_count,
+      checkpoint_commit: slice.checkpoint_commit,
+    })),
+    totals,
+    review: {
+      outcomes: events.filter(event => event.event === 'review-recorded').length,
+      findings: events.filter(event => event.event === 'review-recorded').reduce((sum, event) => sum + (event.finding_count || 0), 0),
+      dispositions,
+    },
+    updated_at: state.updated_at,
   };
-  attemptGroupKeys.set(attempt.attemptId, key);
-  group.attempts++;
-  if (attempt.status === 'interrupted') group.interrupted++;
-  if (attempt.valid) group.valid++;
-  if (attempt.disposition === 'accepted') group.accepted++;
-  if (attempt.disposition === 'local-fix') group.localFix++;
-  if (attempt.action === 'escalate') group.escalated++;
-  if (attempt.disposition === 'substantial-rewrite') group.rewrites++;
-  if (attempt.disposition === 'redesign') group.redesigns++;
-  if (attempt.disposition === 'regenerated') group.regenerations++;
-  if (attempt.disposition === 'human-takeover') group.humanTakeovers++;
-  if (attempt.reviewCalibration?.sampled) group.anchorSamples++;
-  group.reviewerMisses += attempt.reviewCalibration?.missedFindings || 0;
-  group.blockers += (attempt.review?.findings || []).filter(finding => finding.severity === 'BLOCKER').length;
-  group.majors += (attempt.review?.findings || []).filter(finding => finding.severity === 'MAJOR').length;
-  for (const usage of [
-    attempt.usage?.worker,
-    attempt.usage?.redWorker,
-    attempt.usage?.reviewer,
-    attempt.usage?.anchorReviewer,
-  ]) {
-    group.inputTokens += usage?.inputTokens || 0;
-    group.cachedInputTokens += usage?.cachedInputTokens || 0;
-    group.outputTokens += usage?.outputTokens || 0;
-    group.reasoningTokens += usage?.reasoningTokens || 0;
+}
+
+function render(report) {
+  const accepted = report.slices.filter(slice => slice.status === 'accepted').length;
+  const lines = [
+    `${report.work_id}: ${report.lifecycle}`,
+    `  slices ${accepted}/${report.slices.length} accepted; model calls ${report.totals.calls}`,
+    `  tokens input ${report.totals.input_tokens}, cached ${report.totals.cached_input_tokens}, output ${report.totals.output_tokens}`,
+    `  review outcomes ${report.review.outcomes}, findings ${report.review.findings}; feedback ${JSON.stringify(report.review.dispositions)}`,
+  ];
+  return lines.join('\n');
+}
+
+function main(argv = process.argv.slice(2)) {
+  const options = parseArgs(argv);
+  if (options.help) {
+    console.log('Usage: pair-report [--work WORK_ID] [--json]\n\nSummarize compact Evidence-at-Commit state from the Git common directory.');
+    return;
   }
-  group.elapsedMs += attempt.elapsedMs || 0;
-  if (Number.isFinite(attempt.totalCost)) {
-    group.costUsd += attempt.totalCost;
-    group.measuredCosts++;
+  const root = repositoryRoot(process.cwd());
+  const selected = options.workId || (workIds(root).length === 0 ? readCurrentWork(root)?.work_id : null);
+  const reports = workIds(root, selected).map(workId => summarize(root, workId)).filter(Boolean);
+  if (options.json) console.log(JSON.stringify(reports, null, 2));
+  else if (reports.length === 0) console.log('pair-report: no Work recorded');
+  else console.log(reports.map(render).join('\n\n'));
+}
+
+if (require.main === module) {
+  try { main(); } catch (error) {
+    console.error(`pair-report: ${error.message}`);
+    process.exitCode = 1;
   }
-  groups.set(key, group);
 }
 
-for (const usage of records.filter(record =>
-  record.event === 'usage.recorded'
-    && record.role === 'coordinator'
-    && record.telemetry_source === 'provider-transcript'
-    && record.baseline !== true,
-)) {
-  const key = attemptGroupKeys.get(usage.attemptId)
-    || `${usage.routeId || 'inline-coordinator'}|${usage.type || '?'}|${usage.risk || '?'}`;
-  const group = groups.get(key) || {
-    route: usage.routeId || 'inline-coordinator',
-    type: usage.type || '?',
-    risk: usage.risk || '?',
-    attempts: 0, interrupted: 0, valid: 0, accepted: 0, localFix: 0,
-    escalated: 0, rewrites: 0, redesigns: 0, regenerations: 0,
-    humanTakeovers: 0, anchorSamples: 0, reviewerMisses: 0, blockers: 0, majors: 0,
-    inputTokens: 0, cachedInputTokens: 0, uncachedInputTokens: 0,
-    outputTokens: 0, reasoningTokens: 0, elapsedMs: 0, costUsd: 0, measuredCosts: 0,
-    coordinatorTurns: 0, observedModels: [],
-    cheapReady: usage.cheap_ready ?? null,
-    recommendedStrength: usage.recommended_strength ?? null,
-  };
-  group.inputTokens += usage.input_tokens || 0;
-  group.cachedInputTokens += usage.cached_input_tokens || 0;
-  group.uncachedInputTokens += usage.uncached_input_tokens || 0;
-  group.outputTokens += usage.output_tokens || 0;
-  group.reasoningTokens += usage.reasoning_tokens || 0;
-  group.coordinatorTurns++;
-  const observedModel = `${usage.runtime || 'unknown'}/${usage.model || 'unknown'}`;
-  group.observedModels = [...new Set([...(group.observedModels || []), observedModel])].sort();
-  if (group.cheapReady === null && usage.cheap_ready !== undefined) group.cheapReady = usage.cheap_ready;
-  if (group.recommendedStrength === null && usage.recommended_strength !== undefined) group.recommendedStrength = usage.recommended_strength;
-  groups.set(key, group);
-}
-
-const standaloneModelEvents = records.flatMap(record => {
-  if (record.event === 'plan-review.completed') {
-    return [{ record, role: 'plan-review', identity: record.reviewer || 'unknown', type: 'plan', risk: 'plan' }];
-  }
-  if (record.event === 'final-review.completed') {
-    return [{ record, role: 'final-review', identity: record.reviewer || 'unknown', type: 'final', risk: 'work' }];
-  }
-  if (record.event === 'test-proposal.generated') {
-    return [{ record, role: 'test-proposal', identity: record.routeId || 'unknown', type: 'proposal', risk: 'task' }];
-  }
-  return [];
-});
-
-for (const event of standaloneModelEvents) {
-  const review = event.record;
-  const key = `${event.role}:${event.identity}`;
-  const group = groups.get(key) || {
-    route: key,
-    type: event.type,
-    risk: event.risk,
-    attempts: 0,
-    interrupted: 0,
-    valid: 0,
-    accepted: 0,
-    localFix: 0,
-    escalated: 0,
-    rewrites: 0,
-    redesigns: 0,
-    regenerations: 0,
-    humanTakeovers: 0,
-    anchorSamples: 0,
-    reviewerMisses: 0,
-    blockers: 0,
-    majors: 0,
-    inputTokens: 0,
-    cachedInputTokens: 0,
-    outputTokens: 0,
-    reasoningTokens: 0,
-    elapsedMs: 0,
-    costUsd: 0,
-    measuredCosts: 0,
-  };
-  group.attempts++;
-  if (review.classification === 'approved' || event.role === 'test-proposal') {
-    group.valid++;
-    group.accepted++;
-  }
-  group.inputTokens += review.usage?.inputTokens || 0;
-  group.cachedInputTokens += review.usage?.cachedInputTokens || 0;
-  group.outputTokens += review.usage?.outputTokens || 0;
-  group.reasoningTokens += review.usage?.reasoningTokens || 0;
-  group.elapsedMs += review.elapsedMs || 0;
-  groups.set(key, group);
-}
-
-for (const usage of records.filter(record => record.event === 'usage.recorded' && record.resumed === true)) {
-  const key = `resume:${usage.runtime || 'unknown'}/${usage.role || 'unknown'}/${usage.phase || 'unknown'}`;
-  const group = groups.get(key) || {
-    route: key,
-    type: 'resume',
-    risk: 'nonblocking',
-    attempts: 0,
-    interrupted: 0,
-    valid: 0,
-    accepted: 0,
-    localFix: 0,
-    escalated: 0,
-    rewrites: 0,
-    redesigns: 0,
-    regenerations: 0,
-    humanTakeovers: 0,
-    anchorSamples: 0,
-    reviewerMisses: 0,
-    blockers: 0,
-    majors: 0,
-    inputTokens: 0,
-    cachedInputTokens: 0,
-    uncachedInputTokens: 0,
-    outputTokens: 0,
-    reasoningTokens: 0,
-    checkpointBytes: 0,
-    cacheHitRatio: null,
-    efficiencyWarnings: 0,
-    elapsedMs: 0,
-    costUsd: 0,
-    measuredCosts: 0,
-  };
-  group.attempts++;
-  group.inputTokens += usage.input_tokens || 0;
-  group.cachedInputTokens += usage.cached_input_tokens || 0;
-  group.uncachedInputTokens += usage.uncached_input_tokens || 0;
-  group.outputTokens += usage.output_tokens || 0;
-  group.reasoningTokens += usage.reasoning_tokens || 0;
-  group.checkpointBytes += usage.checkpoint_bytes || 0;
-  group.efficiencyWarnings += usage.efficiency_warning ? 1 : 0;
-  group.cacheHitRatio = group.inputTokens > 0
-    ? group.cachedInputTokens / group.inputTokens
-    : null;
-  groups.set(key, group);
-}
-
-if (asJson) {
-  const output = [...groups.values()].map(group => ({
-    ...group,
-    totalTokens: group.inputTokens + group.outputTokens,
-    tokensPerAccepted: group.accepted > 0
-      ? (group.inputTokens + group.outputTokens) / group.accepted
-      : null,
-  }));
-  console.log(JSON.stringify(output, null, 2));
-  process.exit(0);
-}
-
-function elapsed(value) {
-  if (!(value > 0)) return '-';
-  if (value < 1000) return `${value}ms`;
-  if (value < 60_000) return `${(value / 1000).toFixed(1)}s`;
-  return `${(value / 60_000).toFixed(1)}m`;
-}
-
-console.log('route                         type       risk      tries quality clean local rewrite findings(B/M) tokens(in/cache/out/reason) elapsed cost');
-for (const group of [...groups.values()].sort((a, b) => a.route.localeCompare(b.route))) {
-  const cost = group.measuredCosts > 0 ? `$${group.costUsd.toFixed(3)}` : '-';
-  const quality = group.valid > 0 ? `${Math.round((group.accepted / group.valid) * 100)}%` : '-';
-  console.log([
-    group.route.padEnd(29),
-    group.type.padEnd(10),
-    group.risk.padEnd(9),
-    String(group.attempts).padStart(5),
-    quality.padStart(7),
-    String(group.accepted).padStart(5),
-    String(group.localFix).padStart(5),
-    String(group.rewrites).padStart(7),
-    `${group.blockers}/${group.majors}`.padStart(13),
-    `${group.inputTokens}/${group.cachedInputTokens}/${group.outputTokens}/${group.reasoningTokens}`.padStart(27),
-    elapsed(group.elapsedMs).padStart(8),
-    cost.padStart(7),
-  ].join(' '));
-}
+module.exports = { main, summarize };

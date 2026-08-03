@@ -127,7 +127,7 @@ const path = require("node:path") as NodePath;
 const { pathToFileURL } = require("node:url") as NodeUrl;
 const { buildStandaloneHtml } = require("../scripts/visual-session.cjs") as StandaloneBuilder;
 const { createBrainstormServer } = require("../scripts/server.cjs") as ReviewServerFactory;
-const reviewIndex = require("../../pair-v3/scripts/review-index.cjs") as ReviewIndex;
+const reviewIndex = require("../scripts/feature-review-index.cjs") as ReviewIndex;
 
 const FIXTURE_DIR = path.join(__dirname, "..", "fixtures");
 const BUDGET_FILE = path.join(FIXTURE_DIR, "performance-budgets.json");

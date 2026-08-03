@@ -1,0 +1,112 @@
+#!/usr/bin/env node
+
+const path = require('node:path');
+
+const { activeReviewGuidance, decideReviewGuidance, proposeReviewGuidance } = require('./lib/review-guidance');
+const {
+  feedbackForFinding,
+  listReviewOutcomes,
+  recordReviewFeedback,
+} = require('./lib/review-evidence');
+const { readCurrentWork, readJson, readState, repositoryRoot } = require('./lib/pair-store');
+
+function parseInput(args) {
+  const input = {};
+  for (let index = 0; index < args.length; index++) {
+    const flag = args[index];
+    if (!flag.startsWith('--')) throw new Error(`unsupported argument ${flag}`);
+    const value = args[index + 1];
+    if (value === undefined || value.startsWith('--')) throw new Error(`${flag} requires a value`);
+    index++;
+    input[flag.slice(2).replace(/-([a-z])/gu, (_match, letter) => letter.toUpperCase())] = value;
+  }
+  return input;
+}
+
+function response(operation, repository, callback) {
+  try { return { schema: 1, operation, ok: true, repository, data: callback() }; }
+  catch (error) { return { schema: 1, operation, ok: false, repository, error: { code: 'PAIR_REVIEW_ERROR', message: String(error.message || error).slice(0, 1000) } }; }
+}
+
+function workId(root, input) {
+  const selected = input.work || readCurrentWork(root)?.work_id;
+  if (!selected || !readState(root, selected)) throw new Error('no active Pair Work');
+  return selected;
+}
+
+function inbox(root, selectedWorkId) {
+  return listReviewOutcomes(root, selectedWorkId).map(outcome => ({
+    ...outcome,
+    findings: outcome.findings.map(finding => ({
+      ...finding,
+      feedback: feedbackForFinding(root, selectedWorkId, finding.finding_id),
+    })),
+  }));
+}
+
+function operate(root, operation, input) {
+  const selectedWorkId = workId(root, input);
+  if (operation === 'list' || operation === 'inbox') return { work_id: selectedWorkId, outcomes: inbox(root, selectedWorkId) };
+  if (operation === 'detail') {
+    const id = input.id;
+    for (const outcome of inbox(root, selectedWorkId)) {
+      if (outcome.review_outcome_id === id) return { type: 'outcome', outcome };
+      const finding = outcome.findings.find(item => item.finding_id === id);
+      if (finding) return { type: 'finding', outcome_id: outcome.review_outcome_id, finding };
+    }
+    throw new Error(`review evidence ${id} does not exist`);
+  }
+  if (operation === 'feedback') {
+    return recordReviewFeedback(root, {
+      workId: selectedWorkId,
+      findingId: input.finding,
+      disposition: input.disposition,
+      reason: input.reason,
+    });
+  }
+  if (operation === 'guidance') {
+    return activeReviewGuidance(root, selectedWorkId, String(input.scope || 'all').split(',').filter(Boolean));
+  }
+  if (operation === 'propose') {
+    return proposeReviewGuidance(root, {
+      workId: selectedWorkId,
+      sourceFeedbackIds: String(input.feedback || '').split(',').filter(Boolean),
+      scopes: String(input.scope || '').split(',').filter(Boolean),
+      rule: input.rule,
+      evaluation: readJson(path.resolve(input.evaluation || '')),
+    });
+  }
+  if (operation === 'approve' || operation === 'reject') {
+    return decideReviewGuidance(root, {
+      workId: selectedWorkId,
+      proposalId: input.proposal,
+      decision: operation,
+      reason: input.reason,
+    });
+  }
+  throw new Error(`unsupported pair-review operation ${operation}`);
+}
+
+function main() {
+  const args = process.argv.slice(2);
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log('Usage: pair-review inbox|detail|feedback|guidance|propose|approve|reject [--work ID] [options]');
+    return;
+  }
+  const operation = args.shift() || 'inbox';
+  let root = process.cwd();
+  let result;
+  try {
+    root = repositoryRoot(root);
+    const input = parseInput(args);
+    result = response(operation, root, () => operate(root, operation, input));
+  } catch (error) {
+    result = response(operation, root, () => { throw error; });
+  }
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+  if (!result.ok) process.exitCode = 1;
+}
+
+if (require.main === module) main();
+
+module.exports = { inbox, operate, parseInput, response };

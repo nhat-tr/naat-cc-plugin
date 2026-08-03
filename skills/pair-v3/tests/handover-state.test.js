@@ -8,7 +8,7 @@ const test = require('node:test');
 
 const HANDOVER_MODULE = path.resolve(__dirname, '../scripts/lib/handover-state.js');
 const { appendPairEvent, loadPairState } = require('../scripts/lib/pair-state');
-const { takeoverWork } = require('../scripts/lib/pair-control');
+const { takeoverWork } = require('../scripts/lib/handover-takeover');
 
 // Fixture Visual Companion state for the deriveBrainstormingCheckpoint integration tests below:
 // a temp CLAUDE_SCRATCH_DIR pointer (mirroring visual-session.cjs's active-session.json) plus a
