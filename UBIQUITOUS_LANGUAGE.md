@@ -162,13 +162,25 @@ _Domain glossary for the brainstorming skill's Visual Companion (`skills/brainst
 - Aliases to avoid: "test count", "coverage", "RED signal" — none proves that broken behavior is observable.
 - Relations: belongs to one Review Slice; uses a negative control, mutation, base failure, or equivalent observation when feasible.
 
-**Review Outcome** — immutable, addressable, sub-8-KiB evidence from one fresh model review of one Review Slice checkpoint, including status, at most three evidence-gated findings, usage, and stable Work/Review Slice/commit/blob bindings.
+**Review Outcome** — immutable, addressable, sub-8-KiB evidence from one review of one Review Slice checkpoint, including status, evidence-gated findings, usage, and stable Work/Review Slice/commit/blob bindings. A fresh model review carries at most three findings; a human-authored one records its reviewer provenance and carries at most twenty, because the three-finding bound exists to make a model spend its token budget on its strongest evidence.
 - Aliases to avoid: "latest review", "review file" — both lose historical identity.
-- Relations: belongs to one **Review Slice**; proposes evidence for human disposition and never triggers code changes by itself.
+- Relations: belongs to one **Review Slice**; proposes evidence for human disposition and never triggers code changes by itself. Every finding, human or model, must state a **pass condition** naming observable state, because the bounded correction is instructed to satisfy exactly that.
 
 **Review Feedback** — append-only human adjudication of one Review Outcome finding, expressed as valid, false-positive, not-worth-fixing, or missing-context with a reason.
 - Aliases to avoid: "review override" — feedback never mutates historical Review Outcomes.
 - Relations: targets one stable finding ID; only valid feedback may authorize one bounded correction.
+
+**Correction Direction** — one bounded, human-authored instruction recorded against a correction-ready **Review Slice** and admitted as intent into that slice's single bounded correction.
+- Aliases to avoid: "review comment", "note" — a Correction Direction is neither falsifiable evidence nor an adjudication, and it authorizes no additional correction. Distinct from a human-authored **Review Outcome** finding, which is anchored evidence and is adjudicated: steer with a direction, accuse with a finding.
+- Relations: capped at 1000 characters, stored as addressable evidence, and spent with the one correction it steers; admitted at any Review Slice status, and a use outside the correction-ready window is recorded as a **Human Override** rather than refused.
+
+**Human Override** — one recorded human decision that overrules a policy guard — accepting without a model review, unblocking a latched block, steering outside the correction-ready window — carrying a 1–1000 character reason stored as addressable evidence and a named event.
+- Aliases to avoid: "force flag", "skip" — an override satisfies the self-explaining-checkpoint invariant by being recorded, not by being forbidden. Structural guards (states that cannot exist, such as accepting a slice with no checkpoint) stay refused and are not overridable.
+- Relations: appended to the Work's event journal with the slice, prior status, and reason; authorizes exactly the transition it names.
+
+**Known Failure Baseline** — the human-only declaration that one test identity failed before this Work existed, recorded with the evidence that it pre-exists, so it never counts as this Work's failure again.
+- Aliases to avoid: "flaky list", "skip list" — a baselined test still runs; only its failure attribution changes. Pair never infers a baseline entry.
+- Relations: entries copy the test identity verbatim from `pair-loop verify` output; an unrecognised runner yields no identity and is never exempted; a baseline over 32 tests is a broken suite, not a baseline.
 
 **Review Guidance** — compact repository-local reviewer rules derived from Review Feedback, proven in a **Review Evaluation Bank**, scope-tagged, and activated only by explicit human approval.
 - Aliases to avoid: "model memory", "global review prompt".
@@ -186,6 +198,14 @@ _Domain glossary for the brainstorming skill's Visual Companion (`skills/brainst
 - Aliases to avoid: "Work state", "active plan" — the repository event journal and reducer, not this marker, own lifecycle truth.
 - Relations: created and removed by the Pair CLI; distinct from an active implementation attempt and never used by Pair v4 continuation or retry decisions.
 
+**Dispatch Lease** — the per-Work mutual exclusion held across one whole `pair-loop run` advance, so two concurrent runs cannot race one Work's state or dispatch the same action twice.
+- Aliases to avoid: "lock file" — the lease names its owner. Acquired by `mkdir` atomicity with owner PID and nonce; an owner whose PID is gone is abandoned, not authoritative.
+- Relations: underpins `pair-loop dispatch status|pause|continue|stop`; released in a `finally`; acquired after the **Machine Verification Lease** when both are needed, never before it.
+
+**Machine Verification Lease** — the machine-wide mutual exclusion allowing only one Work's deterministic verification to run at a time, because concurrent suites share the machine's containers, ports, and databases and make each other fail in unrelated places.
+- Aliases to avoid: "global lock" — the lease is scoped to verification, and a refusal names the running Work.
+- Relations: same owner-PID-and-nonce pattern as the **Dispatch Lease**; acquired machine-first then per-Work to prevent deadlock; failures produced without it can be neither trusted nor added to a **Known Failure Baseline**.
+
 ## Session & Lifecycle
 
 **General Agent Conversation** — a registered Codex or Claude agent conversation that is not owned by Pair Work or a brainstorming Visual Companion and maintains its Agent Conversation Checkpoint from bounded semantic conversation evidence.
@@ -200,6 +220,10 @@ _Domain glossary for the brainstorming skill's Visual Companion (`skills/brainst
 - Aliases to avoid: "conversation summary", "transcript snapshot" — both imply unbounded or raw conversation content rather than approved semantic state.
 - Relations: maintained at material boundaries; sealed into an **Agent Conversation Handover** when its agent conversation becomes cold.
 - For Pair Work it has two layers with different authorities: a **lifecycle layer** re-derived from the Pair reducer at every Stop, and a **conversation layer** (findings, confirmed choices, rejected alternatives, unresolved decisions) that no repository state can re-derive and that therefore survives every re-derivation.
+
+**Pair Authority** — the seam that answers which store — the attempt-ledger reducer or the Evidence-at-Commit engine — holds lifecycle truth for a repository's Pair Work, so handover, freshness, and ownership checks read the store the repository actually uses.
+- Aliases to avoid: "store selector", "state fallback" — the seam decides authority once; callers never consult both stores and reconcile.
+- Relations: consulted by **Agent Conversation Handover** capture and adoption; derives the lifecycle layer of a Pair **Agent Conversation Checkpoint**.
 
 **Observed Activity** — evidence that a registered agent conversation is still working, reported by a hook that saw it act rather than finish a turn.
 - Aliases to avoid: "heartbeat", "keep-alive" — neither conveys that the evidence is a real unit of work, nor that it is bounded.

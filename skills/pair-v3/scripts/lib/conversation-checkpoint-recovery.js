@@ -13,7 +13,10 @@ const MAX_ASSISTANT_FINDINGS = 4;
 const MAX_EXPLICIT_CORE_ANCHOR_BYTES = 2600;
 const MAX_EXPLICIT_ANCHOR_DIRECTION_BYTES = 640;
 const MAX_EXPLICIT_ANCHOR_DIRECTIONS = 2;
-const SYSTEM_INJECTED_BLOCK = /(?:<permissions instructions>|<environment_context>|<system-reminder>|<local-command|<command-name>|<user-prompt-submit-hook>)/iu;
+// Harness-authored entries arrive on the user role but carry no user intent. <task-notification> is
+// the one that bites hardest: a background command finishing is the newest user-role entry, so it
+// displaced the human's actual words as "Latest explicit user direction" in the sealed checkpoint.
+const SYSTEM_INJECTED_BLOCK = /(?:<permissions instructions>|<environment_context>|<system-reminder>|<local-command|<command-name>|<user-prompt-submit-hook>|<task-notification>)/iu;
 const CORE_ANCHOR_HEADING = /(?:^|\n)\s*(?:#{1,6}\s*)?\*{0,2}Core Anchor(?:\s+for\b[^\n:]*)?\*{0,2}\s*:?\s*(?:\n|$)/iu;
 const CORE_ANCHOR_SECTION_GROUPS = [
   ['Purpose', 'Goal'],

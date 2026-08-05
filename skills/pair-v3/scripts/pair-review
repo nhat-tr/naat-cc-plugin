@@ -6,8 +6,8 @@ const { activeReviewGuidance, decideReviewGuidance, proposeReviewGuidance } = re
 const {
   feedbackForFinding,
   listReviewOutcomes,
-  recordReviewFeedback,
 } = require('./lib/review-evidence');
+const { acceptHumanReview, adjudicateFinding, recordCorrectionDirection, sliceEvidence } = require('./lib/pair-engine');
 const { readCurrentWork, readJson, readState, repositoryRoot } = require('./lib/pair-store');
 
 function parseInput(args) {
@@ -34,14 +34,34 @@ function workId(root, input) {
   return selected;
 }
 
+// Only outcomes a Review Slice still stands behind are offered for staging. Listing every outcome ever
+// written meant a superseded one sat in the inbox looking identical to the live one, and a disposition
+// staged there recorded feedback against a finding id the current outcome does not contain — the
+// adjudication gate then never completes and the slice wedges. Nothing is deleted: the superseded
+// outcomes remain on disk and reachable by id through `detail`.
+//
+// compactAcceptedSlice now keeps review_outcome_id, so the rule is uniform: show what a slice points at.
+// The one exception is a slice accepted BEFORE that fix, whose pointer is already gone — showing its
+// outcomes preserves review history that would otherwise disappear from an in-flight Work.
 function inbox(root, selectedWorkId) {
-  return listReviewOutcomes(root, selectedWorkId).map(outcome => ({
-    ...outcome,
-    findings: outcome.findings.map(finding => ({
-      ...finding,
-      feedback: feedbackForFinding(root, selectedWorkId, finding.finding_id),
-    })),
-  }));
+  const state = readState(root, selectedWorkId);
+  const referenced = new Set();
+  const historical = new Set();
+  for (const slice of state?.slices || []) {
+    if (slice.review_outcome_id) referenced.add(slice.review_outcome_id);
+    else if (slice.status === 'accepted') historical.add(slice.id);
+  }
+  return listReviewOutcomes(root, selectedWorkId)
+    .filter(outcome => (
+      referenced.has(outcome.review_outcome_id) || historical.has(outcome.review_slice_id)
+    ))
+    .map(outcome => ({
+      ...outcome,
+      findings: outcome.findings.map(finding => ({
+        ...finding,
+        feedback: feedbackForFinding(root, selectedWorkId, finding.finding_id),
+      })),
+    }));
 }
 
 function operate(root, operation, input) {
@@ -56,13 +76,43 @@ function operate(root, operation, input) {
     }
     throw new Error(`review evidence ${id} does not exist`);
   }
+  // The inbox answers "what did the reviewer find". A checkpoint awaiting human acceptance needs the
+  // other half: the two diffs, the Design Check it was routed by, and the intent that steered its
+  // correction. Without them acceptance is a keystroke over unread code.
+  if (operation === 'checkpoint') {
+    return sliceEvidence(root, { workId: selectedWorkId, sliceId: input.slice || null });
+  }
+  if (operation === 'accept') {
+    const accepted = acceptHumanReview(root, { workId: selectedWorkId, sliceId: input.slice });
+    return { work_id: accepted.work_id, lifecycle: accepted.lifecycle, next_action: accepted.next_action };
+  }
+  // The one channel that reaches the correcting session as intent rather than as evidence. Singular
+  // and spent with the correction it steers, so a second call replaces the first rather than adding.
+  if (operation === 'direct') {
+    const state = recordCorrectionDirection(root, { workId: selectedWorkId, sliceId: input.slice || null, text: input.text });
+    const slice = state.slices.find(item => item.correction_direction);
+    return { work_id: state.work_id, review_slice_id: slice?.id || null, correction_direction: slice?.correction_direction || null };
+  }
   if (operation === 'feedback') {
-    return recordReviewFeedback(root, {
+    // Through the engine, like accept and direct above. This called recordReviewFeedback — the raw
+    // evidence writer — so adjudicating from the editor wrote durable Review Feedback and never ran the
+    // reducer. The Review Slice stayed at awaiting-feedback, a second Review Feedback for the same
+    // finding is refused, and `pair-loop run` returns unchanged at awaiting-human: the loop wedged with
+    // no command able to move it. The status is returned so the editor can say where the slice landed.
+    const state = adjudicateFinding(root, {
       workId: selectedWorkId,
       findingId: input.finding,
       disposition: input.disposition,
       reason: input.reason,
     });
+    const slice = state.slices.find(item => !['queued', 'accepted'].includes(item.status));
+    return {
+      work_id: state.work_id,
+      review_slice_id: slice?.id || null,
+      review_slice_status: slice?.status || null,
+      lifecycle: state.lifecycle,
+      next_action: state.next_action,
+    };
   }
   if (operation === 'guidance') {
     return activeReviewGuidance(root, selectedWorkId, String(input.scope || 'all').split(',').filter(Boolean));
@@ -90,7 +140,7 @@ function operate(root, operation, input) {
 function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
-    console.log('Usage: pair-review inbox|detail|feedback|guidance|propose|approve|reject [--work ID] [options]');
+    console.log('Usage: pair-review inbox|checkpoint|accept|detail|feedback|direct|guidance|propose|approve|reject [--work ID] [--slice ID] [options]');
     return;
   }
   const operation = args.shift() || 'inbox';

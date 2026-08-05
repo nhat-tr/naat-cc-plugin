@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
@@ -72,6 +74,49 @@ test('fresh-handover command parsing requires exact identifiers and explicit cos
   assert.equal(override.allowColdResume, 'handover-11111111-1111-4111-8111-111111111111');
   assert.equal(override.once, true);
   assert.equal(override.confirmCostRisk, true);
+});
+
+// PAIR_DEFAULT_RUNTIME lived only in an environment variable, and an environment variable exported from
+// ~/.zshrc.local reaches interactive shells and nothing else. nvim launched from a GUI never sourced it, so
+// every run driven from the editor fell through to available[0] — codex, because SUPPORTED_RUNTIMES lists
+// it first — while the same command in a terminal used claude. Observed live: S-01 and S-02 reviews ran
+// claude from a terminal, and nvim's environment (checked with ps) held none of the routing variables. A
+// preference that silently does not apply is worse than no preference, so it is also readable from a file
+// that every launcher can see. The env var still wins, so nothing that works today changes.
+test('the default runtime is read from user config when the environment does not carry it', t => {
+  const directory = fs.mkdtempSync(path.join(process.env.CLAUDE_SCRATCH_DIR || path.join(os.homedir(), '.claude-scratch'), 'pair-runtime-config-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(directory, 'pair'), { recursive: true });
+  fs.writeFileSync(path.join(directory, 'pair', 'config.json'), JSON.stringify({ default_runtime: 'claude' }));
+
+  assert.equal(
+    resolveRuntime('auto', { available: ['codex', 'claude'], env: { XDG_CONFIG_HOME: directory } }),
+    'claude',
+    'the file answers where the environment is silent',
+  );
+  assert.equal(
+    resolveRuntime('auto', { available: ['codex', 'claude'], env: { XDG_CONFIG_HOME: directory, PAIR_DEFAULT_RUNTIME: 'codex' } }),
+    'codex',
+    'and never overrides an explicit environment variable',
+  );
+  assert.equal(
+    resolveRuntime('auto', { available: ['codex', 'claude'], env: { XDG_CONFIG_HOME: directory, CODEX_THREAD_ID: 'thread' } }),
+    'codex',
+    'nor the runtime of the session actually driving the loop',
+  );
+});
+
+test('an unreadable or nonsense runtime config is ignored rather than fatal', t => {
+  const directory = fs.mkdtempSync(path.join(process.env.CLAUDE_SCRATCH_DIR || path.join(os.homedir(), '.claude-scratch'), 'pair-runtime-config-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(directory, 'pair'), { recursive: true });
+  fs.writeFileSync(path.join(directory, 'pair', 'config.json'), '{not json');
+
+  assert.equal(
+    resolveRuntime('auto', { available: ['codex', 'claude'], env: { XDG_CONFIG_HOME: directory } }),
+    'codex',
+    'a broken config must not stop the loop from running at all',
+  );
 });
 
 test('auto task routing keeps Codex inside an existing Codex sandbox', () => {

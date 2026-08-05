@@ -785,3 +785,40 @@ test('freshness status exposes warm age deadline checkpoint digest and next safe
   assert.match(status.stdout, /sha256/iu);
   assert.match(status.stdout, /next safe action/iu);
 });
+
+test('a sealed Agent Conversation stops with its seal and resume command, not as invalid state', t => {
+  const root = fixture(t);
+  const identity = registerWarmConversation(root, 'claude', 'sealed-agent', 1_000);
+  // Go stale so the gate seals it into a Handover, exactly as a real cold prompt would.
+  invoke(root, 'claude', {
+    hook_event_name: 'UserPromptSubmit',
+    session_id: identity.agentConversationId,
+    now: 1_000 + FRESHNESS_WINDOW_MS + 1,
+  });
+  const sealed = registry(root).conversations[handover.agentConversationSourceKey
+    ? handover.agentConversationSourceKey(identity)
+    : Object.keys(registry(root).conversations)[0]];
+  assert.equal(sealed.status, 'sealed');
+  assert.ok(sealed.sealed_handover_id, 'sealing produced a Handover');
+
+  const prepared = handover.prepareAgentConversationStop(root, {
+    runtime: 'claude',
+    agentConversationId: identity.agentConversationId,
+    transcriptPath: null,
+  });
+  assert.equal(prepared.status, 'terminal', 'a sealed conversation is terminal, not invalid');
+  assert.equal(prepared.conversationStatus, 'sealed');
+  assert.equal(prepared.handoverId, sealed.sealed_handover_id);
+  assert.match(prepared.nextSafeAction, /--adopt-handover/u, 'the remedy is stated');
+
+  const response = invoke(root, 'claude', {
+    hook_event_name: 'Stop',
+    session_id: identity.agentConversationId,
+    now: 1_000 + FRESHNESS_WINDOW_MS + 2,
+  });
+  assert.equal(response.continue, false, 'a sealed conversation still stops');
+  assert.match(response.stopReason, /because it is sealed/u);
+  assert.match(response.stopReason, new RegExp(sealed.sealed_handover_id, 'u'), 'the stop names the Handover to adopt');
+  assert.match(response.stopReason, /--fresh-from|--adopt-handover/u, 'the stop names the resume command');
+  assert.doesNotMatch(response.stopReason, /handover state is invalid/u, 'a normal seal is never reported as invalid state');
+});

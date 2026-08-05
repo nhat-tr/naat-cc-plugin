@@ -1,6 +1,25 @@
 const childProcess = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const SUPPORTED_RUNTIMES = ['codex', 'claude'];
+
+// An environment variable exported from a shell rc file reaches interactive shells and nothing else: an
+// editor or launcher started from a GUI never sources it, so the same `pair-loop run` picked a different
+// provider depending on where it was invoked from — silently, and with no way to notice except reading the
+// recorded runtime afterwards. A file every launcher can read makes the preference actually apply. It is
+// consulted only after the environment, so an explicit variable and the session's own runtime still win,
+// and a broken file is ignored rather than fatal: a malformed preference must not stop the loop.
+function configuredDefaultRuntime(env) {
+  const home = env.XDG_CONFIG_HOME || path.join(env.HOME || os.homedir(), '.config');
+  try {
+    const configured = JSON.parse(fs.readFileSync(path.join(home, 'pair', 'config.json'), 'utf8'))?.default_runtime;
+    return SUPPORTED_RUNTIMES.includes(configured) ? configured : null;
+  } catch {
+    return null;
+  }
+}
 
 function commandExists(command) {
   return childProcess.spawnSync('sh', ['-c', `command -v ${command}`], {
@@ -39,7 +58,7 @@ function resolveRuntimeCandidates(requested, options = {}) {
       ? 'codex'
       : SUPPORTED_RUNTIMES.includes(env.PAIR_DEFAULT_RUNTIME)
         ? env.PAIR_DEFAULT_RUNTIME
-        : available[0];
+        : configuredDefaultRuntime(env) || available[0];
 
   const viable = available;
 

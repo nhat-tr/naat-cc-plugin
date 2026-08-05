@@ -1,6 +1,7 @@
 const childProcess = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const EVENT_LIMIT_BYTES = 4096;
@@ -32,12 +33,7 @@ const PROHIBITED_EVENT_KEYS = new Set([
 ]);
 const SECRET_KEY = /^(?:api[-_]?key|access[-_]?token|refresh[-_]?token|token|password|secret|client[-_]?secret|private[-_]?key|authorization|cookie)$/iu;
 
-function redactString(value) {
-  return String(value)
-    .replace(/\bBearer\s+[^\s,"']+/giu, 'Bearer [REDACTED]')
-    .replace(/((?:--?|\b)(?:api[-_]?key|access[-_]?token|refresh[-_]?token|token|password|secret|client[-_]?secret|private[-_]?key)(?:=|\s+))[^\s,"']+/giu, '$1[REDACTED]')
-    .replace(/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{8,}|gh[oprsu]_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,}|AKIA[A-Z0-9]{12,})\b/gu, '[REDACTED]');
-}
+const { redactString } = require('./redaction');
 
 function sanitizeValue(value, key = '', eventMode = false) {
   const normalizedKey = String(key).toLowerCase();
@@ -132,10 +128,35 @@ function workPaths(root, workId) {
     events: path.join(directory, 'events.jsonl'),
     designChecks: path.join(directory, 'design-checks'),
     outcomes: path.join(directory, 'review-outcomes'),
+    // A human review is built up one finding at a time while reading; a Review Outcome is an immutable,
+    // content-addressed artifact sized for one model review. Recording each finding as its own outcome
+    // minted a new id per finding and orphaned the previous, so the Review Inbox filled with duplicate
+    // rows and staging one of the stale copies recorded feedback the adjudication gate could never see.
+    // The draft is where findings gather before they become that single artifact.
+    findingDrafts: path.join(directory, 'human-finding-drafts'),
     feedback: path.join(directory, 'review-feedback.jsonl'),
     evaluations: path.join(directory, 'evaluations'),
     lock: path.join(directory, '.lock'),
+    verificationLease: path.join(directory, '.verifying'),
+    // A whole dispatch, not a state write and not a suite: it spans a provider session, so it outlives the
+    // mutation lock's staleness window and starts before the verification lease exists.
+    dispatchLease: path.join(directory, '.dispatching'),
   };
+}
+
+// Preferences that only exist as environment variables silently do not apply to anything launched outside
+// an interactive shell — an editor or launcher started from a GUI never sources a shell rc file. That made
+// the same command pick a different provider, and write or not write a stream log, purely by where it was
+// invoked from. This file is the launcher-independent half; the environment still wins where it is set.
+// A malformed config returns nothing rather than throwing: a broken preference must not stop the loop.
+function userConfig(env = process.env) {
+  const home = env.XDG_CONFIG_HOME || path.join(env.HOME || os.homedir(), '.config');
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(home, 'pair', 'config.json'), 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function atomicWrite(file, content, limit = STATE_LIMIT_BYTES) {
@@ -202,6 +223,149 @@ function withWorkLock(root, workId, callback) {
   const paths = workPaths(root, workId);
   const lock = acquireLock(paths);
   try { return callback(paths); } finally { releaseLock(paths, lock); }
+}
+
+// Verification is not a state mutation and cannot share the mutation lock: a suite runs for minutes
+// to an hour, far past the staleness window that makes the short lock safe. It needs its own lease
+// for a different reason — two suites of the same Work share one machine's containers, ports and
+// databases, so running them concurrently makes a different unrelated test fail in each run. Those
+// failures are indistinguishable from real ones, they cannot honestly be baselined, and the loop
+// never reaches green. The lease refuses rather than queues: the caller should know it is waiting on
+// a suite someone else started, not silently sit for forty minutes.
+// mkdir is the atomic primitive; the owner file explains the holder, and a nonce means only the holder can
+// release it. An owner whose pid is gone is abandoned rather than authoritative, so a killed process never
+// wedges the Work — the one property that decides whether a lease helps or becomes its own outage.
+function acquireLease(paths, directory, meta, conflict) {
+  ensurePrivateDirectory(paths.directory);
+  const nonce = crypto.randomUUID();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      fs.mkdirSync(directory, { mode: 0o700 });
+      fs.writeFileSync(path.join(directory, 'owner.json'), `${JSON.stringify({
+        pid: process.pid,
+        nonce,
+        at: new Date().toISOString(),
+        ...meta,
+      })}\n`, { mode: 0o600 });
+      return { nonce };
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const owner = readJson(path.join(directory, 'owner.json'));
+      const abandoned = !owner?.pid || !processAlive(owner.pid);
+      if (abandoned) {
+        fs.rmSync(directory, { recursive: true, force: true });
+        continue;
+      }
+      throw new Error(conflict(owner));
+    }
+  }
+  throw new Error(`could not acquire a lease for ${paths.workId}`);
+}
+
+function releaseLease(directory, lease) {
+  const owner = readJson(path.join(directory, 'owner.json'));
+  if (owner?.nonce === lease?.nonce) fs.rmSync(directory, { recursive: true, force: true });
+}
+
+function acquireVerificationLease(paths, meta = {}) {
+  return acquireLease(paths, paths.verificationLease, meta, owner =>
+    `a verification of ${paths.workId} has been running since ${owner.at} (pid ${owner.pid}); concurrent suites share this machine's containers and ports, so both runs fail in unrelated places. Wait for it to finish, or stop pid ${owner.pid} first.`);
+}
+
+function releaseVerificationLease(paths, lease) {
+  return releaseLease(paths.verificationLease, lease);
+}
+
+// Every lease above is keyed per Work, and the collision this one prevents is not: suites of DIFFERENT
+// Works share one machine's Testcontainers Postgres, its ports and its databases, so each run fails
+// somewhere unrelated to its own change. Those failures cannot be told apart from real ones and cannot
+// honestly be baselined — the mechanism that fabricated the disjoint 1/71/2 failures on S-01. It therefore
+// lives outside every repository, under XDG state rather than a temp directory, so it is one lock per user
+// per machine no matter which repo or worktree a run is driven from. Implementation stays parallel; only
+// the suites queue, and queueing here means refusing so the human knows what they are waiting on.
+function machineVerificationLeasePath() {
+  if (process.env.PAIR_MACHINE_LEASE_DIR) return process.env.PAIR_MACHINE_LEASE_DIR;
+  const stateHome = process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state');
+  return path.join(stateHome, 'pair', 'verifying-machine');
+}
+
+function acquireMachineVerificationLease(workId, meta = {}) {
+  const directory = machineVerificationLeasePath();
+  fs.mkdirSync(path.dirname(directory), { recursive: true, mode: 0o700 });
+  // Held by this same Work already: defer instead of refusing, so the per-Work lease below produces the
+  // refusal. Both would be correct, but "a verification of THIS Work is already running" tells the human
+  // which run to look at, and a machine-scope message about sharing containers would be a worse answer to
+  // the same question. Deferring returns no nonce, so the caller releases only what it actually took.
+  const owner = readJson(path.join(directory, 'owner.json'));
+  if (owner?.pid && processAlive(owner.pid) && owner.work_id === workId) return { deferred: true };
+  return acquireLease({ workId, directory: path.dirname(directory) }, directory, { work_id: workId, ...meta }, holder =>
+    `a verification of ${holder.work_id || 'another Pair Work'} has been running on this machine since ${holder.at} (pid ${holder.pid}). Suites of different Works share this machine's Testcontainers databases and ports, so running both makes each fail somewhere unrelated to its own change. Wait for it to finish, or stop pid ${holder.pid} first.`);
+}
+
+// Refuses rather than queues: a second coding session on one worktree is never what the human wanted, and
+// silently waiting minutes for the first to finish is worse than being told which process to look at.
+function acquireDispatchLease(paths, meta = {}) {
+  return acquireLease(paths, paths.dispatchLease, meta, owner =>
+    `a dispatch of ${paths.workId} has been running since ${owner.at} (pid ${owner.pid}). Two runs share one worktree and one state file, so each would sweep the other's half-written files into its checkpoint and the loser's transition would be erased. Wait for it to finish, or stop pid ${owner.pid} first.`);
+}
+
+// The dispatch lease already records which process owns a run, so it is also the handle for controlling it
+// — no second bookkeeping, and nothing to go stale. The provider is a descendant of that process, so the
+// whole tree is signalled: the leaf holds the model connection, and signalling only the parent would leave
+// it running and writing.
+function dispatchOwner(root, workId) {
+  const owner = readJson(path.join(workPaths(root, workId).dispatchLease, 'owner.json'));
+  if (!owner?.pid || !processAlive(owner.pid)) return null;
+  return owner;
+}
+
+// Empty pgrep output splits to [''], and Number('') is 0 — which passes Number.isInteger, so an ordinary
+// childless process walked pid 0 and from there every process on the machine, until the stack gave out.
+// Positive pids only, and a visited set, because a pid graph read one `pgrep` at a time is not guaranteed
+// acyclic while processes are exiting and being reparented underneath the walk.
+function processTree(pid, visited = new Set()) {
+  const parent = Number(pid);
+  if (!Number.isInteger(parent) || parent <= 1 || visited.has(parent)) return [];
+  visited.add(parent);
+  const children = childProcess.spawnSync('pgrep', ['-P', String(parent)], { encoding: 'utf8' });
+  const direct = String(children.stdout || '')
+    .split(/\s+/u)
+    .map(entry => Number(entry.trim()))
+    .filter(child => Number.isInteger(child) && child > 1);
+  return [parent, ...direct.flatMap(child => processTree(child, visited))];
+}
+
+// Deepest first: a stopped parent cannot spawn more work while its children are being signalled, and for
+// SIGTERM the leaf holding the connection should learn first so it stops writing before its parent exits.
+function signalDispatch(root, workId, signal) {
+  const owner = dispatchOwner(root, workId);
+  if (!owner) return null;
+  const tree = processTree(owner.pid).reverse();
+  const signalled = [];
+  for (const pid of tree) {
+    try { process.kill(pid, signal); signalled.push(pid); } catch { /* it exited while we walked the tree */ }
+  }
+  return { owner, signal, signalled };
+}
+
+function withDispatchLease(root, workId, meta, callback) {
+  const paths = workPaths(root, workId);
+  const lease = acquireDispatchLease(paths, meta);
+  try { return callback(paths); } finally { releaseLease(paths.dispatchLease, lease); }
+}
+
+// Machine first, then Work, always in that order: a single acquisition order is what keeps two runs from
+// each holding one lease and waiting for the other. Released in reverse, and in a finally, so a suite that
+// throws cannot leave either behind.
+function withVerificationLease(root, workId, meta, callback) {
+  const paths = workPaths(root, workId);
+  const machine = acquireMachineVerificationLease(workId, meta);
+  try {
+    const lease = acquireVerificationLease(paths, meta);
+    try { return callback(paths); } finally { releaseVerificationLease(paths, lease); }
+  } finally {
+    if (!machine.deferred) releaseLease(machineVerificationLeasePath(), machine);
+  }
 }
 
 function writeCurrentWork(root, value) {
@@ -331,6 +495,12 @@ module.exports = {
   storeBlob,
   storeJsonBlob,
   updatePairRef,
+  dispatchOwner,
+  processTree,
+  signalDispatch,
+  userConfig,
+  withDispatchLease,
+  withVerificationLease,
   withWorkLock,
   workPaths,
   writeCurrentWork,

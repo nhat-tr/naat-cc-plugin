@@ -64,10 +64,21 @@ function validateFinding(root, checkpointCommit, finding, index) {
   };
 }
 
-function validateReviewResult(root, checkpointCommit, result) {
+// Three findings bounds what a MODEL review may return: a fresh reviewer with one checkpoint and a
+// token budget must pick its strongest evidence rather than emit a list. A human reading their own diff
+// has no such budget, and the cap turned their fourth observation into an error with nowhere to put it.
+const MODEL_FINDING_CAP = 3;
+const HUMAN_FINDING_CAP = 20;
+
+function validateReviewResult(root, checkpointCommit, result, { human = false } = {}) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('Review Outcome must be one object');
   if (!['approve', 'findings'].includes(result.verdict)) throw new Error('Review Outcome verdict is invalid');
-  if (!Array.isArray(result.findings) || result.findings.length > 3) throw new Error('Review Outcome findings must contain at most three items');
+  const cap = human ? HUMAN_FINDING_CAP : MODEL_FINDING_CAP;
+  if (!Array.isArray(result.findings) || result.findings.length > cap) {
+    throw new Error(human
+      ? `a human Review Outcome carries at most ${cap} findings`
+      : 'Review Outcome findings must contain at most three items');
+  }
   if (result.verdict === 'approve' && result.findings.length !== 0) throw new Error('approved Review Outcome must contain no findings or narrative');
   if (result.verdict === 'findings' && result.findings.length === 0) throw new Error('findings Review Outcome must contain evidence');
   return {
@@ -79,7 +90,7 @@ function validateReviewResult(root, checkpointCommit, result) {
 function recordReviewOutcome(root, input) {
   const workId = safeSegment(input.workId, 'Work ID');
   const sliceId = safeSegment(input.sliceId, 'Review Slice ID');
-  const review = validateReviewResult(root, input.checkpointCommit, input.review);
+  const review = validateReviewResult(root, input.checkpointCommit, input.review, { human: Boolean(input.human) });
   const outcomeId = stableId('review-outcome', [workId, sliceId, input.checkpointCommit, JSON.stringify(review)]);
   const findings = review.findings.map((finding, index) => ({
     ...finding,
@@ -100,6 +111,10 @@ function recordReviewOutcome(root, input) {
       model: input.model || 'default',
       effort: input.effort || 'medium',
       fresh: true,
+      // Provenance, not permission: a human finding carries the same immutable evidence as a model one,
+      // and adjudication treats them alike. The flag exists so anyone auditing the checkpoint can see
+      // which findings came from a person.
+      ...(input.human ? { human: true } : {}),
     },
     recorded_at: input.recordedAt || new Date().toISOString(),
   };

@@ -1,23 +1,40 @@
 #!/usr/bin/env node
 
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
 const {
+  DIRTY_WORKTREE_PRECONDITION,
   acceptHumanReview,
   adjudicateFinding,
   advanceWork,
+  correctionBrief,
   currentState,
+  forgetKnownFailure,
+  humanFindingDrafts,
+  knownFailures,
   openWork,
+  reconcileAdjudication,
+  recordCorrectionDirection,
+  recordHumanFinding,
+  setHumanFindingPassCondition,
+  submitHumanFindings,
+  unblockWork,
+  recordKnownFailure,
   removeWorktree,
+  sliceEvidence,
+  verifyActiveSlice,
 } = require('./lib/pair-engine');
 const { EVALUATION_RESULT_LIMIT_BYTES, evaluateBank } = require('./lib/review-evaluation');
+const { feedbackForFinding, listReviewOutcomes } = require('./lib/review-evidence');
+const { resolveRuntime } = require('./lib/runtime-selection');
 const {
   activeReviewGuidance,
   decideReviewGuidance,
   proposeReviewGuidance,
 } = require('./lib/review-guidance');
-const { readCurrentWork, readJson, repositoryRoot, workPaths, writeJson } = require('./lib/pair-store');
+const { dispatchOwner, processTree, readCurrentWork, readJson, repositoryRoot, signalDispatch, workPaths, writeJson } = require('./lib/pair-store');
 const { hydrateWorktree } = require('./lib/pair-worktree');
 
 function fail(message) {
@@ -72,6 +89,8 @@ function parseArgs(argv) {
     else if (arg === '--finding') options.findingId = valueAfter(argv, index++, arg);
     else if (arg === '--disposition') options.disposition = valueAfter(argv, index++, arg);
     else if (arg === '--reason') options.reason = valueAfter(argv, index++, arg);
+    else if (arg === '--text') options.text = valueAfter(argv, index++, arg);
+    else if (arg === '--test') options.test = valueAfter(argv, index++, arg);
     else if (arg === '--submodule') options.submodules.push(valueAfter(argv, index++, arg));
     else if (arg === '--bank') options.bankPath = valueAfter(argv, index++, arg);
     else if (arg === '--evaluation') options.evaluationPath = valueAfter(argv, index++, arg);
@@ -80,6 +99,16 @@ function parseArgs(argv) {
     else if (arg === '--rule') options.rule = valueAfter(argv, index++, arg);
     else if (arg === '--proposal') options.proposalId = valueAfter(argv, index++, arg);
     else if (arg === '--decision') options.decision = valueAfter(argv, index++, arg);
+    else if (arg === '--file') options.file = valueAfter(argv, index++, arg);
+    else if (arg === '--line') options.lineStart = Number(valueAfter(argv, index++, arg));
+    else if (arg === '--line-end') options.lineEnd = Number(valueAfter(argv, index++, arg));
+    else if (arg === '--severity') options.severity = valueAfter(argv, index++, arg);
+    else if (arg === '--scenario') options.scenario = valueAfter(argv, index++, arg);
+    else if (arg === '--impact') options.impact = valueAfter(argv, index++, arg);
+    else if (arg === '--pass-condition') options.passCondition = valueAfter(argv, index++, arg);
+    else if (arg === '--index') options.index = Number(valueAfter(argv, index++, arg));
+    else if (arg === '--override') options.override = true;
+    else if (arg === '--submit') options.submit = true;
     else if (arg === '--allow-incomplete') options.allowIncomplete = true;
     else if (arg === '--json') options.json = true;
     else if (arg === '--status') options.command = 'status';
@@ -101,22 +130,391 @@ function selectedState(root, options) {
   return currentState(root, options.workId || readCurrentWork(root)?.work_id || null);
 }
 
-function printStatus(state, json = false) {
+// A state name is not an instruction. Every session that reads status has to translate "correction-
+// ready" into a command, and the translation it improvises is how the loop gets abandoned: the one
+// bounded correction looks like the only way forward, so the session hand-edits the worktree instead.
+// Naming the exact next command removes the improvisation.
+function nextCommand(state, next) {
+  if (['complete', 'blocked'].includes(state.lifecycle)) return null;
+  switch (next?.status) {
+    // Two roads reach correction-ready and they need opposite commands. A deterministic failure left
+    // no checkpoint, so re-verifying can clear it for free. A human-valid finding already has a green
+    // checkpoint, so re-verifying proves nothing and the correction is the only way forward.
+    case 'correction-ready':
+      return next.verification_failure
+        ? `pair-loop verify --slice ${next.id}   (re-verify first: it spends no correction. pair-loop run spends the one correction.)`
+        : `pair-loop run   (spends the one correction on the valid finding(s); pair-loop direct --text "<intent>" first to steer it)`;
+    // Only reached when the findings cannot be resolved from disk; adjudicationLines below replaces this
+    // with one paste-ready line per finding, because `<id>` is a 24-hex content address.
+    case 'awaiting-feedback':
+      return 'pair-loop feedback --finding <id> --disposition valid|false-positive|not-worth-fixing|missing-context --reason "<evidence>"';
+    case 'awaiting-human-review':
+      return `pair-loop show --slice ${next.id}   (the diffs, Design Check, and findings behind this checkpoint), then pair-loop accept --slice ${next.id}`;
+    default:
+      return 'pair-loop run';
+  }
+}
+
+// nextCommand answers "what do I type"; this answers "where am I and what comes after". Naming only
+// the next command still leaves a human driving nine slices unable to tell a slice that just started
+// from one about to be accepted, and the arc is not guessable from a state name — `review-ready` reads
+// like something is waiting on the human when it is the one step that is entirely free.
+// post-diff-design sits between implementation and review because that is where the engine puts it:
+// a Routine Path checkpoint whose diff turned out to change ownership or a public contract escalates
+// after the fact, and runPostDiffDesign records the Design Check and then moves the slice to
+// review-ready. It reached a human labelled "off the usual arc" the first time it occurred, which is
+// exactly the kind of dead end this view exists to prevent — it is a normal state with a normal command.
+const SLICE_ARC = [
+  ['queued', 'implement it'],
+  ['design-ready', 'implement against the approved Design Check'],
+  ['post-diff-design', 'the diff escalated — record its Design Check'],
+  ['review-ready', 'fresh review — spends no correction'],
+  ['awaiting-feedback', 'adjudicate each finding'],
+  ['correction-ready', 'the one bounded correction'],
+  ['awaiting-human-review', 'inspect the checkpoint, then accept it'],
+];
+
+function orientationLines(state, next) {
+  const slices = state.slices || [];
+  const accepted = slices.filter(slice => slice.status === 'accepted').length;
+  const queued = slices.filter(slice => slice.status === 'queued').length;
+  const progress = `Review Slices: ${accepted} of ${slices.length} accepted`
+    + (next && next.status !== 'queued' ? `, ${next.id} in flight` : '')
+    + (queued > 0 ? `, ${queued} queued` : '');
+  if (!next) {
+    return [
+      progress,
+      '  Remaining: a combined review of every accepted Review Slice, then the Work completes.',
+    ];
+  }
+  // An unrecognised or off-arc status is inserted rather than dropped: an arc with nothing marked
+  // reads as "this does not apply to me", which is the confusion the view exists to remove.
+  const arc = SLICE_ARC.some(([status]) => status === next.status)
+    ? SLICE_ARC
+    : [...SLICE_ARC, [next.status, 'off the usual arc — read Next above']];
+  return [
+    progress,
+    `Where ${next.id} is:`,
+    ...arc.map(([status, meaning]) => `  ${status === next.status ? '►' : ' '} ${status.padEnd(23)}${meaning}`),
+  ];
+}
+
+// Same principle printVerification states for failing test identities: what the next command consumes is
+// printed verbatim, because a summarised or elided operand cannot be pasted. A finding id is a 24-hex
+// content address, so `--finding <id>` sent a human holding their verdicts into the outcome JSON to hunt
+// for them. The all-or-nothing gate is stated too: adjudicateFinding holds the slice until every finding
+// has feedback, and feedback is append-only — a finding already adjudicated is never offered again
+// because a second adjudication of it is refused outright.
+const DISPOSITIONS = 'valid|false-positive|not-worth-fixing|missing-context';
+
+function adjudicationLines(sliceId, findings) {
+  const open = findings.filter(finding => !finding.disposition);
+  const done = findings.filter(finding => finding.disposition);
+  const anchor = finding => `${finding.evidence.path.split('/').pop()}:${finding.evidence.line_start}`;
+  // Unreachable in a healthy loop: the reducer moves a slice off awaiting-feedback the moment its last
+  // finding is adjudicated, so seeing this block means the projection fell behind its own recorded
+  // evidence. `pair-loop run` returns unchanged at awaiting-human, so offering it would hand over a
+  // command that silently does nothing.
+  if (open.length === 0) {
+    return [
+      `Every finding for ${sliceId} is adjudicated (${done.length} of ${done.length}), but the Review Slice never left awaiting-feedback:`,
+      ...done.map(finding => `  ${finding.disposition.padEnd(17)}${anchor(finding)}  ${truncate(finding.claim, 60)}`),
+      'The Review Feedback is recorded and a second one for the same finding is refused, so the projection is stale rather than incomplete.',
+      'Command: pair-loop run   (this one only re-derives the status from the recorded Review Feedback: it spends no correction'
+        + ` and records nothing. pair-loop reconcile --slice ${sliceId} does that step alone.)`,
+    ];
+  }
+  return [
+    `Adjudicate ${open.length} of ${findings.length} finding(s) for ${sliceId} — the Review Slice does not move until every one has feedback:`,
+    ...open.flatMap(finding => [
+      `  [${finding.severity}] ${anchor(finding)}  ${truncate(finding.claim, 80)}`,
+      `    pair-loop feedback --finding ${finding.finding_id} --disposition ${DISPOSITIONS} --reason "<evidence>"`,
+    ]),
+    ...(done.length > 0
+      ? ['  Already adjudicated:', ...done.map(finding => `    ${finding.disposition.padEnd(17)}${anchor(finding)}  ${truncate(finding.claim, 60)}`)]
+      : []),
+    '  The reason is final: one Review Feedback per finding, at most 500 characters, and a second is refused.',
+    '  Only a valid disposition reaches the correction, carrying that reason as the steering for its finding.',
+  ];
+}
+
+function truncate(text, max) {
+  const flat = String(text || '').replace(/\s+/gu, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+// The claim and anchor come from the immutable outcome and the disposition from append-only feedback, so
+// this reads the record rather than the projection: state carries no per-finding adjudication.
+function resolveAdjudication(root, state, next) {
+  if (!root || next?.status !== 'awaiting-feedback' || !next.review_outcome_id) return null;
+  const outcome = listReviewOutcomes(root, state.work_id).find(item => item.review_outcome_id === next.review_outcome_id);
+  if (!outcome || outcome.findings.length === 0) return null;
+  return outcome.findings.map(finding => ({
+    ...finding,
+    disposition: feedbackForFinding(root, state.work_id, finding.finding_id)[0]?.disposition || null,
+  }));
+}
+
+function autoRuntime() {
+  try { return resolveRuntime('auto', {}); } catch { return null; }
+}
+
+// A draft was write-only: it printed once when it was drafted and no command read it back, so a skipped
+// pass condition stayed invisible until submission refused on it — and re-drafting the finding looked like
+// the only way forward, which is how one slice ends up holding two drafts of the same claim.
+function draftLines(drafts) {
+  if (drafts.length === 0) return [];
+  const lines = [''];
+  for (const draft of drafts) {
+    lines.push(`Drafted findings for ${draft.review_slice_id} — ${draft.findings.length} not yet submitted:`);
+    for (const [index, finding] of draft.findings.entries()) {
+      lines.push(`  ${index + 1}. ${finding.evidence?.path}:${finding.evidence?.line_start}  ${finding.claim}`);
+      lines.push(finding.pass_condition
+        ? `     passes when: ${finding.pass_condition}`
+        : `     passes when: NOT STATED — pair-loop finding --slice ${draft.review_slice_id} --index ${index + 1} --pass-condition "<observable state>"`);
+    }
+    if (draft.stale) {
+      lines.push(`  This draft can no longer be submitted: ${draft.stale_reason}.`);
+    } else if (draft.unstated_count > 0) {
+      lines.push(`  Submission is refused until ${draft.unstated_count} pass condition(s) are stated.`);
+    } else {
+      lines.push(`  Submit as one Review Outcome: pair-loop finding --slice ${draft.review_slice_id} --submit`);
+    }
+  }
+  return lines;
+}
+
+function printStatus(state, json = false, root = null) {
+  const drafts = root ? humanFindingDrafts(root, state.work_id) : [];
   if (json) {
-    console.log(JSON.stringify(state, null, 2));
+    // A projection, not persisted state: drafts live as files per Review Slice, and status is where every
+    // reader — including the editor adapter — already looks for what is waiting on the human.
+    console.log(JSON.stringify({ ...state, human_finding_drafts: drafts }, null, 2));
     return;
   }
   const active = state.slices.find(slice => !['queued', 'accepted'].includes(slice.status));
   const next = active || state.slices.find(slice => slice.status === 'queued');
+  const baseline = root ? knownFailures(root, state.work_id) : [];
+  const adjudication = resolveAdjudication(root, state, next);
+  const command = adjudication ? null : nextCommand(state, next);
+  const runtime = autoRuntime();
   console.log([
+    // Set only by a run that repaired a stale projection. Without it, that run is indistinguishable from
+    // one that dispatched a coding session and produced nothing — which sends a human hunting for a diff
+    // that was never written.
+    ...(state.pair_transition === 'projection-repaired'
+      ? [
+        'This run changed bookkeeping only: no coding session ran, and nothing in the worktree changed.',
+        'The Review Slice status was behind the Review Feedback already recorded for it. Run again to do the work below.',
+        '',
+      ]
+      : []),
     `Pair ${state.lifecycle}`,
     `Work: ${state.work_id}`,
     `Branch: ${state.branch}`,
     `Worktree: ${state.worktree}`,
     `Review Slice: ${next?.id || 'none'} (${next?.status || 'none'})`,
     `Head: ${state.head_commit}`,
+    // Which provider a run would actually use, before it uses one. This was only discoverable after the
+    // fact from a Review Outcome's reviewer.runtime, so a preference that failed to apply — an env var that
+    // never reached the editor — looked identical to one that did.
+    ...(runtime ? [`Runtime: ${runtime} (auto)`] : []),
     `Next: ${state.next_action || 'none'}`,
+    ...(command ? [`Command: ${command}`] : []),
+    ...(baseline.length > 0 ? [`Known Failure Baseline: ${baseline.length} test(s) declared pre-existing`] : []),
+    ...(adjudication ? ['', ...adjudicationLines(next.id, adjudication)] : []),
+    ...(state.lifecycle === 'blocked' ? blockedLines(state, dirtyWorktreePaths(state)) : []),
+    ...draftLines(drafts),
+    '',
+    ...orientationLines(state, next),
   ].join('\n'));
+}
+
+// Failing test identities are printed verbatim: they are what `baseline add --test` consumes, and a
+// summarised or truncated identity cannot be copied into the declaration that exempts it.
+function printVerification(report) {
+  const exempted = report.status === 0 && report.baselined_failing_tests.length > 0;
+  const lines = [
+    `Verification: ${report.status === 0 ? 'clean' : 'FAILED'}`
+      + (exempted ? ` — the command exited ${report.observed_status}, every failure it named is declared pre-existing` : ` (exit ${report.observed_status})`),
+    `Command: ${report.command}`,
+  ];
+  if (report.baselined_failing_tests.length > 0) {
+    lines.push(`Baselined failures (${report.baselined_failing_tests.length}, declared pre-existing):`);
+    lines.push(...report.baselined_failing_tests.map(test => `  ${test}`));
+  }
+  if (report.introduced_failing_tests.length > 0) {
+    lines.push(`New failures (${report.introduced_failing_tests.length}, this Work owns these):`);
+    lines.push(...report.introduced_failing_tests.map(test => `  ${test}`));
+  }
+  if (report.status !== 0 && report.introduced_failing_tests.length === 0 && report.failing_tests.length === 0) {
+    lines.push('No test identity was parsed from the output, so nothing can be baselined; the failure stands.');
+  }
+  if (report.diagnostic) lines.push(`Diagnostic: ${report.diagnostic}`);
+  if (report.checkpoint_created) lines.push(`Checkpoint created without spending the correction: ${report.checkpoint_commit}`);
+  if (report.status === 0 && !report.checkpoint_created && report.clears_deterministic_failure === false) {
+    lines.push('This Review Slice already has a green checkpoint; it is waiting on a correction, not on verification. Run pair-loop run.');
+  }
+  console.log(lines.join('\n'));
+}
+
+function printBaseline(entries, json = false) {
+  if (json) {
+    console.log(JSON.stringify(entries, null, 2));
+    return;
+  }
+  if (entries.length === 0) {
+    console.log('Known Failure Baseline: empty');
+    return;
+  }
+  console.log([
+    `Known Failure Baseline: ${entries.length} test(s)`,
+    ...entries.map(entry => `  ${entry.test}\n    ${entry.reason}`),
+  ].join('\n'));
+}
+
+// Two diffs, never one: the cumulative diff answers "does this slice deserve to exist", the
+// correction diff answers "did the fix do what was asked, and nothing else". Reviewing only the
+// first is how a correction quietly widens its own scope.
+// Reviewing a correction is two questions the cumulative diff answers for neither: which hunks answer
+// this finding, and what changed that no finding asked for. Overlap with the anchored lines is evidence of
+// where the corrector worked, never that the finding is satisfied — only the human reading the hunk can
+// say that — so the wording stays at "at your lines" rather than "fixed".
+function newRanges(hunks) {
+  return hunks
+    .map(hunk => `${hunk.new_start}${hunk.new_lines > 1 ? `-${hunk.new_start + hunk.new_lines - 1}` : ''}`)
+    .join(', ');
+}
+
+function correctionLines(finding) {
+  const correction = finding.correction;
+  if (!correction) return [];
+  if (!correction.file_changed) {
+    return ['    correction:     DID NOT open this file — this finding cannot have been addressed'];
+  }
+  const attributed = [...correction.overlapping_hunks, ...correction.near_hunks];
+  if (attributed.length === 0) {
+    return [
+      `    correction:     changed this file, but nothing within ${correction.proximity_lines} lines of your anchor`
+        + `${correction.nearest_distance === null ? '' : ` (nearest is ${correction.nearest_distance} away)`} — probably not your finding`,
+    ];
+  }
+  const where = correction.overlapping_hunks.length > 0
+    ? `${correction.overlapping_hunks.length} at your lines`
+    : `nearest ${Math.min(...correction.near_hunks.map(hunk => hunk.distance))} line(s) away`;
+  return [
+    `    correction:     ${attributed.length} hunk(s) near your anchor (${where}) — now at ${finding.evidence.path}:${newRanges(attributed)}`,
+    '                    proximity only; whether it satisfies the finding is yours to read',
+  ];
+}
+
+function printUnattributed(evidence) {
+  const unattributed = evidence.correction_unattributed || [];
+  if (unattributed.length === 0) return [];
+  const total = unattributed.reduce((sum, item) => sum + item.added_lines, 0);
+  return [
+    '',
+    `Changes no finding accounts for (${total} line(s) across ${unattributed.length} file(s)) — this is where a bounded correction widens its own scope:`,
+    ...unattributed.map(item => `  ${item.path}  ${item.hunks} hunk(s), ${item.added_lines} line(s)`
+      + (item.anchored_by_a_finding ? '  (same file as a finding, but far from its anchor)' : '')),
+  ];
+}
+
+// The one state with no command was the one that needed instructions most: nextCommand returns null for a
+// blocked lifecycle, so a dirty-worktree block printed "inspect preserved worktree changes" and stopped.
+// It withheld the three facts that resolve it — which files are in the way, that the block clears itself
+// once the tree is clean, and which status the slice resumes into. Uncommitted work here is usually the
+// output of an implementation run that was interrupted before it could be checkpointed, so every command
+// offered preserves it: no checkout, no reset, no clean.
+
+// --no-optional-locks so reading the block never touches .git/index while a provider may hold it.
+function dirtyWorktreePaths(state) {
+  if (!state.worktree) return [];
+  const result = childProcess.spawnSync('git', ['--no-optional-locks', '-C', state.worktree, 'status', '--porcelain'], { encoding: 'utf8' });
+  if (result.status !== 0) return [];
+  return String(result.stdout || '').split(/\r?\n/u).filter(line => line.trim());
+}
+
+function blockedLines(state, dirtyPaths = []) {
+  const lines = ['', `Blocked: ${state.blocked_reason || 'no reason recorded'}`];
+  if (state.blocked_precondition !== DIRTY_WORKTREE_PRECONDITION) return lines;
+  const slice = state.slices.find(item => item.status === 'blocked');
+  const resumesInto = slice?.blocked_from || 'queued';
+  lines.push(
+    `The Pair worktree holds ${dirtyPaths.length} uncommitted change(s). A Review Slice must start from a clean tree,`,
+    'because anything sitting here is swept into its checkpoint as if the slice had produced it.',
+    ...dirtyPaths.slice(0, 10).map(path => `  ${path}`),
+    ...(dirtyPaths.length > 10 ? [`  …and ${dirtyPaths.length - 10} more`] : []),
+    '',
+    'These are often the output of an implementation run that was interrupted before it could be checkpointed,',
+    'so nothing here discards them. Inspect first:',
+    `  git -C ${state.worktree || '<worktree>'} diff`,
+    'Then either keep them — commit them on this branch, or git stash them — and the block clears itself:',
+    `  pair-loop run   (resumes ${slice?.id || 'the slice'} at ${resumesInto} once the tree is clean)`,
+    'Or decide the tree should stay as it is, and say why on the record:',
+    `  pair-loop unblock --reason "<why these changes belong here>"`,
+  );
+  return lines;
+}
+
+function printEvidence(evidence) {
+  const short = commit => (commit ? commit.slice(0, 10) : null);
+  const lines = [
+    `Review Slice ${evidence.review_slice_id} (${evidence.status}${evidence.route ? `, ${evidence.route}` : ''}, corrections spent ${evidence.correction_count})`,
+    `Outcome: ${evidence.outcome}`,
+    '',
+    'Acceptance Criteria:',
+    ...evidence.acceptance_criteria.map(item => `  ${item.id}: ${item.text}`),
+    '',
+    `Whole slice:     git -C ${evidence.worktree} diff ${short(evidence.base_commit)} ${short(evidence.checkpoint_commit)}`,
+  ];
+  if (evidence.prior_checkpoint_commit) {
+    lines.push(`Correction only: git -C ${evidence.worktree} diff ${short(evidence.prior_checkpoint_commit)} ${short(evidence.checkpoint_commit)}`);
+  }
+  if (evidence.architecture_risk) lines.push('', `Architecture Risk: ${evidence.architecture_risk}`);
+  if (evidence.design_check) lines.push('', 'Design Check:', ...evidence.design_check.split('\n').map(line => `  ${line}`));
+  if (evidence.correction_direction) lines.push('', 'Correction Direction (human intent that steered the correction):', `  ${evidence.correction_direction}`);
+  if (evidence.findings.length > 0) {
+    lines.push('', `Findings (${evidence.findings.length}):`);
+    for (const finding of evidence.findings) {
+      const disposition = finding.feedback.map(item => item.disposition).join(', ') || 'not adjudicated';
+      lines.push(
+        `  [${finding.severity}] ${finding.claim}`,
+        `    disposition:    ${disposition}`,
+        ...finding.feedback.map(item => `    reason:         ${item.reason}`),
+        `    scenario:       ${finding.scenario}`,
+        `    pass condition: ${finding.pass_condition}`,
+        `    anchor:         ${finding.evidence.path}:${finding.evidence.line_start}-${finding.evidence.line_end} @ ${short(finding.evidence.commit)}`,
+        ...correctionLines(finding),
+      );
+    }
+  }
+  if (evidence.verification) {
+    const baselined = evidence.verification.baselined_test_count;
+    lines.push(
+      '',
+      `Verification: exit ${evidence.verification.status}${baselined ? ` after exempting ${baselined} baselined failure(s)` : ''}`,
+      `  ${evidence.verify_command}`,
+    );
+  }
+  lines.push(...printUnattributed(evidence));
+  lines.push('', `Accept with: pair-loop accept --slice ${evidence.review_slice_id}`);
+  console.log(lines.join('\n'));
+}
+
+// The draft is the only place a missing pass condition is still fixable cheaply, so it is printed with
+// the gap visible rather than discovered at submission.
+function printDraft(sliceId, findings) {
+  for (const [index, finding] of findings.entries()) {
+    console.log(`  ${index + 1}. ${finding.evidence.path}:${finding.evidence.line_start}  ${finding.claim}`);
+    console.log(finding.pass_condition
+      ? `     passes when: ${finding.pass_condition}`
+      : `     passes when: NOT STATED — pair-loop finding --slice ${sliceId} --index ${index + 1} --pass-condition "<observable state>"`);
+  }
+  const unstated = findings.filter(finding => !finding.pass_condition).length;
+  console.log(unstated > 0
+    ? `Submission is refused until ${unstated} pass condition(s) are stated.`
+    : `Submit them as one Review Outcome: pair-loop finding --slice ${sliceId} --submit`);
 }
 
 function help() {
@@ -125,15 +523,33 @@ function help() {
   pair-loop open --work <id> [--spec .pair/spec.md] [--manifest .pair/review-slices.json]
   pair-loop run [--runtime auto] [--review-policy architecture|sample|all|off]
   pair-loop status [--json]
-  pair-loop accept --slice <id>
+  pair-loop show [--slice <id>] [--json]
+  pair-loop verify [--slice <id>] [--json]
+  pair-loop baseline list [--json]
+  pair-loop baseline add --test <test-id> --reason <evidence>
+  pair-loop baseline remove --test <test-id>
+  pair-loop accept --slice <id> [--override --reason <evidence>]
+  pair-loop finding --slice <id> --file <path> --line <n> --text <what is wrong>
+                                 [--pass-condition <observable state>] [--severity BLOCKER|MAJOR]
+  pair-loop finding --slice <id> [--index <n>] --pass-condition <observable state>
+                                                  (states the remedy for an already-drafted finding)
+  pair-loop finding --slice <id> --submit          (records the drafted findings as one Review Outcome)
+  pair-loop unblock --reason <evidence>
+  pair-loop direct --text <text> [--slice <id>]
   pair-loop feedback --finding <id> --disposition valid|false-positive|not-worth-fixing|missing-context --reason <text>
+  pair-loop reconcile [--slice <id>]               (re-derives status from recorded Review Feedback)
+  pair-loop dispatch status|pause|continue|stop     (control the run that is in flight)
+  pair-loop brief [--slice <id>] [--json]          (what the correcting session will be told, before it is)
   pair-loop hydrate [--submodule <path> ...]
   pair-loop remove-worktree [--allow-incomplete]
   pair-loop evaluate --bank <review-evaluation-bank.json>
   pair-loop guidance propose --feedback <id,...> --scope <tag,...> --rule <text> --evaluation <result.json>
   pair-loop guidance approve|reject --proposal <id> --reason <text>
 
-Bare pair-loop means run. Runtime Work/spec/review evidence stays in Git common directory; product branch receives code only.`);
+Bare pair-loop means run. Runtime Work/spec/review evidence stays in Git common directory; product branch receives code only.
+show assembles the checkpoint diffs, Design Check, Correction Direction, and adjudicated findings a human acceptance rests on.
+verify re-runs the declared verification and spends no correction; at correction-ready a clean run checkpoints the slice.
+baseline declares a test as already failing before this Work, so its failure never counts as this Work's failure.`);
 }
 
 function main(argv = process.argv.slice(2)) {
@@ -149,25 +565,138 @@ function main(argv = process.argv.slice(2)) {
       const workId = options.workId || workIdFromSpec(specPath);
       if (!workId) throw new Error('open requires --work or a **Work ID:** in the specification');
       const opened = openWork(root, { ...options, workId, specPath, manifestPath });
-      printStatus(opened.state, options.json);
+      printStatus(opened.state, options.json, root);
       return;
     }
     if (options.command === 'run') {
-      printStatus(advanceWork(root, options), options.json);
+      printStatus(advanceWork(root, options), options.json, root);
       return;
     }
     if (options.command === 'status') {
-      printStatus(selectedState(root, options), options.json);
+      printStatus(selectedState(root, options), options.json, root);
       return;
+    }
+    if (options.command === 'show') {
+      const evidence = sliceEvidence(root, options);
+      if (options.json) console.log(JSON.stringify(evidence, null, 2));
+      else printEvidence(evidence);
+      return;
+    }
+    if (options.command === 'verify') {
+      const { report, state } = verifyActiveSlice(root, options);
+      if (options.json) {
+        console.log(JSON.stringify(report, null, 2));
+        return;
+      }
+      printVerification(report);
+      printStatus(state, false, root);
+      return;
+    }
+    if (options.command === 'baseline') {
+      if (options.subcommand === 'add') {
+        if (!options.test || !options.reason) throw new Error('baseline add requires --test and --reason');
+        printBaseline(recordKnownFailure(root, options).entries, options.json);
+        return;
+      }
+      if (options.subcommand === 'remove') {
+        if (!options.test) throw new Error('baseline remove requires --test');
+        printBaseline(forgetKnownFailure(root, options).entries, options.json);
+        return;
+      }
+      if (!options.subcommand || options.subcommand === 'list') {
+        printBaseline(knownFailures(root, selectedState(root, options).work_id), options.json);
+        return;
+      }
+      throw new Error('baseline requires list, add, or remove');
     }
     if (options.command === 'accept') {
       if (!options.sliceId) throw new Error('accept requires --slice');
-      printStatus(acceptHumanReview(root, options), options.json);
+      printStatus(acceptHumanReview(root, options), options.json, root);
+      return;
+    }
+    // The human half of review: raise your own finding against the checkpoint you read yourself, and it
+    // is adjudicated and corrected through exactly the same path a model finding takes.
+    if (options.command === 'finding') {
+      // Two steps on purpose: drafting is how a human reads, and one Review Outcome per submitted review
+      // is what keeps the Review Inbox free of stale duplicates nobody can adjudicate.
+      if (options.submit) {
+        const recorded = submitHumanFindings(root, options);
+        console.log(`Submitted ${recorded.outcome.findings.length} human finding(s) as ${recorded.outcome.review_outcome_id}`);
+        for (const finding of recorded.outcome.findings) console.log(`  ${finding.finding_id}  ${finding.severity}  ${finding.claim}`);
+        printStatus(currentState(root, options.workId || null), options.json, root);
+        return;
+      }
+      // Stating the remedy for a finding already drafted, so a submission refused for a missing pass
+      // condition is completed in place instead of re-drafted into a duplicate.
+      if (options.passCondition && !options.file && !options.text && !options.claim) {
+        const amended = setHumanFindingPassCondition(root, options);
+        console.log(`Drafted finding ${amended.index} for ${amended.sliceId} passes when: ${amended.findings[amended.index - 1].pass_condition}`);
+        printDraft(amended.sliceId, amended.findings);
+        return;
+      }
+      if (!options.file || !Number.isInteger(options.lineStart)) throw new Error('finding requires --file and --line');
+      if (!options.text && !options.claim) throw new Error('finding requires --text');
+      const drafted = recordHumanFinding(root, { ...options, claim: options.claim || options.text });
+      console.log(`Drafted ${drafted.findings.length} finding(s) for ${drafted.sliceId} — not recorded yet.`);
+      printDraft(drafted.sliceId, drafted.findings);
+      return;
+    }
+    // The exact text the correcting session will receive, before the one irreversible correction is spent.
+    if (options.command === 'brief') {
+      const brief = correctionBrief(root, options);
+      if (options.json) { console.log(JSON.stringify(brief, null, 2)); return; }
+      console.log(`Correction brief for ${brief.review_slice_id} — this is verbatim what the correcting session receives:\n`);
+      console.log(brief.prompt);
+      if (!brief.correction_direction) {
+        console.log('\nNo Correction Direction is attached. pair-loop direct --text "<intent>" adds one, and it is binding for this correction.');
+      }
+      return;
+    }
+    // Control over a run in flight. Pausing is honest about its risk: the provider holds an open request to
+    // the model, and a long enough stop can make that request time out, which surfaces as a failed run
+    // rather than a resumed one. Stopping is the same shape as any interrupted run — no checkpoint, and the
+    // edits it already made stay in the worktree, so the next run blocks and says exactly that.
+    if (options.command === 'dispatch') {
+      const owner = dispatchOwner(root, selectedState(root, options).work_id);
+      const action = options.subcommand || 'status';
+      if (!owner) {
+        console.log('No dispatch is running for this Work.');
+        return;
+      }
+      if (action === 'status') {
+        console.log(`A dispatch has been running since ${owner.at} (pid ${owner.pid}).`);
+        console.log(`Processes: ${processTree(owner.pid).join(', ')}`);
+        console.log('pair-loop dispatch pause | continue | stop');
+        return;
+      }
+      // `continue`, not `resume`: this loop deliberately forbids the vocabulary of session reuse, and
+      // SIGCONT is what actually happens. A paused process is continued; a session is never resumed.
+      const signals = { pause: 'SIGSTOP', continue: 'SIGCONT', stop: 'SIGTERM' };
+      if (!signals[action]) throw new Error(`dispatch takes status, pause, continue, or stop — not ${action}`);
+      const result = signalDispatch(root, selectedState(root, options).work_id, signals[action]);
+      console.log(`Sent ${signals[action]} to ${result.signalled.length} process(es): ${result.signalled.join(', ')}`);
+      if (action === 'pause') console.log('The model request stays open while paused; a long pause can time it out and fail the run.');
+      if (action === 'stop') console.log('No checkpoint was written. Edits already made stay in the worktree, so pair-loop status will block and name what is there.');
+      return;
+    }
+    // Repairs a Review Slice whose status fell behind Review Feedback that is already on disk. Records
+    // nothing and derives only from immutable evidence, so it is safe to re-run.
+    if (options.command === 'reconcile') {
+      printStatus(reconcileAdjudication(root, options), options.json, root);
+      return;
+    }
+    if (options.command === 'unblock') {
+      printStatus(unblockWork(root, options), options.json, root);
+      return;
+    }
+    if (options.command === 'direct') {
+      if (!options.text) throw new Error('direct requires --text');
+      printStatus(recordCorrectionDirection(root, options), options.json, root);
       return;
     }
     if (options.command === 'feedback') {
       if (!options.findingId || !options.disposition || !options.reason) throw new Error('feedback requires --finding, --disposition, and --reason');
-      printStatus(adjudicateFinding(root, options), options.json);
+      printStatus(adjudicateFinding(root, options), options.json, root);
       return;
     }
     if (options.command === 'hydrate') {
@@ -228,4 +757,4 @@ function main(argv = process.argv.slice(2)) {
 
 if (require.main === module) main();
 
-module.exports = { evaluationSummary, main, parseArgs, printStatus, workIdFromSpec };
+module.exports = { adjudicationLines, blockedLines, evaluationSummary, main, nextCommand, orientationLines, parseArgs, printBaseline, printEvidence, printStatus, printVerification, workIdFromSpec };

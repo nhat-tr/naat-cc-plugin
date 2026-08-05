@@ -1200,3 +1200,27 @@ test('a Pair Stop whose transcript carries no recoverable direction still checkp
   assert.equal(stored.checkpoint.core_anchor, 'Continue Pair Work work-handover from repository authority.');
   assert.equal(stored.checkpoint_revision, 1, 'an unusable transcript writes no revision');
 });
+
+// The SessionStart hook prints this banner at every session start, and a registry accumulates
+// settled conversations forever: nine terminal rows drowned the one line that named an action.
+test('the scoped banner collapses settled conversations into one line and keeps the actionable handover', t => {
+  const root = fixture(t);
+  const { formatFreshnessProjection, freshnessProjection, registerAgentConversation, sealAgentConversationHandover, updateAgentConversationCheckpoint } = handoverApi();
+  const current = conversation({ kind: 'brainstorming', agentConversationId: 'collapse-current-conversation', now: 9_000 });
+  const registeredCurrent = registerAgentConversation(root, current);
+  updateAgentConversationCheckpoint(root, { ...current, checkpoint: checkpoint() });
+  const sealed = ['collapse-stale-a-conversation', 'collapse-stale-b-conversation', 'collapse-stale-c-conversation'].map((agentConversationId, index) => {
+    const identity = conversation({ agentConversationId, now: 1_000 + index * 1_000 });
+    registerAgentConversation(root, identity);
+    updateAgentConversationCheckpoint(root, { ...identity, checkpoint: checkpoint() });
+    return sealAgentConversationHandover(root, { ...identity, now: 4_000 });
+  });
+
+  const banner = formatFreshnessProjection(freshnessProjection(root, 10_000), { currentSourceKey: registeredCurrent.sourceKey });
+
+  assert.equal((banner.match(/Freshness Gate \(other\)/gu) || []).length, 1, 'exactly one stale conversation renders in full');
+  assert.ok(banner.includes(sealed[2].handoverId), 'the most recently active stale conversation is the one kept');
+  assert.ok(!banner.includes(sealed[0].handoverId), 'older settled conversations no longer render their own rows');
+  assert.match(banner, /2 settled Agent Conversation/u, 'the omitted rows are counted, not hidden');
+  assert.match(banner, /--freshness-status/u, 'the full list stays one named command away');
+});

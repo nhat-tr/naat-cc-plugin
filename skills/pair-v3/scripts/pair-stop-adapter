@@ -42,6 +42,12 @@ function main() {
       ...options,
       transcriptPath: input.transcript_path || null,
     });
+    if (preparation.status === 'terminal') {
+      process.stdout.write(`${JSON.stringify(hardStopResponse(
+        `Freshness Gate stopped this Agent Conversation because it is ${preparation.conversationStatus}, not because anything is broken: its Agent Conversation Checkpoint is already frozen into ${preparation.handoverId || 'no Handover'} and cannot be refreshed here. ${preparation.nextSafeAction}`,
+      ))}\n`);
+      return;
+    }
     if (preparation.status === 'recovery-unavailable') {
       process.stdout.write(`${JSON.stringify(hardStopResponse(
         'Freshness Gate could not record a complete Agent Conversation Checkpoint because this Stop event has no exact provider transcript. Record one with pair-loop --conversation-checkpoint before stopping.',
@@ -51,9 +57,12 @@ function main() {
     recordAgentConversationStop(root, options);
   } catch (error) {
     const checkpointFailure = /checkpoint|not consumed/iu.test(error.message || '');
+    // Naming the cause is what makes an unexpected gate failure repairable; discarding it leaves a
+    // hard stop with nothing to act on.
+    const cause = String(error.message || 'unknown error').slice(0, 300);
     process.stdout.write(`${JSON.stringify(hardStopResponse(checkpointFailure
       ? 'Freshness Gate stopped this turn without scheduling another old-conversation prompt: refresh the Agent Conversation Checkpoint during the one authorized turn before Stop.'
-      : 'Freshness Gate stopped this registered Agent Conversation because its handover state is invalid.'))}\n`);
+      : `Freshness Gate stopped this registered Agent Conversation because its handover state is invalid: ${cause}. Run pair-loop --freshness-status to inspect .pair/handovers.`))}\n`);
   }
 }
 

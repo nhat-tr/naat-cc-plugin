@@ -3,6 +3,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { loadPairState, pairStatePaths, redactString } = require('./pair-state');
+const {
+  engineOwner, engineVerificationOwner, engineWork, engineWorkId, livePairWorkId, pairProjectionPath,
+} = require('./pair-authority');
 const { takeoverWork } = require('./handover-takeover');
 const { deriveBrainstormingCheckpoint } = require('./brainstorm-checkpoint');
 const { recoverAgentConversationCheckpoint } = require('./conversation-checkpoint-recovery');
@@ -878,6 +881,41 @@ function mergeRecoveredCheckpoint(conversation, recovered) {
   };
 }
 
+function freshStartInstruction(conversation) {
+  const handoverId = conversation.sealed_handover_id || null;
+  if (!handoverId) return null;
+  return `From a plain terminal outside any agent conversation, run pair-loop --fresh-from ${handoverId} --runtime ${conversation.runtime}; or open a fresh ${conversation.runtime} agent conversation manually, then inside it run pair-loop --adopt-handover ${handoverId} --runtime ${conversation.runtime}.`;
+}
+
+function repairInstruction(conversation) {
+  return `Sealing has not produced an Agent Conversation Handover; run pair-loop --freshness-status --runtime ${conversation.runtime} and repair .pair/handovers before prompting again.`;
+}
+
+// `general` is what a conversation gets when nothing declared a kind, so resolving it to `pair`
+// once the repository owns a live Pair Work completes an undetermined registration rather than
+// changing a declared one. Only this direction is allowed: a declared `brainstorming` conversation
+// keeps its kind, and a `pair` conversation never demotes. Without it, a session that started as an
+// ordinary conversation and then opened Pair Work could never seal a handover that names the Work.
+function promoteGeneralConversationToPairLocked(root, registry, paths, sourceKey) {
+  const target = registry.conversations[sourceKey];
+  if (target?.kind !== 'general' || !livePairWorkId(root)) return false;
+  target.kind = 'pair';
+  // The marker carries the kind too, and every withRegistry entry and exit cross-checks the two.
+  const marker = path.join(paths.registrations, `${sourceKey}.json`);
+  const existing = readJson(marker);
+  if (existing) atomicWrite(marker, `${JSON.stringify({ ...existing, kind: 'pair' }, null, 2)}\n`);
+  return true;
+}
+
+function promoteGeneralConversationToPair(root, conversation) {
+  if (conversation?.kind !== 'general' || !livePairWorkId(root)) return false;
+  const promoted = withRegistry(root, (registry, paths) => (
+    promoteGeneralConversationToPairLocked(root, registry, paths, conversation.source_key)
+  ));
+  if (promoted) conversation.kind = 'pair';
+  return promoted;
+}
+
 function prepareAgentConversationStop(root, input) {
   const identity = conversationIdentity(input);
   const registered = hasAgentConversationRegistration(root, input);
@@ -886,6 +924,18 @@ function prepareAgentConversationStop(root, input) {
   }
   const registry = registered ? readAgentConversationRegistry(root) : null;
   const conversation = registry?.conversations[identity.sourceKey] || null;
+  // Sealing is terminal: the checkpoint is already frozen into the Handover, so a later Stop has
+  // nothing left to refresh. Refreshing it anyway throws deep in the writer, and the gate then
+  // reports a normal sealed conversation as invalid state with no remedy. Report the seal instead.
+  if (conversation && !['warm', 'override-active'].includes(conversation.status)) {
+    return {
+      status: 'terminal',
+      sourceKey: identity.sourceKey,
+      conversationStatus: conversation.status,
+      handoverId: conversation.sealed_handover_id || null,
+      nextSafeAction: freshStartInstruction(conversation) || repairInstruction(conversation),
+    };
+  }
   if (!input.transcriptPath) {
     const completeCheckpoint = conversation?.checkpoint?.core_anchor
       && conversation.checkpoint.current_direction
@@ -898,8 +948,10 @@ function prepareAgentConversationStop(root, input) {
       && completeCheckpoint;
     // A Pair conversation loses nothing without a transcript: recordAgentConversationStop
     // re-derives a complete checkpoint from repository authority, so only the recovered
-    // conversation layer is missed.
-    const derivablePairCheckpoint = conversation?.kind === 'pair';
+    // conversation layer is missed. That holds for a conversation the repository has just made a
+    // Pair one, which is why the resolution runs before the question is asked.
+    const derivablePairCheckpoint = conversation?.kind === 'pair'
+      || promoteGeneralConversationToPair(root, conversation);
     if (manualRefreshAfterLastStop || completeBrainstormingCheckpoint || derivablePairCheckpoint) {
       return { status: 'registered', sourceKey: identity.sourceKey };
     }
@@ -921,17 +973,24 @@ function prepareAgentConversationStop(root, input) {
     throw error;
   }
   if (!registered) {
+    // `general` is the fallback for a conversation nothing declared, not a declaration of its own.
+    // A repository holding a live Pair Work says what this conversation is doing, and saying it here
+    // is what binds the Work projection into the seal and lets repository authority own the next
+    // action instead of recovered transcript prose.
+    const kind = livePairWorkId(root) ? 'pair' : 'general';
     registerAgentConversation(root, {
       runtime: identity.runtime,
       agentConversationId: input.agentConversationId,
-      kind: 'general',
+      kind,
       now: input.now,
     });
     const recorded = updateAgentConversationCheckpoint(root, {
       runtime: identity.runtime,
       agentConversationId: input.agentConversationId,
-      kind: 'general',
-      checkpoint: recovered.checkpoint,
+      kind,
+      checkpoint: kind === 'pair'
+        ? mergePairCheckpoint(derivePairCheckpoint(root), normalizeCheckpoint(recovered.checkpoint))
+        : recovered.checkpoint,
       origin: 'recovered',
       sourceDigest: recovered.sourceDigest,
       now: input.now,
@@ -941,6 +1000,9 @@ function prepareAgentConversationStop(root, input) {
   if (!conversation || !['pair', 'brainstorming', 'general'].includes(conversation.kind)) {
     return { status: 'registered', sourceKey: identity.sourceKey };
   }
+  // The upgrade has to happen before the merge below, because it decides which layer owns the Core
+  // Anchor, the direction and the next action for this very Stop.
+  promoteGeneralConversationToPair(root, conversation);
   const merged = mergeRecoveredCheckpoint(conversation, recovered);
   const recorded = updateAgentConversationCheckpoint(root, {
     runtime: identity.runtime,
@@ -962,9 +1024,10 @@ function recordAgentConversationStop(root, input) {
     return { status: 'unregistered', sourceKey: identity.sourceKey };
   }
   const at = timestamp(input.now);
-  const recorded = withRegistry(root, registry => {
+  const recorded = withRegistry(root, (registry, paths) => {
     const conversation = registry.conversations[identity.sourceKey];
     if (!conversation) throw new Error('invalid Agent Conversation Handover registry');
+    promoteGeneralConversationToPairLocked(root, registry, paths, identity.sourceKey);
     if (conversation.status === 'override-active') {
       if (conversation.override?.status !== 'in-flight') {
         return { status: 'override-not-consumed', sourceKey: identity.sourceKey };
@@ -1198,10 +1261,8 @@ function freshnessProjection(root, now = Date.now()) {
       ? invalidActivity ? 'invalid-activity' : ageMs >= FRESHNESS_WINDOW_MS ? 'cold' : 'warm'
       : conversation.status;
     const handoverId = conversation.sealed_handover_id || null;
-    const freshStart = handoverId
-      ? `From a plain terminal outside any agent conversation, run pair-loop --fresh-from ${handoverId} --runtime ${conversation.runtime}; or open a fresh ${conversation.runtime} agent conversation manually, then inside it run pair-loop --adopt-handover ${handoverId} --runtime ${conversation.runtime}.`
-      : null;
-    const repairFallback = `Sealing has not produced an Agent Conversation Handover; run pair-loop --freshness-status --runtime ${conversation.runtime} and repair .pair/handovers before prompting again.`;
+    const freshStart = freshStartInstruction(conversation);
+    const repairFallback = repairInstruction(conversation);
     const nextSafeAction = ['cold', 'sealed'].includes(projectedStatus)
       ? freshStart || repairFallback
       : projectedStatus === 'retired'
@@ -1232,10 +1293,14 @@ function freshnessProjection(root, now = Date.now()) {
   });
   // The one-line warning recommends the most recently active stale conversation — registration
   // order would surface a days-old handover ahead of the one the user actually needs next.
-  // invalid-activity rows carry a null age and rank last.
-  const requiringHandover = conversations
-    .filter(conversation => ['cold', 'sealed', 'invalid-activity', 'retired'].includes(conversation.status))
-    .sort((a, b) => (a.age_ms ?? Number.POSITIVE_INFINITY) - (b.age_ms ?? Number.POSITIVE_INFINITY))[0];
+  // invalid-activity rows carry a null age and rank last. A retired conversation's next safe action
+  // is "use the adopted one" — advice, not an action — so it never shadows a real pending handover.
+  const byAge = (a, b) => (a.age_ms ?? Number.POSITIVE_INFINITY) - (b.age_ms ?? Number.POSITIVE_INFINITY);
+  const pending = conversations
+    .filter(conversation => ['cold', 'sealed', 'invalid-activity'].includes(conversation.status))
+    .sort(byAge);
+  const requiringHandover = pending[0]
+    || conversations.filter(conversation => conversation.status === 'retired').sort(byAge)[0];
   return {
     observed_at: observedAt,
     conversations,
@@ -1284,17 +1349,31 @@ function formatFreshnessProjection(projection, options = {}) {
   }
   const current = conversations.find(conversation => conversation.source_key === options.currentSourceKey);
   const others = conversations.filter(conversation => conversation !== current);
+  // The scoped banner opens every session, and a registry accumulates settled conversations forever:
+  // nine terminal rows drowned the one line that named an action. Live conversations and the most
+  // recently active stale one render; the rest collapse to a count, with the full list one command away.
+  const live = others.filter(conversation => ['warm', 'override-active'].includes(conversation.status));
+  const actionable = others
+    .filter(conversation => ['cold', 'sealed', 'invalid-activity'].includes(conversation.status))
+    .sort((a, b) => (a.age_ms ?? Number.POSITIVE_INFINITY) - (b.age_ms ?? Number.POSITIVE_INFINITY))
+    .slice(0, 1);
+  const settled = others.filter(conversation => !live.includes(conversation) && !actionable.includes(conversation));
   const lines = [current
     ? [
       `Freshness Gate (this Agent Conversation) ${current.runtime}/${current.kind}: ${current.status}`,
       ...freshnessConversationFields(current),
     ].join('\n  ')
     : 'Freshness Gate (this Agent Conversation): this Agent Conversation is not registered; the Freshness Gate does not gate it.'];
-  for (const conversation of others) {
+  for (const conversation of [...live, ...actionable]) {
     lines.push([
       `Freshness Gate (other) ${conversation.runtime}/${conversation.kind}: ${conversation.status}`,
       ...freshnessConversationFields(conversation),
     ].join(' | '));
+  }
+  if (settled.length > 0) {
+    const counts = settled.reduce((sum, conversation) => sum.set(conversation.status, (sum.get(conversation.status) || 0) + 1), new Map());
+    const detail = [...counts.entries()].map(([status, count]) => `${count} ${status}`).join(', ');
+    lines.push(`Freshness Gate: ${settled.length} settled Agent Conversation(s) omitted (${detail}); pair-loop --freshness-status lists them.`);
   }
   if (projection.warning) lines.push(projection.warning);
   return lines.join('\n');
@@ -1426,18 +1505,43 @@ function appendHandoverEvent(directory, event) {
 }
 
 function pairWorkReference(root) {
-  const state = loadPairState(root);
-  const workId = state.work_id || null;
-  const paths = pairStatePaths(root, workId);
-  const projection = fs.readFileSync(paths.state);
+  const engine = engineWork(root);
+  const workId = engine ? engine.workId : loadPairState(root).work_id || null;
+  const projectionPath = engine ? engine.paths.state : pairStatePaths(root, workId).state;
   return {
     work_id: workId,
-    projection_path: path.relative(root, paths.state).split(path.sep).join('/'),
-    projection_sha256: sha256(projection),
+    projection_path: path.relative(root, projectionPath).split(path.sep).join('/'),
+    projection_sha256: sha256(fs.readFileSync(projectionPath)),
   };
 }
 
+// The engine records the next action itself — "run Review Slice S-01", "human review corrected
+// checkpoint 687c292a" — so the checkpoint quotes it rather than paraphrasing a phase name. The
+// Core Anchor carries the lifecycle for the same reason a stale one is dangerous: an adopting
+// conversation that reads "correction UNSPENT" long after the correction was spent will act on it.
+function deriveEngineCheckpoint(root, engine) {
+  const { state } = engine;
+  const active = (state.slices || []).find(slice => slice.status && slice.status !== 'accepted') || null;
+  return normalizeCheckpoint({
+    coreAnchor: `Continue Pair Work ${engine.workId} from repository authority at lifecycle ${state.lifecycle}${active ? `, Review Slice ${active.id} (${active.status})` : ''}.`,
+    findings: [],
+    confirmedChoices: ['Pair Work lifecycle remains authoritative in the Pair engine.'],
+    rejectedAlternatives: ['Copy Pair Work lifecycle into Agent Conversation Handover state.'],
+    currentDirection: active
+      ? `Continue Review Slice ${active.id} at ${active.status}.`
+      : `Continue Pair at ${state.lifecycle}.`,
+    unresolvedDecisions: [],
+    nextAction: state.next_action || `Inspect Pair status at ${state.lifecycle} and advance it.`,
+    artifacts: [{
+      path: path.relative(root, engine.paths.state).split(path.sep).join('/'),
+      sha256: sha256(fs.readFileSync(engine.paths.state)),
+    }],
+  });
+}
+
 function derivePairCheckpoint(root) {
+  const engine = engineWork(root);
+  if (engine) return deriveEngineCheckpoint(root, engine);
   const state = loadPairState(root);
   const pairWork = pairWorkReference(root);
   return normalizeCheckpoint({
@@ -1456,14 +1560,15 @@ function validatePairWorkReference(root, reference, kind) {
   if (reference === null && kind !== 'pair') return;
   if (!reference || typeof reference !== 'object') throw new Error('invalid handover');
   if (reference.work_id !== null && !String(reference.work_id || '').trim()) throw new Error('invalid handover');
-  if (loadPairState(root).work_id !== reference.work_id) throw new Error('invalid handover');
+  const engine = engineWork(root);
+  const currentWorkId = engine ? engine.workId : loadPairState(root).work_id;
+  if (currentWorkId !== reference.work_id) throw new Error('invalid handover');
   if (!/^[a-f0-9]{64}$/u.test(reference.projection_sha256 || '')) throw new Error('invalid handover');
-  const paths = pairStatePaths(root, reference.work_id);
-  const expectedPath = path.relative(root, paths.state).split(path.sep).join('/');
-  if (reference.projection_path !== expectedPath) throw new Error('invalid handover');
-  const projection = fs.lstatSync(paths.state, { throwIfNoEntry: false });
+  const projectionFile = engine ? engine.paths.state : pairStatePaths(root, reference.work_id).state;
+  if (reference.projection_path !== path.relative(root, projectionFile).split(path.sep).join('/')) throw new Error('invalid handover');
+  const projection = fs.lstatSync(projectionFile, { throwIfNoEntry: false });
   if (!projection || !projection.isFile() || projection.isSymbolicLink()) throw new Error('invalid handover');
-  if (sha256(fs.readFileSync(paths.state)) !== reference.projection_sha256) throw new Error('invalid handover');
+  if (sha256(fs.readFileSync(projectionFile)) !== reference.projection_sha256) throw new Error('invalid handover');
 }
 
 function validatePairWorkManifestBinding(root, reference, kind, checkpoint) {
@@ -1475,8 +1580,7 @@ function validatePairWorkManifestBinding(root, reference, kind, checkpoint) {
   if (reference.work_id !== null && !String(reference.work_id || '').trim()) throw new Error('invalid handover');
   if (Object.keys(reference).sort().join(',') !== 'projection_path,projection_sha256,work_id') throw new Error('invalid handover');
   if (!/^[a-f0-9]{64}$/u.test(reference.projection_sha256 || '')) throw new Error('invalid handover');
-  const expectedPath = path.relative(root, pairStatePaths(root, reference.work_id).state).split(path.sep).join('/');
-  if (reference.projection_path !== expectedPath) throw new Error('invalid handover');
+  if (reference.projection_path !== pairProjectionPath(root, reference.work_id)) throw new Error('invalid handover');
   const artifact = checkpoint.artifacts?.find(candidate => (
     candidate.path === reference.projection_path && candidate.sha256 === reference.projection_sha256
   ));
@@ -1511,6 +1615,10 @@ function validateNonPairArtifactDigests(root, checkpoint, kind) {
 }
 
 function expectedPairOwnershipExists(root, identity, agentConversationId, expectedWorkId) {
+  if (engineWorkId(root) === expectedWorkId) {
+    const owner = engineOwner(root, expectedWorkId);
+    return owner?.owner_session_id === String(agentConversationId) && owner?.owner_runtime === identity.runtime;
+  }
   const current = loadPairState(root);
   if (current.work_id !== expectedWorkId) return false;
   const state = loadPairState(root, expectedWorkId);
@@ -1520,6 +1628,17 @@ function expectedPairOwnershipExists(root, identity, agentConversationId, expect
 
 function assertPairWorkIdleForAdoption(root, reference) {
   if (!reference) return null;
+  const engine = engineWork(root);
+  if (engine) {
+    if (engine.workId !== reference.work_id) {
+      throw new Error('Pair Work changed before Agent Conversation Handover adoption');
+    }
+    const lease = engineVerificationOwner(root, reference.work_id);
+    if (lease) {
+      throw new Error(`cannot adopt Agent Conversation Handover while a verification of ${reference.work_id} is running (pid ${lease.pid}, since ${lease.at})`);
+    }
+    return engine.state;
+  }
   const current = loadPairState(root);
   if (current.work_id !== reference.work_id) {
     throw new Error('Pair Work changed before Agent Conversation Handover adoption');
@@ -1545,7 +1664,12 @@ function sealConversation(root, registry, paths, identity, at) {
     if (!conversation || conversation.status !== 'warm' || !conversation.checkpoint) throw new Error('Agent Conversation requires a warm checkpoint before sealing');
     if (conversation.sealed_handover_id) return { handoverId: conversation.sealed_handover_id, sourceKey: identity.sourceKey, alreadySealed: true };
     if (conversation.kind === 'pair') {
-      const checkpoint = derivePairCheckpoint(root);
+      // The same two-layer merge every other Pair refresh uses. Assigning the bare derivation here
+      // dropped the entire conversation layer at the last possible moment — findings, confirmed
+      // choices, rejected alternatives — leaving the adopting conversation a lifecycle pointer and
+      // nothing that was learned. The layer cannot be re-derived from the repository, so a seal is
+      // the one place it must not be discarded.
+      const checkpoint = mergePairCheckpoint(derivePairCheckpoint(root), conversation.checkpoint);
       if (JSON.stringify(conversation.checkpoint) !== JSON.stringify(checkpoint)) {
         conversation.checkpoint = checkpoint;
         conversation.checkpoint_revision += 1;

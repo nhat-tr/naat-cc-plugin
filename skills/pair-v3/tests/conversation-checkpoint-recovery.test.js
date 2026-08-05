@@ -353,3 +353,32 @@ test('skips a path-only preamble when recovering fallback user intent', t => {
   assert.match(recovered.checkpoint.coreAnchor, /Initial user intent:\s*Review the Lens implementation/u);
   assert.doesNotMatch(recovered.checkpoint.coreAnchor, /Initial user intent:\s*\.artifacts\//u);
 });
+
+// A background-task completion notice arrives as a user-role entry, so recovery presented it as
+// "Latest explicit user direction" — a real sealed checkpoint carried
+// "<task-notification><task-id>bm603eb5u</task-id>…" where the human's own words belonged, and
+// contradicted the genuine direction recorded beside it.
+test('a harness task notification is not recovered as user direction', t => {
+  const root = fixture(t);
+  const transcriptPath = path.join(root, 'claude-notification-session.jsonl');
+  writeJsonl(transcriptPath, [
+    {
+      type: 'user', sessionId: 'claude-notification-session', timestamp: '2026-08-04T10:00:00.000Z',
+      message: { role: 'user', content: 'Accept S-01 and route the findings into S-02.' },
+    },
+    {
+      type: 'user', sessionId: 'claude-notification-session', timestamp: '2026-08-04T10:01:00.000Z',
+      message: {
+        role: 'user',
+        content: '<task-notification>\n<task-id>bm603eb5u</task-id>\n<status>completed</status>\n</task-notification>',
+      },
+    },
+  ]);
+
+  const recovered = recoverAgentConversationCheckpoint({
+    root, runtime: 'claude', agentConversationId: 'claude-notification-session', transcriptPath,
+  });
+
+  assert.equal(recovered.latestUserDirection, 'Accept S-01 and route the findings into S-02.');
+  assert.doesNotMatch(JSON.stringify(recovered.checkpoint), /task-notification/u);
+});

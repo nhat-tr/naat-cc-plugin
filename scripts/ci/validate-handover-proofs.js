@@ -157,6 +157,10 @@ for (const proof of proofs) {
     cwd: root,
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
+    // Hermetic: proofs must not read the operator's live Pair/agent environment. A leaked
+    // PAIR_*/CLAUDE* variable (observed: a real work id) made AC-1 fail on one machine and pass on CI.
+    env: Object.fromEntries(Object.entries(process.env)
+      .filter(([key]) => !/^(?:PAIR_|CLAUDE|CODEX_|BRAINSTORM_|VISUAL_COMPANION_)/u.test(key))),
   });
   const output = `${result.stdout || ''}${result.stderr || ''}`;
   const observed = {

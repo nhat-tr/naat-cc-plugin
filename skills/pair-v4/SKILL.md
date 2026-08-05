@@ -37,6 +37,8 @@ pair-loop run --runtime auto
 pair-loop status
 ```
 
+`pair-loop status` prints the exact next command for the current state. Adopting a handover, resuming, or arriving with no memory of the loop: run it first and follow the command it names rather than improvising one.
+
 Each `run` performs at most one fresh model action except deterministic verification. Run again for next saved action. Pair owns dedicated linked worktree and checkpoint commits. Product branch receives no Pair artifacts.
 
 ## Routing
@@ -57,6 +59,28 @@ Use narrowest proof that observes real failure boundary: base reproduction, unit
 
 Do not freeze exact test names before code. Do not use test count, coverage, or synthetic RED output as proof by itself.
 
+## Deterministic failure
+
+An exit status cannot separate a defect this Review Slice introduced from a failure the repository already had. Re-run verification before treating a red gate as a defect. Re-verification is deterministic, so it spends no correction, and a clean run at correction-ready checkpoints the slice directly.
+
+```bash
+pair-loop verify [--slice <id>]
+```
+
+A test that already failed before this Work is declared once, with the evidence that it pre-exists, and never counts as this Work's failure again. Declaration is human-only: Pair never infers it. Copy the identity verbatim from `pair-loop verify` output.
+
+```bash
+pair-loop baseline add --test <test-id> --reason "<evidence it pre-exists>"
+pair-loop baseline list
+pair-loop baseline remove --test <test-id>
+```
+
+An unrecognised runner yields no test identity and is therefore never exempted. A baseline over 32 tests is a broken suite, not a baseline.
+
+Only one verification of a Work runs at a time. Concurrent suites share the machine's containers, ports, and databases, so they make each other fail in unrelated places and those failures can be neither trusted nor baselined. A second verification is refused and names the running one; never run the verify command by hand beside it.
+
+Never hand-edit the Pair worktree to satisfy findings or a red gate. Work done outside the loop carries no checkpoint, no verification record, and no Review Outcome, so it can never be reviewed, adjudicated, or learned from. When a state looks like it has no command, run `pair-loop status`: it names the exact next command.
+
 ## Review
 
 Architecture-Sensitive checkpoints always receive fresh review. Routine checkpoints use deterministic proof plus configured conditional sampling.
@@ -64,6 +88,19 @@ Architecture-Sensitive checkpoints always receive fresh review. Routine checkpoi
 Reviewer receives only checkpoint diff command, mapped behavior, Design Check when applicable, named callers/contracts, verification result, and at most three relevant approved Review Guidance rules.
 
 Approval contains no prose. Transient reviewer JSON is capped at 6 KiB. Durable Review Outcome is capped at 8 KiB and contains at most three BLOCKER/MAJOR findings. Each finding must include falsifiable claim, reachable scenario, immutable checkpoint commit/path/blob/line anchor, impact, and pass condition.
+
+A human can raise a finding too, reading the checkpoint the same way a reviewer would. It flows through the same disposition and correction path as a model finding once submitted:
+
+```bash
+pair-loop finding --slice <id> --file <path> --line <n> --text "<what is wrong>" \
+  [--pass-condition "<observable state>"] [--severity BLOCKER|MAJOR]
+pair-loop finding --slice <id> [--index <n>] --pass-condition "<observable state>"
+pair-loop finding --slice <id> --submit
+```
+
+Drafting records no Review Outcome and moves no slice, but it is not invisible: `pair-loop status` lists every unsubmitted draft, each finding's pass condition, and the exact command for whichever is missing one. A draft is deleted only by submission, so `status` also names a draft that can no longer be submitted — its slice already accepted, or the slice moved to a newer checkpoint than the draft anchors to.
+
+Pass condition is the *observable state* — a fact about the code that a command or a reader can check without asking the person who raised it. "Every test in the suite is named `Capability_verb_fact`" is one; "the naming is fixed" and "the human who raised this confirms it is addressed" are not, and a pass condition that defers the verdict to a person is refused where it is written. Submission is refused while any drafted finding states none; complete it in place with the second form above rather than re-drafting, or the outcome carries both copies. A claim bundling two unrelated asks rarely reduces to one pass condition — split it into two findings instead. A duplicate that reaches an outcome anyway is resolved by adjudication: disposition one copy `not-worth-fixing` with the reason naming the copy that carries it.
 
 Model finding never edits code. Human disposition required:
 
@@ -73,11 +110,26 @@ pair-loop feedback --finding <id> \
   --reason "<evidence>"
 ```
 
-Only valid finding or deterministic failure permits one bounded fresh correction. Second failure pauses for human control. Architecture-Sensitive checkpoint requires human acceptance:
+The reason is the comment on that finding, capped at 500 characters. It is recorded as immutable Review Feedback, feeds Review Guidance, and — for a finding dispositioned valid — travels to the correcting session attached to the finding it adjudicates. Write it as the instruction you want followed for that finding, not as a verdict.
+
+Only valid finding or deterministic failure permits one bounded fresh correction. Second failure pauses for human control. Because that budget is one deep, spend it on a defect the slice actually has: at correction-ready, `pair-loop verify` first, and `pair-loop run` only once re-verification has confirmed a real, reproducible failure.
+
+A deterministic failure produces no checkpoint, so no Review Outcome and no Review Feedback can exist for it. Review findings raised at that point have no finding ID to carry them; the way to reach a reviewable checkpoint is a clean verification, not hand-edits. To steer that correction, record one bounded Correction Direction while the slice is correction-ready:
 
 ```bash
+pair-loop direct --text "<intent>" [--slice <id>]
+```
+
+It is human intent, not falsifiable evidence, so it travels beside the deterministic failure rather than inside it. Capped at 1000 characters, stored as addressable evidence, and spent with the one correction it steers. Recording it outside the correction-ready window is admitted rather than refused — the out-of-window use is recorded as a human override, because a human who can already see the wrong turn should not wait for the reducer's permission to say so.
+
+Architecture-Sensitive checkpoint requires human acceptance. There is no remote and no pull request; the immutable refs are the review surface, and `show` assembles them:
+
+```bash
+pair-loop show [--slice <id>]
 pair-loop accept --slice <id>
 ```
+
+`show` prints two diffs, never one — base→checkpoint answers "does this slice deserve to exist", prior-checkpoint→checkpoint answers "did the correction do what was asked and nothing else" — plus the Design Check, the Correction Direction, each finding with its anchor and recorded disposition, and the verification result. Reviewing only the cumulative diff is how a correction widens its own scope unnoticed.
 
 ## Review learning
 

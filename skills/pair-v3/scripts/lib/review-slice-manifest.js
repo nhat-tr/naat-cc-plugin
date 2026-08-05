@@ -20,14 +20,32 @@ function assertOnlyKeys(value, allowed, label) {
   if (unknown.length > 0) throw new Error(`${label} has unsupported fields: ${unknown.join(', ')}`);
 }
 
+const ACCEPTANCE_CRITERION_LINE = /^\s*-\s+\[[ xX-]\]\s+(AC-[A-Za-z0-9._-]+)\s*:\s*(.*)$/u;
+// Markdown wraps a long criterion across indented continuation lines. Reading only the first line
+// silently truncates it, and the truncated half is what reaches the implementation and review
+// prompts — a reviewer judging "no query selects characteristics" against a criterion that ends at
+// "; no" is judging something the specification never said.
+const CONTINUATION_LINE = /^\s{2,}\S/u;
+
 function acceptanceCriteriaFromSpec(spec) {
-  const criteria = new Map();
-  for (const match of String(spec).matchAll(/^\s*-\s+\[[ xX-]\]\s+(AC-[A-Za-z0-9._-]+)\s*:\s*(.+)$/gmu)) {
-    if (criteria.has(match[1])) throw new Error(`canonical specification repeats ${match[1]}`);
-    criteria.set(match[1], match[2].trim());
+  const collected = new Map();
+  let open = null;
+  for (const line of String(spec).split(/\r?\n/u)) {
+    const started = line.match(ACCEPTANCE_CRITERION_LINE);
+    if (started) {
+      if (collected.has(started[1])) throw new Error(`canonical specification repeats ${started[1]}`);
+      open = started[1];
+      collected.set(open, [started[2].trim()]);
+      continue;
+    }
+    if (open && CONTINUATION_LINE.test(line)) {
+      collected.get(open).push(line.trim());
+      continue;
+    }
+    open = null;
   }
-  if (criteria.size === 0) throw new Error('canonical specification has no Acceptance Criteria');
-  return criteria;
+  if (collected.size === 0) throw new Error('canonical specification has no Acceptance Criteria');
+  return new Map([...collected].map(([id, parts]) => [id, parts.join(' ').replace(/\s+/gu, ' ').trim()]));
 }
 
 function validateIdentifier(value, label) {
