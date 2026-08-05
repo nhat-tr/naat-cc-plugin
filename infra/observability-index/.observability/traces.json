@@ -1,8 +1,8 @@
 {
   "metadata": {
-    "generated": "2026-07-27T01:26:29.450Z",
-    "commit": "e62676c",
-    "config": "/Volumes/NaatsStore/dev/doing/my-claude-code/infra/observability-index/configs/dotnet.yaml",
+    "generated": "2026-08-05T01:23:55.996Z",
+    "commit": "d4baaf9",
+    "config": "/Users/nhat.tran/.local/share/my-claude-code/infra/observability-index/configs/dotnet.yaml",
     "tier": 1
   },
   "entries": [
