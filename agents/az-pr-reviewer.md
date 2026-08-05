@@ -52,7 +52,8 @@ are missing, derive them yourself (`git log --oneline master..HEAD`,
 4. **Correctness** — logic errors, edge cases, concurrency
 5. **Language-specific quality** — *TypeScript/React*: inline styles over CSS modules,
    component decomposition, hook boundaries, key prop correctness. *C#*: NUnit test
-   names (`[Action]_When[Scenario]_Then[Expectation]`), LINQ readability, DI pattern
+   names (`Capability_verb_fact`, `when_<condition>` only for non-default paths), LINQ
+   readability, DI pattern
    correctness, async void, sync-over-async, captive DI, N+1 EF, missing CancellationToken.
 6. **Security** — always flag regardless of confidence: hardcoded credentials/secrets,
    SQL injection via string concatenation, path traversal, auth bypasses on protected

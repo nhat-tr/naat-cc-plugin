@@ -73,7 +73,7 @@ Choose service lifetime by the service's characteristics, not a blanket default:
 
 ## Testing — NUnit
 
-- **Test naming: `[Action]_When[Scenario]_Then[Expectation]`**
+- **Test naming: behavior sentence, not `[Action]_When[Scenario]_Then[Expectation]`.** Prefix is the capability under test (`Sync_`, `Search_`, `Import_`), never the C# method name or an `Async` suffix — renaming `SyncAsync` shouldn't force renaming its tests. The rest reads as a fact stated by the outcome's verb: normal paths use `merges`/`returns`/`records`/`answers`/`publishes`/`stores`; conditional or error paths use `rejects`/`throws`/`stops`/`retries`/`skips` and add a trailing `when_<condition>` clause — default-path tests never carry one. Never bare `_Success`/`_Fails`/`_HappyPath`/`_Throws` suffixes; they describe the test, not the system.
 - Follow Arrange-Act-Assert structure.
 - Use `Assert.That` with constraint model (`Is.EqualTo`, `Is.True`, etc.) — not `Assert.AreEqual`. The constraint model provides better error messages and composability.
 - Use `Assert.Multiple` to group related assertions — all assertions run even if one fails, giving a complete picture.

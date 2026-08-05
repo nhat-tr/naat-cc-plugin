@@ -23,34 +23,42 @@ This file covers: NUnit structure, Testcontainers-based integration testing, Web
 Demonstrates: SKILL.md § Testing.
 
 ```csharp
-[Test]
-public async Task CreateOrder_WhenItemsEmpty_ThenThrowsValidationException()
+[TestFixture]
+public sealed class CatalogIndexSynchronizerTests
 {
-    // Arrange
-    var request = new CreateOrderRequest(CustomerId: "cust-1", Items: []);
-
-    // Act & Assert
-    Assert.ThrowsAsync<ValidationException>(
-        async () => await sut.CreateAsync(request, CancellationToken.None));
-}
-
-[Test]
-public async Task GetOrder_WhenExists_ThenReturnsCorrectDetails()
-{
-    // Arrange
-    var order = await CreateTestOrder();
-
-    // Act
-    var result = await sut.GetAsync(order.Id, CancellationToken.None);
-
-    // Assert
-    Assert.Multiple(() =>
+    [Test]
+    public async Task Sync_merges_product_and_article_facets_into_one_index_entry()
     {
-        Assert.That(result, Is.Not.Null);
-        Assert.That(result!.Id, Is.EqualTo(order.Id));
-        Assert.That(result.Status, Is.EqualTo(OrderStatus.Created));
-    });
+        var dataHub = FakeDataHub.With(
+            products: [Product("11.1234", facets: ["Diameter=6mm"])],
+            articles: [Article("11.1234.0001", facets: ["Length=57mm"])]);
+        var synchronizer = new CatalogIndexSynchronizer(dataHub, _index, _clock);
+
+        await synchronizer.SyncAsync(CancellationToken.None);
+
+        var entry = await _index.FindAsync("11.1234.0001");
+        Assert.That(entry.Facets, Is.EquivalentTo(new[] { "Diameter=6mm", "Length=57mm" }));
+    }
+
+    // Bodies elided — the names are the example. Real async tests return Task; an empty
+    // `async Task` stub would raise CS1998, so the stubs here stay synchronous.
+    [Test]
+    public void Sync_rejects_the_page_when_it_carries_no_classification_key() { }
+
+    [Test]
+    public void Sync_throws_when_the_data_hub_refuses_the_credentials() { }
+
+    [Test]
+    public void Sync_records_partial_coverage_when_the_page_budget_is_reached() { }
 }
+```
+
+`CA1707` ("identifiers should not contain underscores") fires on every such name and MUST be disabled for test projects, or the convention is unusable:
+
+```ini
+# tests/.editorconfig
+[*.cs]
+dotnet_diagnostic.CA1707.severity = none
 ```
 
 ## Test Categories
@@ -225,7 +233,7 @@ public class OrderApiTests
     }
 
     [Test]
-    public async Task CreateOrder_WhenValid_ThenReturns201()
+    public async Task CreateOrder_returns_a_201_created_response()
     {
         var request = new CreateOrderRequest("cust-1", [new LineItem("SKU-1", 2)]);
 
@@ -331,7 +339,7 @@ Aspire testing pattern:
 using Aspire.Hosting.Testing;
 
 [Test]
-public async Task CreateOrder_FlowsThroughToWorker()
+public async Task CreateOrder_delivers_the_order_to_the_worker()
 {
     await using var app = await DistributedApplicationTestingBuilder
         .CreateAsync<Projects.Solution_AppHost>();

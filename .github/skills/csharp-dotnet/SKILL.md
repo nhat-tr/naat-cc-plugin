@@ -83,7 +83,7 @@ Choose service lifetime by the service's characteristics, not a blanket default 
 
 ### Testing — NUnit
 
-- **Naming: `[Action]_When[Scenario]_Then[Expectation]`**, Arrange-Act-Assert structure.
+- **Naming: behavior sentences** — `Capability_verb_fact` (e.g. `Sync_merges_...`), trailing `when_<condition>` only for non-default paths; never the SUT method name or an `Async` suffix. Arrange-Act-Assert structure.
 - `Assert.That` constraint model (not `Assert.AreEqual`), `Assert.Multiple` for grouped assertions, `Assert.ThrowsAsync<T>` for async exceptions.
 - **No FluentAssertions. No AutoMapper** — map explicitly (see Code Style § Mapping).
 - Test categories (`[UnitTest]`, `[IntegrationTest]`, `[StagingOnly]`) for CI filtering; Testcontainers over shared databases; `WebApplicationFactory<TEntryPoint>` for full API integration tests.

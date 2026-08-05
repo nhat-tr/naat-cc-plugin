@@ -80,4 +80,4 @@ When a user reports a UI or DOM bug (focus, rendering, styling, missing element)
 - For C#/.NET tasks, load `__PLUGIN_DIR__/skills/csharp-dotnet/SKILL.md`.
 - For TypeScript/React tasks, load `__PLUGIN_DIR__/skills/typescript/SKILL.md`.
 - For React or Next.js details, consult `__PLUGIN_DIR__/skills/typescript/references/react-next.md`.
-- NUnit test method names must follow `[Action]_When[Scenario]_Then[Expectation]`.
+- NUnit test method names must follow behavior-sentence naming: `Capability_verb_fact`, with a trailing `when_<condition>` only for non-default paths.
