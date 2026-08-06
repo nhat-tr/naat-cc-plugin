@@ -69,6 +69,30 @@ function workIds(root, selected) {
     .sort();
 }
 
+// The optimization's own falsifiability. A warm session that is never actually resumed, or one whose
+// context grows past the budget every round, looks identical to a working one in the token totals — so
+// the counts and the per-slice growth curve are stated separately from the money.
+function warmSessions(events) {
+  const calls = events.filter(event => event.event === 'provider-finished' || event.event === 'provider-failed' || event.event === 'provider-interrupted');
+  const rotations = events.filter(event => event.event === 'warm-session-rotated');
+  const growth = new Map();
+  for (const call of calls) {
+    if (!call.review_slice_id || !call.context_tokens) continue;
+    if (!growth.has(call.review_slice_id)) growth.set(call.review_slice_id, []);
+    growth.get(call.review_slice_id).push(call.context_tokens);
+  }
+  return {
+    warm_calls: calls.filter(call => call.resumed === true).length,
+    fresh_calls: calls.filter(call => call.resumed !== true).length,
+    sessions_opened: events.filter(event => event.event === 'warm-session-opened').length,
+    sessions_retired: events.filter(event => event.event === 'warm-session-retired').length,
+    rotations: Object.fromEntries([...new Set(rotations.map(event => event.reason))]
+      .map(reason => [reason, rotations.filter(event => event.reason === reason).length])),
+    interrupted: events.filter(event => event.event === 'provider-interrupted').length,
+    context_growth: Object.fromEntries(growth),
+  };
+}
+
 function summarize(root, workId, options = {}) {
   const paths = workPaths(root, workId);
   const state = readJson(paths.state);
@@ -104,6 +128,7 @@ function summarize(root, workId, options = {}) {
       checkpoint_commit: slice.checkpoint_commit,
     })),
     totals,
+    warm_sessions: warmSessions(events),
     review: {
       outcomes: events.filter(event => event.event === 'review-recorded').length,
       findings: events.filter(event => event.event === 'review-recorded').reduce((sum, event) => sum + (event.finding_count || 0), 0),
@@ -122,6 +147,15 @@ function render(report) {
     `  tokens input ${report.totals.input_tokens}, cached ${report.totals.cached_input_tokens}, output ${report.totals.output_tokens}`,
     `  review outcomes ${report.review.outcomes}, findings ${report.review.findings}; feedback ${JSON.stringify(report.review.dispositions)}`,
   ];
+  const warm = report.warm_sessions;
+  if (warm) {
+    lines.push(`  sessions warm ${warm.warm_calls}/${warm.warm_calls + warm.fresh_calls} calls; opened ${warm.sessions_opened}, retired ${warm.sessions_retired}, rotated ${JSON.stringify(warm.rotations)}`);
+    for (const [sliceId, curve] of Object.entries(warm.context_growth)) {
+      // The growth curve is the whole claim: 837K → 2.77M → 5.97M across three calls on one slice is what
+      // the fresh-spawn loop did, and a warm slice that reads the same way has not fixed anything.
+      lines.push(`  ${sliceId} context ${curve.join(' -> ')} tokens`);
+    }
+  }
   if (report.timeline) {
     lines.push(`  timeline ${report.timeline.event_count} events; ${report.timeline.omitted_event_count} omitted from bounded output`);
     for (const event of report.timeline.events) {

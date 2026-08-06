@@ -4,7 +4,7 @@ const test = require('node:test');
 const {
   buildProviderCommand,
   providerEnvironment,
-  runFreshProvider,
+  runProviderSession,
   usageFromOutput,
 } = require('../scripts/lib/provider-runtime');
 
@@ -25,7 +25,7 @@ test('provider environment strips nested identities and failures expose no raw p
   assert.equal(env.CODEX_THREAD_ID, undefined);
   assert.equal(env.CLAUDE_CODE_SESSION_ID, undefined);
   assert.equal(env.PAIR_STOP_GATE, 'off');
-  assert.throws(() => runFreshProvider({
+  assert.throws(() => runProviderSession({
     runtime: 'codex', mode: 'implementation', root: '/repo', prompt: 'SECRET_PROMPT_CANARY', schemaPath: '/schema', outputPath: '/output', model: 'gpt-5',
   }, { spawnSync() { return { status: 1, stdout: '', stderr: 'safe failure' }; } }), error => {
     assert.doesNotMatch(error.message, /SECRET_PROMPT_CANARY/u);
@@ -34,12 +34,46 @@ test('provider environment strips nested identities and failures expose no raw p
   });
 });
 
+// Observed live on S-05: a correction exited 1 with an empty stderr, and the whole record of why was
+// "claude implementation invocation failed with status 1". The reason was sitting in the stream log the
+// whole time — {"is_error":true,"result":"API Error: 529 Overloaded..."} — and nothing read it, so a
+// transient server overload was indistinguishable from a broken loop, a bad prompt, or a spent budget.
+// The human concluded the loop itself was at fault and asked why it was so complicated.
+test('a non-zero provider exit with no stderr reports what the runtime actually said', () => {
+  const stream = [
+    JSON.stringify({ type: 'system', subtype: 'init', session_id: 's1' }),
+    // claude reports an API failure with subtype 'success' and is_error true, so subtype alone reads as a
+    // successful run. is_error is the authoritative field, and it was the one being ignored.
+    JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment.', usage: { input_tokens: 0, output_tokens: 0 } }),
+  ].join('\n');
+
+  assert.throws(() => runProviderSession({
+    runtime: 'claude', mode: 'implementation', root: '/repo', prompt: 'SECRET_PROMPT_CANARY', schemaPath: '/schema', schema: { type: 'object' }, outputPath: '/output', model: 'claude-opus-5',
+  }, { spawnSync() { return { status: 1, stdout: stream, stderr: '' }; } }), error => {
+    assert.match(error.message, /529 Overloaded/u, 'the runtime\'s own explanation reaches the human');
+    assert.match(error.message, /status 1/u, 'without losing the exit code that classified it as a failure');
+    assert.doesNotMatch(error.message, /SECRET_PROMPT_CANARY/u, 'and still no prompt leaks into the record');
+    assert.equal(error.pair_invocation.failure, 'error', 'is_error wins over a subtype that says success');
+    return true;
+  });
+});
+
+test('a provider run that genuinely succeeded is not relabelled a failure by the same check', () => {
+  const stream = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, structured_output: { status: 'completed' }, usage: { input_tokens: 10, output_tokens: 5 } });
+
+  const result = runProviderSession({
+    runtime: 'claude', mode: 'implementation', root: '/repo', prompt: 'bounded prompt', schemaPath: '/schema', schema: { type: 'object' }, outputPath: '/output', model: 'claude-opus-5',
+  }, { spawnSync() { return { status: 0, stdout: stream, stderr: '' }; } });
+
+  assert.equal(result.output.status, 'completed');
+});
+
 test('an over-cap structured result names the overage and still persists no transcript', () => {
   const oversized = { status: 'design-required', architecture_risk: 'SECRET_PROMPT_CANARY'.padEnd(3000, '!') };
   const stdout = JSON.stringify({ type: 'result', structured_output: oversized });
   const actualBytes = Buffer.byteLength(JSON.stringify(oversized), 'utf8');
 
-  assert.throws(() => runFreshProvider({
+  assert.throws(() => runProviderSession({
     runtime: 'claude', mode: 'implementation', root: '/repo', prompt: 'bounded prompt', schemaPath: '/schema', schema: { type: 'object' }, outputPath: '/output', model: 'claude-opus-5', maxOutputBytes: 2048,
   }, { spawnSync() { return { status: 0, stdout, stderr: '' }; } }), error => {
     // Both numbers, so a retry can tell "shorten the return" from "the cap is wrong for this mode".
@@ -60,8 +94,13 @@ test('provider telemetry extracts bounded usage without persisting transcript co
     input_tokens: 120,
     cached_input_tokens: 80,
     cache_creation_input_tokens: 0,
+    cache_creation_5m_input_tokens: 0,
+    cache_creation_1h_input_tokens: 0,
     output_tokens: 15,
     reasoning_tokens: 5,
+    // The Responses API counts cached tokens as a subset of input_tokens, so the prompt this turn
+    // carried is input_tokens itself — 120, not 200.
+    context_tokens: 120,
     cost_usd: null,
   });
 });
@@ -88,7 +127,7 @@ test('the recorded model is the one the session ran, not the one requested', () 
     JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-fable-5' }),
     JSON.stringify({ type: 'result', subtype: 'success', structured_output: { status: 'completed' } }),
   ].join('\n');
-  const run = runFreshProvider(
+  const run = runProviderSession(
     { runtime: 'claude', mode: 'implementation', root: '/repo', prompt: 'p', schemaPath: '/s', schema: { type: 'object' }, outputPath: '/o', model: 'claude-opus-5' },
     { spawnSync() { return { status: 0, stdout: stream, stderr: '' }; } },
   );

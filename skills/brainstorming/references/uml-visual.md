@@ -171,23 +171,22 @@ For the graph kinds, an edge `label` is laid out, not overlaid: the compiler mea
 
 The reviewer can drag any node to untangle a dense region; its package grows to keep containing it and every attached edge re-routes to the moved border. Edge labels are draggable too — dragging one pulls it off a label it collides with and leaves a leader line back to its edge, while a plain click still selects the relationship for annotation. The camera toolbar's fourth control ("Restore the computed layout") returns every card and label to the computed layout, and any `publish` resets them. Manual positions are a viewing aid only — they are never part of the Visual Document, so never author layout by asking the user to drag.
 
-## Present And Revise
+## Validate, Then Present
 
-Start the verified v2 Visual Session directly from the Draft:
+Check the Draft before serving it — `validate --draft <uml-draft.json>` runs the same compiler, semantic, and (for graph kinds) ELK checks without starting a server, so an authoring slip costs one cheap retry instead of a failed present. Validate before the first present and again after any targeted edit, before publishing:
 
 ```bash
+node <skill-dir>/scripts/visual-session.cjs validate --draft <uml-draft.json>
 node <skill-dir>/scripts/visual-session.cjs present --draft <uml-draft.json>
 ```
 
-The draft is self-describing via its top-level `kind: "uml"`; this path does not require scaffold, start, or migrate. Keep the command in the foreground. For the graph kinds, `elk_preflight.status="ready"` proves the pinned layout engine produced finite geometry; the sequence kind renders with the deterministic client-side layout instead and skips ELK preflight. Neither proves the Visual Shell rendered — share `connection_url` only after browser control confirms `data-layout-status="ready"` and at least one visible UML element.
+The draft is self-describing via its top-level `kind: "uml"`; this path does not require scaffold, start, or migrate. **The first `present` becomes the server process and does not exit** — launch it through the harness's background-command mechanism and retain the handle; a blocking foreground `present` is killed at the shell command timeout (~2 minutes) and the attempt is wasted. Once a session is live, `present` and `publish` reuse it in place and return immediately, so those later calls run as normal foreground commands. For the graph kinds, `elk_preflight.status="ready"` proves the pinned layout engine produced finite geometry; the sequence kind renders with the deterministic client-side layout instead and skips ELK preflight. Neither proves the Visual Shell rendered — share `connection_url` only after browser control confirms `data-layout-status="ready"` and at least one visible UML element.
 
-After feedback, edit the same Draft while preserving stable IDs, then publish it without manual Revision work — it reuses the live session in place:
+After feedback, edit the same Draft with targeted edits while preserving stable IDs, validate, then publish it without manual Revision work — it reuses the live session in place:
 
 ```bash
 node <skill-dir>/scripts/visual-session.cjs publish --draft <uml-draft.json>
 ```
-
-`validate --draft <uml-draft.json>` runs the same compiler, semantic, and (for graph kinds) ELK checks without serving — use it after a targeted edit, before publishing.
 
 ## Receive Feedback
 

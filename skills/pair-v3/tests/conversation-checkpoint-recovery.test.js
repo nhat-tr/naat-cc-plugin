@@ -382,3 +382,29 @@ test('a harness task notification is not recovered as user direction', t => {
   assert.equal(recovered.latestUserDirection, 'Accept S-01 and route the findings into S-02.');
   assert.doesNotMatch(JSON.stringify(recovered.checkpoint), /task-notification/u);
 });
+
+test('an interruption marker never becomes the recovered Core Anchor', t => {
+  const root = fixture(t);
+  const transcriptPath = path.join(root, 'claude-interrupted-session.jsonl');
+  writeJsonl(transcriptPath, [
+    {
+      type: 'user', sessionId: 'claude-interrupted-session', timestamp: '2026-08-06T00:00:00.000Z',
+      message: { role: 'user', content: '[Request interrupted by user for tool use]' },
+    },
+    {
+      type: 'user', sessionId: 'claude-interrupted-session', timestamp: '2026-08-06T00:00:05.000Z',
+      message: { role: 'user', content: [{ type: 'text', text: 'Design the warm implementation session lifecycle.' }] },
+    },
+    {
+      type: 'assistant', sessionId: 'claude-interrupted-session', timestamp: '2026-08-06T00:00:09.000Z',
+      message: { id: 'msg-1', role: 'assistant', content: [{ type: 'text', text: 'The Work is published and validated.' }] },
+    },
+  ]);
+
+  const recovered = recoverAgentConversationCheckpoint({
+    root, runtime: 'claude', agentConversationId: 'claude-interrupted-session', transcriptPath,
+  });
+
+  assert.match(recovered.checkpoint.coreAnchor, /warm implementation session lifecycle/u);
+  assert.doesNotMatch(recovered.checkpoint.coreAnchor, /Request interrupted/u);
+});

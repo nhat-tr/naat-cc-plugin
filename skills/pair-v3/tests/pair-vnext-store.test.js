@@ -7,6 +7,7 @@ const test = require('node:test');
 
 const {
   appendEvent,
+  dispatchOwner,
   gitCommonDirectory,
   readEvents,
   readState,
@@ -59,6 +60,38 @@ test('Pair Work state and checkpoint refs survive linked worktree removal', t =>
   assert.ok(workPaths(root, 'work-test').state.startsWith(common));
   assert.equal(childProcess.execFileSync('git', ['rev-parse', ref.ref], { cwd: root, encoding: 'utf8' }).trim(), head);
   assert.equal(listReviewOutcomes(root, 'work-test')[0].review_outcome_id, review.outcome.review_outcome_id);
+});
+
+// A paused dispatch answers kill(pid, 0) exactly like a working one, so liveness alone reported "a run is
+// in progress" for a tree that had been stopped for forty minutes and would never finish. Real signals
+// against a real process, because the whole question is what the OS says about a pid.
+test('a dispatch owner reports whether its process is paused or actually working', async t => {
+  const root = repository(t);
+  const held = childProcess.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  t.after(() => { try { held.kill('SIGKILL'); } catch { /* already gone */ } });
+  const lease = workPaths(root, 'work-dispatch').dispatchLease;
+  fs.mkdirSync(lease, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(lease, 'owner.json'), JSON.stringify({ pid: held.pid, at: '2026-08-05T13:09:22.034Z', command: 'run' }));
+
+  // Signal delivery is asynchronous, so each assertion waits for the OS to agree rather than for a sleep.
+  const settles = async predicate => {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (predicate(dispatchOwner(root, 'work-dispatch'))) return true;
+      await new Promise(resolve => { setTimeout(resolve, 20); });
+    }
+    return false;
+  };
+
+  assert.equal(dispatchOwner(root, 'work-dispatch').paused, false, 'a working dispatch is not paused');
+
+  held.kill('SIGSTOP');
+  assert.ok(await settles(owner => owner?.paused === true), 'a stopped dispatch is distinguishable from a live one');
+
+  held.kill('SIGCONT');
+  assert.ok(await settles(owner => owner?.paused === false), 'continuing it clears the pause');
+
+  held.kill('SIGKILL');
+  assert.ok(await settles(owner => owner === null), 'a dead owner holds nothing');
 });
 
 test('Pair events reject bulk payload growth and omit prohibited fields', t => {

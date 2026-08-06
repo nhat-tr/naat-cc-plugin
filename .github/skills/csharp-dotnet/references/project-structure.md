@@ -199,3 +199,27 @@ Match test type to suffix so `dotnet test --filter` and CI wiring stay mechanica
 | `.Tests` | Only when the split doesn't exist yet — migrate to the suffixed names once it does. |
 
 The `[UnitTest]` / `[IntegrationTest]` category attributes (see `code-examples.md`) are the second filter layer — project name is the first.
+
+## 6. Warnings Ratchet (`Directory.Build.props`)
+
+Compiler-enforced replacement for the prose `dobw` gate. Session mining (2026-08) showed warnings recur invisibly for weeks (NU1902 37× across 16 sessions, never surfaced) when enforcement is left to filtered build output.
+
+```xml
+<Project>
+  <PropertyGroup>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <Nullable>enable</Nullable>
+    <!-- Ratchet, don't boil the ocean: promote the categories that bite in
+         multi-pod services first; widen once the repo is clean. -->
+    <WarningsAsErrors>$(WarningsAsErrors);nullable;CS0618;NU1901;NU1902;NU1903;NU1904</WarningsAsErrors>
+  </PropertyGroup>
+</Project>
+```
+
+**Rollout order (per repo, never blind):**
+1. `dobw` the full solution; triage every existing warning into fix-now vs `docs/known-warnings.md`.
+2. Fix or `<NoWarn>` (with a comment naming the backlog entry) everything in the promoted categories — CI must be green on day one.
+3. Land `Directory.Build.props` at repo root. It applies to every project beneath it; a project can opt out locally only with a written reason.
+4. Widen `WarningsAsErrors` as the backlog shrinks.
+
+This is a shared-CI change — coordinate with the team before landing; teammates' local builds inherit it immediately.

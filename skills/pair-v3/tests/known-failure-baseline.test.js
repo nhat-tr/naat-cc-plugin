@@ -19,6 +19,7 @@ const {
   recordKnownFailure,
   verifyActiveSlice,
 } = require('../scripts/lib/pair-engine');
+const { KIND_BOILERPLATE } = require('../scripts/lib/pair-prompts');
 const { readState, workPaths, writeState } = require('../scripts/lib/pair-store');
 const { listReviewOutcomes } = require('../scripts/lib/review-evidence');
 const { nextCommand } = require('../scripts/pair-cli');
@@ -295,7 +296,7 @@ test('the human reason for calling a finding valid reaches the correcting sessio
         });
       }
       // The correction has to change something a checkpoint can hold, or it commits nothing.
-      const memoised = input.prompt.startsWith('Correct Review Slice');
+      const memoised = input.prompt.startsWith(KIND_BOILERPLATE.correction);
       fs.writeFileSync(path.join(input.root, 'value.js'), memoised ? 'const value = 2;\nmodule.exports = value;\n' : 'module.exports = 2;\n');
       return providerResult(completedSlice());
     },
@@ -317,7 +318,7 @@ test('the human reason for calling a finding valid reaches the correcting sessio
   });
   advanceWork(opened.worktree, { runtime: 'codex' }, dependencies);
   const correction = prompts.at(-1);
-  assert.match(correction, /Correct Review Slice/u, 'the last invocation is the correction');
+  assert.ok(correction.startsWith(KIND_BOILERPLATE.correction), 'the last invocation is the correction');
   assert.match(correction, /memoise at the module boundary rather than per caller/u,
     'the human adjudication travels with the finding it adjudicates');
 });

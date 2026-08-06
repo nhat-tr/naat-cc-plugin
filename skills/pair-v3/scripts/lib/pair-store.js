@@ -313,10 +313,19 @@ function acquireDispatchLease(paths, meta = {}) {
 // — no second bookkeeping, and nothing to go stale. The provider is a descendant of that process, so the
 // whole tree is signalled: the leaf holds the model connection, and signalling only the parent would leave
 // it running and writing.
+// A stopped process still answers kill(pid, 0), so `pause` produces a dispatch that is alive, holds the
+// lease, and will never finish on its own. Liveness alone cannot tell those apart, and the difference is
+// the whole answer to "why has nothing happened for forty minutes".
+function processStopped(pid) {
+  if (!processAlive(pid)) return false;
+  const probe = childProcess.spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' });
+  return String(probe.stdout || '').trim().startsWith('T');
+}
+
 function dispatchOwner(root, workId) {
   const owner = readJson(path.join(workPaths(root, workId).dispatchLease, 'owner.json'));
   if (!owner?.pid || !processAlive(owner.pid)) return null;
-  return owner;
+  return { ...owner, paused: processStopped(owner.pid) };
 }
 
 // Empty pgrep output splits to [''], and Number('') is 0 — which passes Number.isInteger, so an ordinary
@@ -338,9 +347,21 @@ function processTree(pid, visited = new Set()) {
 // Deepest first: a stopped parent cannot spawn more work while its children are being signalled, and for
 // SIGTERM the leaf holding the connection should learn first so it stops writing before its parent exits.
 function signalDispatch(root, workId, signal) {
+  return signalDispatchTree(root, workId, signal, { includeOwner: true });
+}
+
+// An interrupt has to reach the provider alone. The dispatch owner is this loop's own bookkeeping
+// process — the one that will notice the child died by signal, journal the attempt as interrupted-by-
+// human, and leave the slice where a human can steer it. Signal it too and there is nobody left to write
+// any of that down, which is precisely the interrupt-recorded-as-infrastructure-failure this replaces.
+function signalDispatchChildren(root, workId, signal) {
+  return signalDispatchTree(root, workId, signal, { includeOwner: false });
+}
+
+function signalDispatchTree(root, workId, signal, { includeOwner }) {
   const owner = dispatchOwner(root, workId);
   if (!owner) return null;
-  const tree = processTree(owner.pid).reverse();
+  const tree = processTree(owner.pid).filter(pid => includeOwner || pid !== owner.pid).reverse();
   const signalled = [];
   for (const pid of tree) {
     try { process.kill(pid, signal); signalled.push(pid); } catch { /* it exited while we walked the tree */ }
@@ -496,8 +517,10 @@ module.exports = {
   storeJsonBlob,
   updatePairRef,
   dispatchOwner,
+  processStopped,
   processTree,
   signalDispatch,
+  signalDispatchChildren,
   userConfig,
   withDispatchLease,
   withVerificationLease,

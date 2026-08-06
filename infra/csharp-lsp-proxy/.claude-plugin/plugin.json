@@ -1,0 +1,6 @@
+{
+  "name": "csharp-lsp-proxy",
+  "displayName": "C# LSP (proxied csharp-ls)",
+  "description": "C# diagnostics via csharp-ls behind a stdio proxy that answers the three server->client requests Claude Code's LSP client can't handle (claude-plugins-official#1359).",
+  "version": "1.0.0"
+}

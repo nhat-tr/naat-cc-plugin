@@ -9,15 +9,26 @@ Non-negotiable C#/.NET rules, condensed. Agents, reviewers, and pair sessions re
 
 ## 1. Inspect Constraints First
 
-Before choosing patterns, check the repo:
+**Skip these scans when the task is scoped to user-pinned files and adds no new pattern/dependency/project** (see the global Scoped Prompts rule — CLAUDE.md/AGENTS.md). Otherwise:
 
 - `rg --files -g '*.csproj'`
 - `rg -n '<TargetFramework|<LangVersion|<Nullable|<TreatWarningsAsErrors' -g '*.csproj'`
 - `rg -n 'NUnit|xunit|MSTest|FluentAssertions|NSubstitute|Moq|Testcontainers' -g '*.csproj'`
+- Scaffolding against an internal gateway (`dotnet graphql init`, client codegen): grep the repo's auth/tenant header conventions first (e.g. `X-TENANT-ID`, token providers) and include them (`--headers`) — never propose the bare command.
 
-**If JetBrains Rider MCP is available**: `mcp__jetbrains__get_project_modules` (list projects), `get_project_dependencies <module>` (NuGet packages), `get_file_problems <file>` (Rider inspections), `reformat_file <file>` (apply formatting), `rename_refactoring` (project-wide rename).
+**If JetBrains Rider MCP is available**: `mcp__jetbrains__get_project_modules` (list projects), `get_project_dependencies <module>` (NuGet packages), `get_file_problems <file>` (Rider inspections), `reformat_file <file>` (apply formatting), `rename_refactoring` (project-wide rename). **Verify the MCP is actually connected before claiming IDE diagnostics were checked**; if not, say so — compiler output (`dobw`) and the local `csharp-lsp-proxy` plugin are the diagnostics channels (official csharp-lsp plugin stays disabled, upstream #1359).
 
 If the repo is not on the latest .NET/C# version, preserve compatibility — do not force upgrades.
+
+### Search & Read Discipline (token efficiency)
+
+- **User-pinned files are the scope** — read those and only those; any other file needs a one-line justification (see the global Scoped Prompts rule — CLAUDE.md/AGENTS.md).
+- **Use the runtime's native search tools (Claude Code Grep/Glob) where available** — gitignore-aware, `type: cs` filters, `head_limit`; in shell-only runtimes use `rg`, never `grep -r`/`find`.
+- **Bound every search**: `head_limit` ≤ 20; no `-A`/`-B` on a first-pass existence check.
+- **Grep first, then Read a window** (`offset`/`limit`); whole-file Read only under ~200 lines.
+- **Never read whole patches/logs/`.trx`** — extract the needed lines (`sed -n`, `jq`, XML parse).
+- **Never repeat an identical search/read in one session**; poll growing logs with `tail`, not whole-file greps.
+- **Batch symbol lookups against a known file** into one combined-pattern grep.
 
 ## 2. Core Rules
 
@@ -39,6 +50,11 @@ Prefer: linear flow over callbacks/indirection, explicit over implicit, named in
 - `using`/`await using` for all `IDisposable`/`IAsyncDisposable`.
 - **Never `new HttpClient()` per request** — use `IHttpClientFactory`.
 - External APIs via a typed client interface, not scattered `HttpClient` calls.
+- **Shared connection clients** (e.g. `ConnectionMultiplexer`): wire `ConnectionFailed`/`ConnectionRestored`/`ConfigurationChanged` logging at construction — silent stalls are invisible until a request breaks.
+
+### State & Ambient Context
+
+- **No `AsyncLocal<T>`/static ambient accessors for request/turn state** — pass an explicit context object. If the pattern already exists, add a fitness test forbidding `AsyncLocal<` before extending it (template: `references/test-code-examples.md` § Architecture Fitness Tests).
 
 ### EF Core
 
@@ -47,7 +63,7 @@ Prefer: linear flow over callbacks/indirection, explicit over implicit, named in
 - **No `FromSqlRaw` + string concatenation** — use `FromSql($"...")` interpolation.
 - **No client-side evaluation** — avoid `AsEnumerable()`/premature `ToList()`.
 - DbContext lifetime: **Scoped**.
-- **Data annotations over `IEntityTypeConfiguration`**; fluent config only where annotations can't express it.
+- **Data annotations over `IEntityTypeConfiguration` for new entities — even in repos whose older entities use fluent config**; fluent only where annotations can't express it (composite keys, owned types, cascade details).
 - **`DbContext` only in services/query classes, never controllers/endpoints.** Extract a named query class only when duplicated across 2+ services.
 - **Never edit generated migrations** — `dotnet ef migrations add/remove`; use `IAsyncEnumerable<T>` (`AsAsyncEnumerable()`) for streaming large result sets.
 
@@ -62,6 +78,8 @@ Prefer: linear flow over callbacks/indirection, explicit over implicit, named in
 ### Dependency Injection
 
 Choose service lifetime by the service's characteristics, not a blanket default — **Scoped** (request-scoped resources), **Singleton** (stateless/thread-safe/expensive/shared config), **Transient** (lightweight, short-lived). Full decision table: `references/core-rules.md` § Dependency Injection.
+
+- **Services must be stateless — deployment is multi-pod.** Singleton only for immutable/thread-safe infrastructure (options, typed `HttpClient` handlers, `ConnectionMultiplexer`, source-gen loggers); mutable in-process state silently diverges per pod — cross-request state lives in the database or Redis.
 
 - **No captive dependencies** (Scoped/Transient into a Singleton), **no service locator** (`IServiceProvider.GetService<T>()`), **no `new`-ing services** — everything through DI.
 - Register by module via extension methods; keep `Program.cs` composition-only.
@@ -81,12 +99,21 @@ Choose service lifetime by the service's characteristics, not a blanket default 
 - **No `throw ex;`** (always `throw;`); **no exception swallowing** (no empty `catch`/catching `Exception` without logging).
 - Typed domain exceptions for business rule violations, mapped to HTTP status codes in the API layer; let infrastructure failures propagate to the global handler — don't catch/rewrap without adding context.
 
+### Static-Analysis & Review Fixes
+
+- **Fix every instance of the defect pattern in the touched file**, check public-contract blast radius (Swagger), and treat review comments as intent, not diffs — details: `references/core-rules.md` § Static-Analysis & Review Fixes.
+
+### LLM-Facing Tool Contracts (agent/tool repos)
+
+- **`[Description]` must state what the implementation currently does; never return `null`/empty as an "already handled" signal; specific value-echoing messages for every LLM-visible exception** — details: `references/core-rules.md` § LLM-Facing Tool Contracts.
+
 ### Testing — NUnit
 
 - **Naming: behavior sentences** — `Capability_verb_fact` (e.g. `Sync_merges_...`), trailing `when_<condition>` only for non-default paths; never the SUT method name or an `Async` suffix. Arrange-Act-Assert structure.
 - `Assert.That` constraint model (not `Assert.AreEqual`), `Assert.Multiple` for grouped assertions, `Assert.ThrowsAsync<T>` for async exceptions.
 - **No FluentAssertions. No AutoMapper** — map explicitly (see Code Style § Mapping).
 - Test categories (`[UnitTest]`, `[IntegrationTest]`, `[StagingOnly]`) for CI filtering; Testcontainers over shared databases; `WebApplicationFactory<TEntryPoint>` for full API integration tests.
+- **Testcontainers `.WithReuse(true)` needs reuse enabled on the runner, or every run leaks a container** (Ryuk is off on rootless Podman) — see `references/test-code-examples.md` § Container Reuse Across Runs.
 
 ### Packages
 
@@ -94,7 +121,7 @@ Choose service lifetime by the service's characteristics, not a blanket default 
 
 ## 3. Code Style
 
-- Match existing repository conventions — inspect actual code before assuming patterns.
+- **Touched files: follow the file's existing pattern and conventions** — inspect actual code before assuming patterns. **New files: use the best option this skill prescribes**, even when older files carry a legacy pattern — do not propagate legacy patterns into new code.
 - **Seal classes** not designed for inheritance.
 - **Use `record`** for DTOs/API contracts/value objects; `class` for stateful services and entities with identity.
 - **Map explicitly** (static methods/extensions). See `references/code-examples.md` § Manual Mapping.
@@ -104,7 +131,9 @@ Choose service lifetime by the service's characteristics, not a blanket default 
 - **One type per file** — unless tightly coupled (discriminated union variants, record + nested builder, private nested types).
 - **Member ordering and blank-line conventions** — full list in `references/core-rules.md` § Member Ordering.
 - Add `using` imports — **never** write fully qualified type names inline.
-- Named constants over magic values (`nameof()`, `const` fields); remove dead code.
+- Named constants over magic values (`nameof()`, `const`); remove dead code — including rename-orphaned constants/policies (registered, referenced nowhere).
+- **Parenthesize every mixed `&&`/`||` expression explicitly** — a missing paren silently produces an always-false/always-true sub-clause that compiles cleanly.
+- **Repo wrapper over raw stdlib** (e.g. `RegexHelper` over `Regex`): use it for every call in the idiom family; if it lacks a method, use its equivalent (`Match(...).Success` for `IsMatch`); prefer the file's dominant idiom.
 - LINQ: no `ToList()` before `Where()`, no multiple enumerations, use `Any()` not `Count() > 0`.
 - **Use collection expressions** (`[.. source]`) instead of `.ToList()` / `.ToArray()`.
 - Avoid broad refactors unless explicitly requested.
@@ -122,9 +151,13 @@ Read only what is relevant:
 
 ## 5. Verification
 
-- Build: `dobq` (filtered output — errors only, deduped, short paths; preferred over `dotnet build` for agent use)
-- Test: `dotnet test` (or `dotnet test --filter "TestCategory=UnitTest"`)
-- If JetBrains Rider MCP is available: run `mcp__jetbrains__get_file_problems` on touched files
+- Iterate: `dobq` (errors only). **Final gate: `dobw`** (errors + warnings, deduped).
+- **A new warning in a touched file is blocking — fix it.** Defer pre-existing warnings by name into `docs/known-warnings.md` (repo-level human backlog; Pair's automated warning baseline is separate). "0 Warning(s)" proves nothing when the build was filtered (`-clp:ErrorsOnly` strips warnings). Compiler-enforced upgrade: `references/project-structure.md` § Warnings Ratchet.
+- **Sandbox distrust**: a sandboxed build that runs ~5 min and reports `Build FAILED` with `0 Warning(s) 0 Error(s)` hung on MSBuild node handshake — re-run with `-m:1` or unsandboxed.
+- **Formatting is a separate CI gate**: if the repo pins CSharpier (`.csharpierrc`), run the formatter check before declaring a build fixed.
+- Test: `dotnet test` (or `--filter "TestCategory=UnitTest"`)
+- **Green tests don't prove changed lines run** — when coverage of a risky change is in doubt, mutation-test: revert, confirm the test fails for the right reason, restore.
+- If JetBrains Rider MCP is connected: run `mcp__jetbrains__get_file_problems` on touched files
 
 ### Debugging Failing Tests
 

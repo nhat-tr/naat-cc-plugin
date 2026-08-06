@@ -28,11 +28,20 @@ function boundedText(value, label, max) {
   return text;
 }
 
+// Same carve-out MODEL_FINDING_CAP and HUMAN_FINDING_CAP make for the COUNT, applied to the length of each
+// field: these bounds are a token budget on what a fresh model reviewer may emit, and a human reading their
+// own diff is not spending it. Observed live: the fourth finding of a human review was 202 characters of
+// domain reasoning about when catalog data is synced, and 180 refused the whole submission for it — twice
+// over, because scenario and impact default to the claim and carried model bounds of their own.
+const MODEL_TEXT_BOUNDS = { claim: 180, scenario: 240, impact: 180, passCondition: 240 };
+const HUMAN_TEXT_BOUNDS = { claim: 400, scenario: 400, impact: 400, passCondition: 400 };
+
 function blobLineCount(root, objectId) {
   return git(root, ['cat-file', '-p', objectId], { trim: false }).stdout.split(/\r?\n/u).length;
 }
 
-function validateFinding(root, checkpointCommit, finding, index) {
+function validateFinding(root, checkpointCommit, finding, index, { human = false } = {}) {
+  const bounds = human ? HUMAN_TEXT_BOUNDS : MODEL_TEXT_BOUNDS;
   if (!finding || typeof finding !== 'object' || Array.isArray(finding)) throw new Error(`review finding ${index + 1} must be an object`);
   if (!['BLOCKER', 'MAJOR'].includes(finding.severity)) throw new Error(`review finding ${index + 1} severity is invalid`);
   const evidence = finding.evidence;
@@ -48,10 +57,17 @@ function validateFinding(root, checkpointCommit, finding, index) {
     throw new Error(`review finding ${index + 1} line range is invalid or wider than 40 lines`);
   }
   if (lineEnd > blobLineCount(root, expectedBlob)) throw new Error(`review finding ${index + 1} line range exceeds its immutable blob`);
+  // Optional for a human finding, required for a model one. A model finding is a claim awaiting a verdict,
+  // and the pass condition is what the corrector can check it by; a human finding arrives WITH the verdict,
+  // and what "addressed" looks like is the correcting session's job to work out from the claim. Requiring
+  // one produced a copy of the claim under a second heading and nothing else.
+  const passCondition = human && !String(finding.pass_condition || '').trim()
+    ? null
+    : boundedText(finding.pass_condition, `review finding ${index + 1} pass condition`, bounds.passCondition);
   return {
     severity: finding.severity,
-    claim: boundedText(finding.claim, `review finding ${index + 1} claim`, 180),
-    scenario: boundedText(finding.scenario, `review finding ${index + 1} scenario`, 240),
+    claim: boundedText(finding.claim, `review finding ${index + 1} claim`, bounds.claim),
+    scenario: boundedText(finding.scenario, `review finding ${index + 1} scenario`, bounds.scenario),
     evidence: {
       commit: checkpointCommit,
       path: repositoryPath,
@@ -59,8 +75,8 @@ function validateFinding(root, checkpointCommit, finding, index) {
       line_start: lineStart,
       line_end: lineEnd,
     },
-    impact: boundedText(finding.impact, `review finding ${index + 1} impact`, 180),
-    pass_condition: boundedText(finding.pass_condition, `review finding ${index + 1} pass condition`, 240),
+    impact: boundedText(finding.impact, `review finding ${index + 1} impact`, bounds.impact),
+    ...(passCondition ? { pass_condition: passCondition } : {}),
   };
 }
 
@@ -83,7 +99,7 @@ function validateReviewResult(root, checkpointCommit, result, { human = false } 
   if (result.verdict === 'findings' && result.findings.length === 0) throw new Error('findings Review Outcome must contain evidence');
   return {
     verdict: result.verdict,
-    findings: result.findings.map((finding, index) => validateFinding(root, checkpointCommit, finding, index)),
+    findings: result.findings.map((finding, index) => validateFinding(root, checkpointCommit, finding, index, { human })),
   };
 }
 
@@ -123,7 +139,10 @@ function recordReviewOutcome(root, input) {
   const file = path.join(paths.outcomes, `${outcomeId}.json`);
   const existing = readJson(file);
   if (existing && JSON.stringify(existing) !== JSON.stringify(outcome)) throw new Error(`immutable Review Outcome ${outcomeId} conflicts`);
-  if (!existing) writeJson(file, outcome, 8 * 1024);
+  // Sized to what the human bounds above actually admit — HUMAN_FINDING_CAP findings at HUMAN_TEXT_BOUNDS
+  // plus their anchors. At 8 KiB a full human review would have hit a byte limit instead, which is the same
+  // late batch refusal this change exists to remove, one gate further along.
+  if (!existing) writeJson(file, outcome, 64 * 1024);
   const stored = storeJsonBlob(root, workId, `reviews/${outcomeId}`, outcome);
   appendEvent(root, workId, {
     event: 'review-recorded',
@@ -203,6 +222,7 @@ function feedbackForFinding(root, workId, findingId) {
 }
 
 module.exports = {
+  HUMAN_TEXT_BOUNDS,
   REVIEW_DISPOSITIONS,
   feedbackForFinding,
   feedbackRows,

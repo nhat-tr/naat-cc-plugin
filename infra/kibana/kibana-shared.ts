@@ -10,6 +10,15 @@ export const INDEX_ALIASES: Record<string, string> = {
   calibration: 'logstash-orangehub-calibration-*',
   'order-data-hub': 'logstash-orangehub-order-data-hub-*',
   'test-infrastructure': 'logstash-orangehub-test-infrastructure-*',
+  // The DataHub / identity platform streams. These live on the same clusters as the
+  // orangehub indices above but serve the *.dsp / *.gi hosts, so a search that only
+  // had the five aliases above reported "no hits" for a service that logs heavily —
+  // product-data-hub alone carries ~1.6B docs on QSS. Verified present on qss via
+  // _cat/indices 2026-08-06.
+  'product-data-hub': 'logstash-orangehub-product-data-hub-*',
+  'identity-data-hub': 'logstash-orangehub-identity-data-hub-*',
+  'global-identity': 'logstash-orangehub-global-identity-*',
+  'authorization-services': 'logstash-orangehub-authorization-services-*',
 };
 
 export const ES_HOSTS: Record<string, string> = {

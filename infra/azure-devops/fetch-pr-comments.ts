@@ -39,7 +39,10 @@ interface ThreadComment {
   commentType: string;
   publishedDate: string;
   author: { displayName: string; uniqueName: string };
-  likedBy?: Array<{ displayName: string; uniqueName: string }>;
+  // The reactions field is `usersLiked` — there is no `likedBy` in the ADO comment schema. Kept
+  // non-optional (the API sends it on every comment, empty when unreacted) so a wrong name is a
+  // type error rather than a silent `undefined` that drops every reaction.
+  usersLiked: Array<{ displayName: string; uniqueName: string }>;
 }
 
 interface PrThread {
@@ -156,7 +159,7 @@ function mapThread(thread: PrThread): ReviewThread {
       author: c.author.displayName,
       content: c.content.trim(),
       date: c.publishedDate.slice(0, 10),
-      likedBy: (c.likedBy ?? []).map(l => l.displayName),
+      likedBy: (c.usersLiked ?? []).map(l => l.displayName),
     })),
   };
 }

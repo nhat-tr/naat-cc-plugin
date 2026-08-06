@@ -1,0 +1,14 @@
+{
+  "csharp": {
+    "command": "node",
+    "args": ["/Users/nhat.tran/.claude/skills/csharp-lsp-proxy/proxy.ts"],
+    "extensionToLanguage": {
+      ".cs": "csharp"
+    },
+    "transport": "stdio",
+    "diagnostics": true,
+    "startupTimeout": 120000,
+    "restartOnCrash": true,
+    "maxRestarts": 3
+  }
+}

@@ -58,6 +58,17 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ~/.local/share/my-claude-code/hooks/format-changed.sh",
+            "timeout": 30,
+            "statusMessage": "Formatting changed file"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

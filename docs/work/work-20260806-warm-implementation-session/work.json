@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "work_id": "work-20260806-warm-implementation-session",
+  "title": "Warm Implementer, Fresh Reviewer — session continuity for Pair v4/vNext",
+  "status": "design-approved",
+  "spec": {
+    "path": "docs/work/work-20260806-warm-implementation-session/spec.md",
+    "sha256": "cf878039c814b182f0678d578e3ad9c298c1481bc9a79dfd4250bac0421a7dce"
+  },
+  "active_pair_mirror": ".pair/spec.md",
+  "engineering_quality_contract": {
+    "path": "docs/work/work-20260806-warm-implementation-session/spec.md",
+    "section": "Engineering Quality Contract",
+    "status": "approved"
+  },
+  "decision_records": [],
+  "decision_supersessions": [],
+  "changes": [],
+  "outcomes": [],
+  "evidence_records": []
+}

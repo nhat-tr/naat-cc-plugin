@@ -369,7 +369,7 @@ test('path-unsafe or digest-mismatched Pair Work references fail closed during a
   assert.throws(() => adoptAgentConversationHandover(root, { handoverId: sealed.handoverId, runtime: 'codex', agentConversationId: 'fresh-digest' }), /invalid handover/i);
 });
 
-test('non-Pair artifact drift fails closed before sealing and before adoption', t => {
+test('non-Pair artifact drift settles into findings at adoption instead of failing closed', t => {
   const root = fixture(t);
   const {
     adoptAgentConversationHandover,
@@ -390,37 +390,24 @@ test('non-Pair artifact drift fails closed before sealing and before adoption', 
     checkpoint: checkpoint({ artifacts: [{ path: artifactPath, sha256: revisionOneDigest }] }),
   });
 
-  fs.writeFileSync(absoluteArtifact, 'changed before sealing\n');
-  assert.throws(
-    () => sealAgentConversationHandover(root, { ...identity, now: 2_000 }),
-    /artifact.*changed|changed.*artifact/iu,
-  );
-  let source = readAgentConversationRegistry(root).conversations[
-    require(HANDOVER_MODULE).conversationIdentity(identity).sourceKey
-  ];
-  assert.equal(source.status, 'warm');
-  assert.equal(source.sealed_handover_id, null);
-
-  const currentDigest = crypto.createHash('sha256').update(fs.readFileSync(absoluteArtifact)).digest('hex');
-  updateAgentConversationCheckpoint(root, {
-    ...identity,
-    now: 3_000,
-    checkpoint: checkpoint({ artifacts: [{ path: artifactPath, sha256: currentDigest }] }),
-  });
   const sealed = sealAgentConversationHandover(root, { ...identity, now: 4_000 });
   fs.writeFileSync(absoluteArtifact, 'changed after sealing\n');
 
-  assert.throws(
-    () => adoptAgentConversationHandover(root, {
-      handoverId: sealed.handoverId,
-      runtime: 'codex',
-      agentConversationId: 'fresh-artifact-adopter',
-      now: 5_000,
-    }),
-    /artifact.*changed|changed.*artifact/iu,
-  );
-  source = readAgentConversationRegistry(root).conversations[sealed.sourceKey];
-  assert.equal(source.status, 'sealed');
+  const adopted = adoptAgentConversationHandover(root, {
+    handoverId: sealed.handoverId,
+    runtime: 'codex',
+    agentConversationId: 'fresh-artifact-adopter',
+    now: 5_000,
+  });
+
+  assert.equal(adopted.status, 'adopted');
+  assert.deepEqual(adopted.driftedArtifacts, [artifactPath]);
+  assert.deepEqual(adopted.checkpoint.artifacts, [], 'the drifted artifact leaves the adopted checkpoint');
+  assert.ok(
+    adopted.checkpoint.findings.some(finding => (finding.finding || '').includes(artifactPath)),
+    'the drift stays visible to the adopter as a bounded finding');
+  const source = readAgentConversationRegistry(root).conversations[sealed.sourceKey];
+  assert.equal(source.status, 'retired');
 });
 
 test('private permissions and symlink resistance exclude forbidden fields and secret-like values', t => {
@@ -1223,4 +1210,96 @@ test('the scoped banner collapses settled conversations into one line and keeps 
   assert.ok(!banner.includes(sealed[0].handoverId), 'older settled conversations no longer render their own rows');
   assert.match(banner, /2 settled Agent Conversation/u, 'the omitted rows are counted, not hidden');
   assert.match(banner, /--freshness-status/u, 'the full list stays one named command away');
+});
+
+test('Sealing drops artifacts that drifted after the checkpoint instead of orphaning the handover', t => {
+  const root = fixture(t);
+  const { handoverPaths, registerAgentConversation, sealAgentConversationHandover, updateAgentConversationCheckpoint } = handoverApi();
+  fs.writeFileSync(path.join(root, 'stable.md'), 'stable evidence\n');
+  fs.writeFileSync(path.join(root, 'volatile.js'), 'before implementation\n');
+  const digestOf = content => crypto.createHash('sha256').update(content).digest('hex');
+  const identity = conversation({ kind: 'brainstorming', agentConversationId: 'brainstorm-drift' });
+  registerAgentConversation(root, identity);
+  updateAgentConversationCheckpoint(root, {
+    ...identity,
+    checkpoint: checkpoint({
+      artifacts: [
+        { path: 'stable.md', sha256: digestOf('stable evidence\n') },
+        { path: 'volatile.js', sha256: digestOf('before implementation\n') },
+      ],
+    }),
+  });
+  fs.writeFileSync(path.join(root, 'volatile.js'), 'after implementation\n');
+
+  const sealed = sealAgentConversationHandover(root, { ...identity, now: 2_000 });
+
+  const stagedCheckpoint = JSON.parse(fs.readFileSync(
+    path.join(handoverPaths(root).directory, sealed.handoverId, 'checkpoint.md'), 'utf8'));
+  assert.deepEqual(stagedCheckpoint.artifacts.map(artifact => artifact.path), ['stable.md']);
+  assert.ok(
+    stagedCheckpoint.findings.some(finding => /volatile\.js/u.test(finding.finding || '')),
+    'the dropped artifact stays visible as a bounded drift finding');
+});
+
+test('Cold sweep reports per-conversation seal failures instead of swallowing them', t => {
+  const root = fixture(t);
+  const { ensureBrainstormingRegistration, sealColdAgentConversations } = handoverApi();
+  ensureBrainstormingRegistration(root, { runtime: 'codex', agentConversationId: 'bootstrap-only', now: 1_000 });
+
+  const swept = sealColdAgentConversations(root, { now: 1_000 + (60 * 60 * 1000) + 1 });
+
+  assert.equal(swept.sealed.length, 0);
+  assert.equal(swept.failures.length, 1);
+  assert.match(swept.failures[0].error, /Core Anchor/u);
+  assert.ok(swept.failures[0].sourceKey);
+});
+
+test('Cold sweep seals a drifted-artifact brainstorming conversation instead of leaving it handoverless', t => {
+  const root = fixture(t);
+  const { registerAgentConversation, sealColdAgentConversations, updateAgentConversationCheckpoint } = handoverApi();
+  fs.writeFileSync(path.join(root, 'evolving.md'), 'v1\n');
+  const digestOf = content => crypto.createHash('sha256').update(content).digest('hex');
+  const identity = conversation({ kind: 'brainstorming', agentConversationId: 'brainstorm-cold-drift' });
+  registerAgentConversation(root, identity);
+  updateAgentConversationCheckpoint(root, {
+    ...identity,
+    checkpoint: checkpoint({ artifacts: [{ path: 'evolving.md', sha256: digestOf('v1\n') }] }),
+  });
+  fs.writeFileSync(path.join(root, 'evolving.md'), 'v2\n');
+
+  const swept = sealColdAgentConversations(root, { now: 1_000 + (60 * 60 * 1000) + 1 });
+
+  assert.equal(swept.failures.length, 0);
+  assert.equal(swept.sealed.length, 1);
+  assert.ok(swept.sealed[0].handoverId);
+});
+
+test('Brainstorm checkpoint delta merges stable fields and replaces provided volatile fields', () => {
+  const { mergeBrainstormCheckpointDelta, normalizeCheckpoint } = handoverApi();
+  const existing = normalizeCheckpoint(checkpoint({
+    coreAnchor: 'Purpose: keep the approved anchor stable.',
+    confirmedChoices: ['Use the existing store.'],
+    rejectedAlternatives: ['Introduce a new database.'],
+    unresolvedDecisions: ['Choose the retry policy.'],
+    nextAction: 'Confirm the retry policy.',
+  }));
+
+  const merged = mergeBrainstormCheckpointDelta(existing, {
+    findings: [{ finding: 'The store already retries writes.', reference: 'src/store.js:10' }],
+    confirmedChoices: ['Reuse store retries.'],
+    unresolvedDecisions: [],
+    nextAction: 'Write the specification.',
+  });
+
+  assert.equal(merged.core_anchor, 'Purpose: keep the approved anchor stable.');
+  assert.deepEqual(merged.confirmed_choices, ['Use the existing store.', 'Reuse store retries.']);
+  assert.deepEqual(merged.rejected_alternatives, ['Introduce a new database.']);
+  assert.deepEqual(merged.unresolved_decisions, [], 'an explicitly provided empty list resolves the decisions');
+  assert.equal(merged.next_action, 'Write the specification.');
+  assert.equal(merged.current_direction, existing.current_direction, 'an omitted volatile field keeps its previous value');
+  assert.ok(merged.findings.some(finding => finding.reference === 'src/store.js:10'));
+  assert.ok(merged.findings.some(finding => finding.reference === 'skills/pair-v3/tests/pair-state.integration.test.js'));
+
+  const repeat = mergeBrainstormCheckpointDelta(merged, { confirmedChoices: ['Reuse store retries.'] });
+  assert.deepEqual(repeat.confirmed_choices, merged.confirmed_choices, 'merging the same entry twice never duplicates it');
 });

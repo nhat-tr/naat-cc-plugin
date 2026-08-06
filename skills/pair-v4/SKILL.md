@@ -51,13 +51,36 @@ Implementation session first names one bounded Architecture Risk or explicitly r
 - Reinspect checkpoint diff. Escalate a misrouted Routine Path before acceptance.
 - Treat existing code as evidence. Reuse pattern only when responsibility, ownership, lifetime, failure behavior, and concurrency match.
 
-Every implementation and review invocation is fresh. Never resume provider session or pass prior transcript/history.
+Every **review** invocation is fresh. Never resume a provider session for a review, and never pass prior transcript or history into one — fresh eyes are what a review is for, and the loop refuses a review that asks to resume.
+
+## Warm implementation session
+
+Implementation of one Review Slice lives in one provider session that carries through the whole cycle: it implements, the checkpoint is reviewed, and the same session applies the correction. The first implementation call of a slice persists its session and records the id; corrections and steering resume it. Only implementation is warm — reviews and post-diff design stay one-shot.
+
+A resumed call carries only what the session cannot already know: the adjudicated findings, the deterministic failure, and any human direction. It re-sends no outcome and no acceptance criteria, because the session is already holding them. `pair-loop brief` shows the correction exactly as it will run, warm or cold.
+
+Continuity is bounded rather than unlimited. The session retires when the slice is accepted, and rotates mid-slice — a fresh session seeded with the full package — when the last call's context passed `warm_session_context_budget_tokens` (default 120000), when the runtime or model changed, or when the resume failed. Every rotation is recorded with its reason, and a rotation is exactly the fresh-spawn path, so it is always available as a fallback.
+
+```bash
+pair-loop interrupt                              # stop the attempt in flight
+pair-loop steer --text "<direction>" [--slice <id>]
+```
+
+`interrupt` signals the provider alone, so the run that owns it survives to record the attempt as `interrupted-by-human`: no correction is spent, nothing is blocked, and the edits already made stay in the worktree for the next run to pick up. `steer` puts a human message — up to 8 KiB, not reflowed — into the session carrying this slice as a resumed turn, and dispatches it immediately while the Work is `ready`. It is spent by the attempt that carries it. Unlike `direct`, it is not bounded to one correction and not restricted to `correction-ready`.
+
+Closing adjudication on a valid finding, or `pair-loop finding --submit`, dispatches that correction immediately into the warm session. Nothing cycles without a human act; set `dispatch_correction_on_submit: false` to keep the explicit `run`.
+
+Everything here is per Work: a Work opened before warm sessions existed carries no policy and keeps spawning fresh for the rest of its life. Configuration lives in `~/.config/pair/config.json` and every key has a safe default.
+
+`pair-report` states warm-vs-fresh call counts, rotations by reason, and the per-slice context growth curve — the numbers the continuity claim is judged on.
 
 ## Failure Proof
 
 Use narrowest proof that observes real failure boundary: base reproduction, unit, integration, contract, end-to-end, runtime, or recorded manual evidence. State negative control, mutation, base failure, or equivalent observation. Pair runs exact manifest verification after handoff and again cumulatively at completion.
 
 Do not freeze exact test names before code. Do not use test count, coverage, or synthetic RED output as proof by itself.
+
+If the implementer's own report names a specific behavioral verification as unmet ("the one gap: proving X actually reaches Y"), the slice cannot claim implemented on static/fitness evidence alone — that named gap is the proof obligation. Any already-diagnosed adjacent defect must be listed in the completion report even when out of scope.
 
 ## Deterministic failure
 
@@ -79,30 +102,38 @@ An unrecognised runner yields no test identity and is therefore never exempted. 
 
 Only one verification of a Work runs at a time. Concurrent suites share the machine's containers, ports, and databases, so they make each other fail in unrelated places and those failures can be neither trusted nor baselined. A second verification is refused and names the running one; never run the verify command by hand beside it.
 
-Never hand-edit the Pair worktree to satisfy findings or a red gate. Work done outside the loop carries no checkpoint, no verification record, and no Review Outcome, so it can never be reviewed, adjudicated, or learned from. When a state looks like it has no command, run `pair-loop status`: it names the exact next command.
+Never hand-edit the Pair worktree to satisfy findings or a red gate. Work done outside the loop carries no checkpoint, no verification record, and no Review Outcome, so it can never be reviewed, adjudicated, or learned from. When a state looks like it has no command, run `pair-loop status`: it names the exact next command. For Work orientation in a fresh session, run `pair-loop digest` — it prints the slices, their acceptance criteria, and the next command in a few hundred bytes; do not read `.pair/spec.md` or `.pair/plan.md` whole.
 
 ## Review
 
 Architecture-Sensitive checkpoints always receive fresh review. Routine checkpoints use deterministic proof plus configured conditional sampling.
 
-Reviewer receives only checkpoint diff command, mapped behavior, Design Check when applicable, named callers/contracts, verification result, and at most three relevant approved Review Guidance rules.
+Reviewer receives only the checkpoint diff, mapped behavior, Design Check when applicable, named callers/contracts, verification result, and at most three relevant approved Review Guidance rules. The diff arrives inlined when it fits `review_diff_inline_max_bytes` (default 24 KiB) — the coordinator already holds it as two commit ids, so making the reviewer re-derive it buys nothing — and above that cap the reviewer derives it selectively as before.
 
-Approval contains no prose. Transient reviewer JSON is capped at 6 KiB. Durable Review Outcome is capped at 8 KiB and contains at most three BLOCKER/MAJOR findings. Each finding must include falsifiable claim, reachable scenario, immutable checkpoint commit/path/blob/line anchor, impact, and pass condition.
+Approval contains no prose. Transient reviewer JSON is capped at 6 KiB. A model Review Outcome contains at most three BLOCKER/MAJOR findings, each with a falsifiable claim (≤180 characters), reachable scenario, immutable checkpoint commit/path/blob/line anchor, impact, and pass condition. Those bounds are a token budget on a fresh reviewer, so a human review is bounded separately: up to twenty findings, ≤400 characters per field, and an optional pass condition.
 
-A human can raise a finding too, reading the checkpoint the same way a reviewer would. It flows through the same disposition and correction path as a model finding once submitted:
+A finding whose claim names a defect class ("every X", "all instances of Y") must carry a pass condition that enumerates the class mechanically — a fitness/architecture test or a grep-able invariant — never a single-instance fix; a class-scoped finding closed by one instance is not closed.
+
+A human can raise a finding too, reading the checkpoint the same way a reviewer would. It reaches the same one bounded correction a model finding does, but not by the same route: a model finding is a claim awaiting a verdict, and a human finding arrives with one. Submission *is* the verdict, so every submitted human finding is recorded valid and the slice lands directly on `correction-ready` — no second pass adjudicating your own claims. In nvim that is `<leader>pf` per finding while you read, then either `<leader>pn` or `s` in the draft inbox (`<leader>pF`); both submit the draft *and* spend the correction it earns, so the correcting session starts without a further gesture. To steer that correction, `<leader>pD` first: a Correction Direction is admitted at any status, so it does not have to wait for the reducer.
 
 ```bash
 pair-loop finding --slice <id> --file <path> --line <n> --text "<what is wrong>" \
-  [--pass-condition "<observable state>"] [--severity BLOCKER|MAJOR]
+  [--pass-condition "<observable state>"] [--severity BLOCKER|MAJOR] [--allow-same-anchor]
+pair-loop finding --slice <id> [--index <n>] --text "<the claim, reworded>"
 pair-loop finding --slice <id> [--index <n>] --pass-condition "<observable state>"
+pair-loop finding --slice <id> [--index <n>] --drop
 pair-loop finding --slice <id> --submit
 ```
 
-Drafting records no Review Outcome and moves no slice, but it is not invisible: `pair-loop status` lists every unsubmitted draft, each finding's pass condition, and the exact command for whichever is missing one. A draft is deleted only by submission, so `status` also names a draft that can no longer be submitted — its slice already accepted, or the slice moved to a newer checkpoint than the draft anchors to.
+A second finding on lines a drafted finding already anchors is refused: at the same anchor a reworded claim is a re-draft far more often than a second concern. Reword the one already there with `--index <n> --text`, `--drop` it, or pass `--allow-same-anchor` to declare the concerns genuinely distinct. Both reach only the draft — the mutable half — so a duplicate never has to be submitted and dispositioned away, which would write it into the immutable record and into the Review Guidance bank that learns from it.
 
-Pass condition is the *observable state* — a fact about the code that a command or a reader can check without asking the person who raised it. "Every test in the suite is named `Capability_verb_fact`" is one; "the naming is fixed" and "the human who raised this confirms it is addressed" are not, and a pass condition that defers the verdict to a person is refused where it is written. Submission is refused while any drafted finding states none; complete it in place with the second form above rather than re-drafting, or the outcome carries both copies. A claim bundling two unrelated asks rarely reduces to one pass condition — split it into two findings instead. A duplicate that reaches an outcome anyway is resolved by adjudication: disposition one copy `not-worth-fixing` with the reason naming the copy that carries it.
+Drafting records no Review Outcome and moves no slice, but it is not invisible: `pair-loop status` lists every unsubmitted draft. A draft is deleted only by submission, so `status` also names a draft that can no longer be submitted — its slice already accepted, or the slice moved to a newer checkpoint than the draft anchors to.
 
-Model finding never edits code. Human disposition required:
+A claim over 400 characters is refused where it is drafted, naming its length and how much to cut, rather than at submission where a batch of findings would fail for one of them and nothing could be edited. In nvim the refusal reopens the prompt with your text in it.
+
+`--pass-condition` is optional, and an unstated one is *absent* rather than a copy of the claim. You raise the issue; working out what "addressed" looks like is the correcting session's job, and your claim plus the lines you anchored it to is what it goes on. State a separate one only when the claim is a symptom and the remedy is a different observable fact — "every test in the suite is named `Capability_verb_fact`" against a claim about one badly-named test. When you do state one it must be the *observable state*, a fact a command or a reader can check without asking the person who raised it: "the naming is fixed" and "the human who raised this confirms it is addressed" are refused where they are written, because a pass condition that defers the verdict to a person leaves the corrector nothing to satisfy. A claim bundling two unrelated asks is two findings, not one.
+
+Model finding never edits code, and its claim is the one that still needs a human verdict:
 
 ```bash
 pair-loop feedback --finding <id> \
@@ -113,6 +144,8 @@ pair-loop feedback --finding <id> \
 The reason is the comment on that finding, capped at 500 characters. It is recorded as immutable Review Feedback, feeds Review Guidance, and — for a finding dispositioned valid — travels to the correcting session attached to the finding it adjudicates. Write it as the instruction you want followed for that finding, not as a verdict.
 
 Only valid finding or deterministic failure permits one bounded fresh correction. Second failure pauses for human control. Because that budget is one deep, spend it on a defect the slice actually has: at correction-ready, `pair-loop verify` first, and `pair-loop run` only once re-verification has confirmed a real, reproducible failure.
+
+That budget bounds a *model* loop. A fresh reviewer can always find something, so find → correct → find → correct would never terminate on its own, and the block is what puts a human back in it. A **human** review is already that human: the correction produces a new checkpoint, the slice returns to `awaiting-human-review`, and reading that checkpoint, writing a finding against it and submitting it *is* the deliberation `unblock --reason "<why a second correction is warranted>"` asks for. So a human round does not block — round two, three and four each earn their correction directly, and review → correct → review until you accept is the normal shape rather than an escape hatch. The bound holds where it means something: a model finding dispositioned valid after the correction is spent still blocks, and so does a correction that fails its own verification, whoever raised it.
 
 A deterministic failure produces no checkpoint, so no Review Outcome and no Review Feedback can exist for it. Review findings raised at that point have no finding ID to carry them; the way to reach a reviewable checkpoint is a clean verification, not hand-edits. To steer that correction, record one bounded Correction Direction while the slice is correction-ready:
 

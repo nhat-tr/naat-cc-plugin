@@ -241,12 +241,15 @@ test('brainstorming skill requires the executable checkpoint command at material
   const content = fs.readFileSync(path.resolve(__dirname, '../SKILL.md'), 'utf8');
   assert.match(content, /pair-loop --brainstorm-checkpoint/u);
   assert.match(content, /material research or decision boundary/u);
-  assert.match(content, /confirmed Core Anchor/u);
-  assert.match(content, /bounded finding statements.*evidence references and digests/iu);
-  assert.match(content, /unknown top-level or nested fields fail/iu);
+  assert.match(content, /confirmed Core Anchor as one string/u);
+  assert.match(content, /findings.*reference.*path:line.*digest/isu);
+  assert.match(content, /Send deltas, not restatements/u);
+  assert.match(content, /merge cumulatively engine-side/u);
+  assert.match(content, /Volatile fields.*currentDirection.*unresolvedDecisions.*nextAction.*replace/isu);
+  assert.match(content, /unknown fields.*fail/iu);
   assert.match(content, /artifacts.*path.*sha256/iu);
-  assert.match(content, /interactive TTY stdin.*here-document.*redirect/isu);
-  assert.match(content, /refreshes the volatile current direction, unresolved decisions, and next action/iu);
+  assert.match(content, /here-document or file redirect.*interactive TTY stdin is rejected/isu);
+  assert.match(content, /Stop recovery refreshes the volatile fields/iu);
   assert.match(content, /never persist.*prompt.*transcript.*private reasoning/isu);
 });
 
@@ -325,7 +328,7 @@ test('brainstorm checkpoint rejects legacy-only Claude identity as non-native', 
 test('brainstorming registers the Agent Conversation at activation as the mandatory first action', () => {
   const content = fs.readFileSync(path.resolve(__dirname, '../SKILL.md'), 'utf8');
   assert.match(content, /pair-loop --register-brainstorming/u);
-  assert.match(content, /register the Agent Conversation/u);
+  assert.match(content, /registers the native.*Agent Conversation/isu);
   assert.match(content, /mandatory first action/u);
   assert.match(content, /before opening the Visual Companion/u);
 });

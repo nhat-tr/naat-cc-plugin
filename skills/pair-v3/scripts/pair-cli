@@ -7,10 +7,14 @@ const path = require('node:path');
 const {
   DIRTY_WORKTREE_PRECONDITION,
   acceptHumanReview,
+  activeSlice,
   adjudicateFinding,
   advanceWork,
+  amendHumanFinding,
   correctionBrief,
   currentState,
+  dispatchCorrectionOnSubmit,
+  dropHumanFindingDraft,
   forgetKnownFailure,
   humanFindingDrafts,
   knownFailures,
@@ -19,12 +23,14 @@ const {
   recordCorrectionDirection,
   recordHumanFinding,
   setHumanFindingPassCondition,
+  steerWarmSession,
   submitHumanFindings,
   unblockWork,
   recordKnownFailure,
   removeWorktree,
   sliceEvidence,
   verifyActiveSlice,
+  workContext,
 } = require('./lib/pair-engine');
 const { EVALUATION_RESULT_LIMIT_BYTES, evaluateBank } = require('./lib/review-evaluation');
 const { feedbackForFinding, listReviewOutcomes } = require('./lib/review-evidence');
@@ -34,7 +40,7 @@ const {
   decideReviewGuidance,
   proposeReviewGuidance,
 } = require('./lib/review-guidance');
-const { dispatchOwner, processTree, readCurrentWork, readJson, repositoryRoot, signalDispatch, workPaths, writeJson } = require('./lib/pair-store');
+const { dispatchOwner, processTree, readCurrentWork, readJson, repositoryRoot, signalDispatch, signalDispatchChildren, workPaths, writeJson } = require('./lib/pair-store');
 const { hydrateWorktree } = require('./lib/pair-worktree');
 
 function fail(message) {
@@ -109,9 +115,12 @@ function parseArgs(argv) {
     else if (arg === '--index') options.index = Number(valueAfter(argv, index++, arg));
     else if (arg === '--override') options.override = true;
     else if (arg === '--submit') options.submit = true;
+    else if (arg === '--drop') options.drop = true;
+    else if (arg === '--allow-same-anchor') options.allowSameAnchor = true;
     else if (arg === '--allow-incomplete') options.allowIncomplete = true;
     else if (arg === '--json') options.json = true;
     else if (arg === '--status') options.command = 'status';
+    else if (arg === '--digest') options.command = 'digest';
     else if (arg === '--help' || arg === '-h') options.command = 'help';
     else throw new Error(`unsupported option ${arg}`);
   }
@@ -174,7 +183,84 @@ const SLICE_ARC = [
   ['awaiting-human-review', 'inspect the checkpoint, then accept it'],
 ];
 
-function orientationLines(state, next) {
+// A state name and one imperative answer "what do I type" and nothing else. Read live, verbatim: "i dont
+// understand the purpose of each state". The states hardest to infer are the ones a human meets rarely —
+// post-diff-design, and the two unrelated problems that both surface as correction-ready — so each state
+// answers the same three questions instead of one: what it is, how you got here, and what ends it.
+const SLICE_STATE_PURPOSE = {
+  queued: {
+    is: 'Nothing has run. The Review Slice is an outcome and its Acceptance Criteria, and no session has read them yet.',
+    entered: 'Opening the Work, or unblocking a slice that never reached a Design Check or a checkpoint.',
+    ends: 'One implementation session, opened here and kept for the rest of this slice. It either commits a thin vertical checkpoint, or stops at design-ready without writing code.',
+  },
+  'design-ready': {
+    is: 'The implementation session stopped BEFORE writing code: the slice turns on a decision it refuses to guess at — ownership, lifetime, a seam, a contract. The Design Check it recorded is what the next session builds against.',
+    entered: 'An implementation run answering design-required instead of completed.',
+    ends: 'A second implementation session, bound to that Design Check. Read it first — pair-loop show --slice <id>, or <leader>pc in nvim. This is the last point where the decision costs nothing to reject, because no code has been written against it yet.',
+  },
+  'post-diff-design': {
+    is: 'The same escalation in the opposite order. The slice ran the Routine Path declaring no design question, produced a checkpoint, and inspecting that checkpoint found it changes ownership, a public or data contract, or replica behaviour. The Design Check is written from the diff, after the fact.',
+    entered: 'A checkpoint whose diff escalated to architecture-sensitive while carrying no Design Check.',
+    ends: 'A session that records the Design Check and may not edit code. The slice then goes to review-ready.',
+  },
+  'review-ready': {
+    is: 'A committed checkpoint that verification already passed, with no review against it yet. This is the free step: a review spends no correction, so nothing you can lose is at stake in reading it.',
+    entered: 'A verified checkpoint on the architecture-sensitive route, or a sampled Routine Path one.',
+    ends: 'Any of three — a fresh model review, your own findings, or accepting the checkpoint outright.',
+  },
+  'awaiting-feedback': {
+    is: 'A MODEL review returned findings, and each is a claim waiting for your verdict. The slice holds until every one has feedback, and feedback is append-only: a second verdict on the same finding is refused.',
+    entered: 'A model review that found at least one BLOCKER/MAJOR. Your own findings never land here — submitting them is itself the verdict.',
+    ends: 'Adjudicating all of them. Any one valid goes to correction-ready; none valid goes to awaiting-human-review.',
+  },
+  'correction-ready': {
+    is: 'The one bounded correction this Review Slice gets. Two unrelated problems arrive here, and which one you have decides what to do next.',
+    entered: 'Either the declared verification failed, or a finding was adjudicated valid.',
+    ends: 'A correcting session. If it was a verification failure, run pair-loop verify FIRST — re-verification spends no correction and clears a flake outright. A second failure blocks the slice for human diagnosis.',
+  },
+  'awaiting-human-review': {
+    is: 'Nothing automatic is left to do. A checkpoint exists that the loop believes is finished, and only a person can say so.',
+    entered: 'A clean model review on the architecture-sensitive route, a correction that produced a new checkpoint, or every finding adjudicated as something other than valid.',
+    ends: 'You accept it.',
+  },
+};
+
+// The arc is a map, not a queue, and reading it as a queue is what makes the states look arbitrary: most
+// slices touch three or four of the seven. Said once, at the top, because it explains every apparent skip.
+const SLICE_ARC_SHAPE = [
+  'The seven states are a map, not a queue — no Review Slice walks all of them.',
+  '  Routine Path: a checkpoint whose diff changes no ownership and no public contract is accepted straight',
+  '    out of the implementation run. queued -> accepted, and review-ready is never visited.',
+  '  Architecture-sensitive: declared up front (design-ready) or detected in the diff (post-diff-design).',
+  '    That route always earns a fresh review, so it is the one that walks most of the arc.',
+  '  Off the arc: blocked (the loop stopped and named why) and accepted (settled). Neither is a step.',
+];
+
+function explainLines(status = null) {
+  if (status && !SLICE_STATE_PURPOSE[status]) {
+    throw new Error(`${status} is not a Review Slice state; the arc is ${SLICE_ARC.map(([name]) => name).join(', ')}`);
+  }
+  const wanted = status ? [status] : SLICE_ARC.map(([name]) => name);
+  const lines = status ? [] : [...SLICE_ARC_SHAPE, ''];
+  for (const name of wanted) {
+    const purpose = SLICE_STATE_PURPOSE[name];
+    lines.push(
+      name,
+      `  What it is:       ${purpose.is}`,
+      `  How you get here: ${purpose.entered}`,
+      `  What ends it:     ${purpose.ends}`,
+      '',
+    );
+  }
+  return lines;
+}
+
+function orientationLines(state, next, { agentSession = Boolean(process.env.CLAUDECODE || process.env.CODEX_THREAD_ID) } = {}) {
+  // Inside an agent conversation the printed command is for THIS session to run, not to hand back
+  // to the human — who otherwise has to say "run it yourself" repeatedly.
+  const driverLine = agentSession
+    ? ['  This Agent Conversation drives the loop itself: run the Command above directly instead of handing it back to the human.']
+    : [];
   const slices = state.slices || [];
   const accepted = slices.filter(slice => slice.status === 'accepted').length;
   const queued = slices.filter(slice => slice.status === 'queued').length;
@@ -185,6 +271,7 @@ function orientationLines(state, next) {
     return [
       progress,
       '  Remaining: a combined review of every accepted Review Slice, then the Work completes.',
+      ...driverLine,
     ];
   }
   // An unrecognised or off-arc status is inserted rather than dropped: an arc with nothing marked
@@ -192,10 +279,47 @@ function orientationLines(state, next) {
   const arc = SLICE_ARC.some(([status]) => status === next.status)
     ? SLICE_ARC
     : [...SLICE_ARC, [next.status, 'off the usual arc — read Next above']];
+  // Depth for the one state the human is standing in, not for all seven: the arc has to stay scannable,
+  // and the other six are a command away. Without this the view named a state and an imperative and left
+  // "what IS this" unanswered for exactly the states that are met too rarely to infer.
+  const purpose = SLICE_STATE_PURPOSE[next.status];
   return [
     progress,
     `Where ${next.id} is:`,
     ...arc.map(([status, meaning]) => `  ${status === next.status ? '►' : ' '} ${status.padEnd(23)}${meaning}`),
+    ...(purpose ? ['', `${next.status} is: ${purpose.is}`, `  What ends it: ${purpose.ends}`] : []),
+    '  Every state, and why the arc skips most of them: pair-loop explain [<state>]',
+    ...driverLine,
+  ];
+}
+
+// A fresh session orienting itself reads the whole of .pair/spec.md today: every Acceptance Criterion
+// and every Review Slice's outcome, most of which are not the ones it is about to act on. digest is
+// built only from workContext's already-bounded pieces — context.criteria (one line per AC) and
+// context.manifest.slices (already capped at 1400 bytes each) — never context.spec, so the raw
+// specification body can never reach this view.
+function digestLines(state, context, next) {
+  const manifestById = new Map(context.manifest.slices.map(slice => [slice.id, slice]));
+  const command = nextCommand(state, next);
+  return [
+    `Work: ${state.work_id} (${state.lifecycle})`,
+    '',
+    'Review Slices:',
+    ...state.slices.map(slice => {
+      const manifestSlice = manifestById.get(slice.id);
+      const acIds = manifestSlice ? manifestSlice.acceptance_criteria.join(',') : '';
+      return `  ${slice.id}  ${slice.status}  ${manifestSlice?.outcome || ''}  [${acIds}]`;
+    }),
+    ...(next && manifestById.has(next.id)
+      ? [
+        '',
+        `${next.id} Acceptance Criteria:`,
+        ...manifestById.get(next.id).acceptance_criteria.map(id => `  - ${id}: ${context.criteria.get(id) || ''}`),
+      ]
+      : []),
+    '',
+    ...orientationLines(state, next),
+    ...(command ? [`Command: ${command}`] : []),
   ];
 }
 
@@ -259,9 +383,8 @@ function autoRuntime() {
   try { return resolveRuntime('auto', {}); } catch { return null; }
 }
 
-// A draft was write-only: it printed once when it was drafted and no command read it back, so a skipped
-// pass condition stayed invisible until submission refused on it — and re-drafting the finding looked like
-// the only way forward, which is how one slice ends up holding two drafts of the same claim.
+// A draft was write-only: it printed once when it was drafted and no command read it back, so a human
+// could not see what they had gathered before spending a submission on it.
 function draftLines(drafts) {
   if (drafts.length === 0) return [];
   const lines = [''];
@@ -269,14 +392,19 @@ function draftLines(drafts) {
     lines.push(`Drafted findings for ${draft.review_slice_id} — ${draft.findings.length} not yet submitted:`);
     for (const [index, finding] of draft.findings.entries()) {
       lines.push(`  ${index + 1}. ${finding.evidence?.path}:${finding.evidence?.line_start}  ${finding.claim}`);
-      lines.push(finding.pass_condition
-        ? `     passes when: ${finding.pass_condition}`
-        : `     passes when: NOT STATED — pair-loop finding --slice ${draft.review_slice_id} --index ${index + 1} --pass-condition "<observable state>"`);
+      // Only where one was worth typing. Defaulting it to the claim printed every finding twice under two
+      // headings and reported nothing the line above it had not already said.
+      if (finding.pass_condition) lines.push(`     passes when: ${finding.pass_condition}`);
     }
+    // A refusal that names no way out is the dead end this loop has been bitten by repeatedly. A stale
+    // draft can never be submitted, so the only thing left to do with it is drop it — and until that was
+    // said here, the line reported an orphan every single time status ran and offered nothing.
     if (draft.stale) {
-      lines.push(`  This draft can no longer be submitted: ${draft.stale_reason}.`);
-    } else if (draft.unstated_count > 0) {
-      lines.push(`  Submission is refused until ${draft.unstated_count} pass condition(s) are stated.`);
+      lines.push(
+        `  This draft can no longer be submitted: ${draft.stale_reason}.`,
+        `  Drop it (this is the only copy, and dropping reaches nothing already recorded):`,
+        ...draft.findings.map((_finding, index) => `    pair-loop finding --slice ${draft.review_slice_id} --index ${index + 1} --drop`),
+      );
     } else {
       lines.push(`  Submit as one Review Outcome: pair-loop finding --slice ${draft.review_slice_id} --submit`);
     }
@@ -284,21 +412,75 @@ function draftLines(drafts) {
   return lines;
 }
 
+// A run that failed left the Review Slice exactly where it was, so status described a state identical to the
+// one before it and named the same command again. A human who had just done what they were told saw nothing
+// change and concluded the loop was broken rather than that a run had died — and a transient API overload is
+// the most likely way for one to die. Only the most recent invocation is reported: an older failure that the
+// next run already recovered from is history, not a warning.
+function failedRunLines(state) {
+  const recent = state.recent_invocations || [];
+  const last = recent[recent.length - 1];
+  if (!last?.failed) return [];
+  return [
+    '',
+    `The last run did not finish: ${last.kind || 'run'}${last.review_slice_id ? ` on ${last.review_slice_id}` : ''} failed.`,
+    `  ${last.error || 'no reason recorded'}`,
+    // The budget question is the first one a human asks here and the one they cannot answer from the state:
+    // correction_count only advances on a run that produced a checkpoint.
+    '  A run that produced no checkpoint spent no correction, so the Command above is unchanged and costs',
+    '  nothing extra to retry. If the reason given looks transient, running it again is the whole fix.',
+  ];
+}
+
+// State is written once, at the end of a run, so everything below this block describes the world as it was
+// before the dispatch started. Live that read as an idle loop: a paused correction left status printing
+// "Pair ready" and "Next: run one human-valid correction" for forty minutes while its verification tree sat
+// stopped, and the human went looking for the checkpoint diff a paused run cannot have written.
+function dispatchLines(owner) {
+  if (!owner) return [];
+  if (!owner.paused) {
+    return [
+      `A run of this Work has been in flight since ${owner.at} (pid ${owner.pid}).`,
+      '  Everything below is the state from before it started. pair-loop dispatch status shows its processes.',
+      '  pair-loop interrupt stops the attempt without spending a correction; then steer it and run again.',
+      '',
+    ];
+  }
+  return [
+    `This Work's run is PAUSED — dispatched ${owner.at} (pid ${owner.pid}), stopped, and holding the lease.`,
+    '  It will not finish and no other run can start until it is continued.',
+    '  The state below predates the paused run, so its Next and Command lines are stale.',
+    '  pair-loop dispatch continue     (or pair-loop dispatch stop to abandon it)',
+    '',
+  ];
+}
+
+function warmSessionLines(next) {
+  const warm = next?.warm_session;
+  if (!warm?.session_id) return [];
+  const steering = next.steering_bytes ? `; ${next.steering_bytes} bytes of human steering waiting` : '';
+  return [`Session: warm, ${warm.calls} call(s), ~${warm.context_tokens} tokens of context${steering}`];
+}
+
 function printStatus(state, json = false, root = null) {
   const drafts = root ? humanFindingDrafts(root, state.work_id) : [];
+  const dispatch = root ? dispatchOwner(root, state.work_id) : null;
   if (json) {
     // A projection, not persisted state: drafts live as files per Review Slice, and status is where every
     // reader — including the editor adapter — already looks for what is waiting on the human.
-    console.log(JSON.stringify({ ...state, human_finding_drafts: drafts }, null, 2));
+    console.log(JSON.stringify({ ...state, human_finding_drafts: drafts, dispatch }, null, 2));
     return;
   }
   const active = state.slices.find(slice => !['queued', 'accepted'].includes(slice.status));
   const next = active || state.slices.find(slice => slice.status === 'queued');
   const baseline = root ? knownFailures(root, state.work_id) : [];
   const adjudication = resolveAdjudication(root, state, next);
-  const command = adjudication ? null : nextCommand(state, next);
+  // A dispatch already holds the lease, so the next command would be refused: naming it invites the human
+  // to run the one thing that cannot work.
+  const command = adjudication || dispatch ? null : nextCommand(state, next);
   const runtime = autoRuntime();
   console.log([
+    ...dispatchLines(dispatch),
     // Set only by a run that repaired a stale projection. Without it, that run is indistinguishable from
     // one that dispatched a coding session and produced nothing — which sends a human hunting for a diff
     // that was never written.
@@ -319,11 +501,16 @@ function printStatus(state, json = false, root = null) {
     // fact from a Review Outcome's reviewer.runtime, so a preference that failed to apply — an env var that
     // never reached the editor — looked identical to one that did.
     ...(runtime ? [`Runtime: ${runtime} (auto)`] : []),
+    // Whether the next run continues the session that wrote this slice or starts one over is the
+    // difference between a two-minute round and a twenty-minute one, and it was only discoverable after
+    // the fact from the invocation journal.
+    ...warmSessionLines(next),
     `Next: ${state.next_action || 'none'}`,
     ...(command ? [`Command: ${command}`] : []),
     ...(baseline.length > 0 ? [`Known Failure Baseline: ${baseline.length} test(s) declared pre-existing`] : []),
     ...(adjudication ? ['', ...adjudicationLines(next.id, adjudication)] : []),
     ...(state.lifecycle === 'blocked' ? blockedLines(state, dirtyWorktreePaths(state)) : []),
+    ...failedRunLines(state),
     ...draftLines(drafts),
     '',
     ...orientationLines(state, next),
@@ -349,6 +536,9 @@ function printVerification(report) {
   }
   if (report.status !== 0 && report.introduced_failing_tests.length === 0 && report.failing_tests.length === 0) {
     lines.push('No test identity was parsed from the output, so nothing can be baselined; the failure stands.');
+  }
+  if (report.introduced_warnings.length > 0) {
+    lines.push(`New warnings (${report.introduced_warnings.length}, this Work owns these): ${report.introduced_warnings.join(', ')}`);
   }
   if (report.diagnostic) lines.push(`Diagnostic: ${report.diagnostic}`);
   if (report.checkpoint_created) lines.push(`Checkpoint created without spending the correction: ${report.checkpoint_commit}`);
@@ -437,8 +627,36 @@ function dirtyWorktreePaths(state) {
 
 function blockedLines(state, dirtyPaths = []) {
   const lines = ['', `Blocked: ${state.blocked_reason || 'no reason recorded'}`];
-  if (state.blocked_precondition !== DIRTY_WORKTREE_PRECONDITION) return lines;
-  const slice = state.slices.find(item => item.status === 'blocked');
+  const blocked = (state.slices || []).find(item => item.status === 'blocked');
+  if (state.blocked_precondition !== DIRTY_WORKTREE_PRECONDITION) {
+    // nextCommand returns null for a blocked lifecycle, so without this the state that most needs a command
+    // is the one state that names none. The exhausted correction is the likeliest block in the whole loop —
+    // the budget is one deep, so any second valid finding lands here — and it has two real ways out, neither
+    // of which is guessable from "human correction required".
+    if (blocked && blocked.correction_count >= 1 && blocked.review_outcome_id) {
+      lines.push(
+        'The one bounded correction is spent and a finding is still dispositioned valid. Nothing here is lost:',
+        'the checkpoint and its verification stand. Read them again before choosing:',
+        `  pair-loop show --slice ${blocked.id}`,
+        'Then either grant one more bounded correction, saying why it is warranted:',
+        `  pair-loop unblock --reason "<why a second correction is warranted>"   (resumes ${blocked.id} at correction-ready)`,
+        // Steering after unblocking, not before: a Correction Direction recorded outside the correction-ready
+        // window is admitted but logged as a human override, and there is no reason to spend one here.
+        `  pair-loop direct --text "<intent>"   (then steer the retry, in-window so it records no override)`,
+        'Or accept the checkpoint with the finding left open, which is the honest choice when the finding is',
+        'hygiene rather than behaviour, and say so on the record:',
+        `  pair-loop accept --slice ${blocked.id} --override --reason "<why this ships with the finding open>"`,
+      );
+      return lines;
+    }
+    lines.push(
+      'Clearing a block is a recorded human decision, and it resumes the Review Slice where the block',
+      'interrupted it rather than as a fresh attempt:',
+      `  pair-loop unblock --reason "<evidence>"`,
+    );
+    return lines;
+  }
+  const slice = blocked;
   const resumesInto = slice?.blocked_from || 'queued';
   lines.push(
     `The Pair worktree holds ${dirtyPaths.length} uncommitted change(s). A Review Slice must start from a clean tree,`,
@@ -457,6 +675,33 @@ function blockedLines(state, dirtyPaths = []) {
   return lines;
 }
 
+// A Review Slice at design-ready has a Design Check and no checkpoint, and this view was written for one
+// that has both: it printed `git diff <base> null` and closed by naming `pair-loop accept`, which refuses
+// with "not awaiting human acceptance". Two commands that cannot run, offered to someone who came here to
+// read a document. What exists is what gets named.
+function evidenceDiffLine(evidence, short) {
+  if (!evidence.checkpoint_commit) {
+    return 'Whole slice:     no checkpoint yet — this Review Slice has not committed one, so there is no diff to read.';
+  }
+  return `Whole slice:     git -C ${evidence.worktree} diff ${short(evidence.base_commit)} ${short(evidence.checkpoint_commit)}`;
+}
+
+function evidenceClosingLines(evidence) {
+  if (evidence.status === 'awaiting-human-review') {
+    return ['', `Accept with: pair-loop accept --slice ${evidence.review_slice_id}`];
+  }
+  if (!evidence.checkpoint_commit) {
+    // acceptSlice records checkpoint_commit, so accepting here would record an acceptance no diff backs —
+    // structurally refused, not policy. Naming it would be naming the one command guaranteed to fail.
+    return ['', `Nothing to accept yet: ${evidence.review_slice_id} has no checkpoint. pair-loop run is what produces one.`];
+  }
+  return [
+    '',
+    `${evidence.review_slice_id} is ${evidence.status}, so plain accept is refused. To accept this checkpoint anyway, on the record:`,
+    `  pair-loop accept --slice ${evidence.review_slice_id} --override --reason "<why this is done>"`,
+  ];
+}
+
 function printEvidence(evidence) {
   const short = commit => (commit ? commit.slice(0, 10) : null);
   const lines = [
@@ -466,10 +711,19 @@ function printEvidence(evidence) {
     'Acceptance Criteria:',
     ...evidence.acceptance_criteria.map(item => `  ${item.id}: ${item.text}`),
     '',
-    `Whole slice:     git -C ${evidence.worktree} diff ${short(evidence.base_commit)} ${short(evidence.checkpoint_commit)}`,
+    evidenceDiffLine(evidence, short),
   ];
   if (evidence.prior_checkpoint_commit) {
     lines.push(`Correction only: git -C ${evidence.worktree} diff ${short(evidence.prior_checkpoint_commit)} ${short(evidence.checkpoint_commit)}`);
+    const shape = evidence.correction_shape;
+    if (shape) {
+      lines.push(`  That correction changed ${shape.file_count} file(s), ${shape.hunk_count} hunk(s), +${shape.lines_added}/-${shape.lines_removed}.`);
+      // Said here because the cumulative diff is the one a human opens first and it cannot answer this: a file
+      // the slice created is a single added block in base..checkpoint, so an edit inside it is not a delta
+      // there at all. Observed live: 9 renamed tests in a file the slice added read as "no new changes".
+      lines.push('  The whole-slice diff above cannot show this if the slice created the file — there it is one');
+      lines.push('  added block, and an edit inside it is not a delta. Use the correction-only diff to see it.');
+    }
   }
   if (evidence.architecture_risk) lines.push('', `Architecture Risk: ${evidence.architecture_risk}`);
   if (evidence.design_check) lines.push('', 'Design Check:', ...evidence.design_check.split('\n').map(line => `  ${line}`));
@@ -498,23 +752,17 @@ function printEvidence(evidence) {
     );
   }
   lines.push(...printUnattributed(evidence));
-  lines.push('', `Accept with: pair-loop accept --slice ${evidence.review_slice_id}`);
+  lines.push(...evidenceClosingLines(evidence));
   console.log(lines.join('\n'));
 }
 
-// The draft is the only place a missing pass condition is still fixable cheaply, so it is printed with
-// the gap visible rather than discovered at submission.
+// The draft is the mutable half of review, so it is printed back after every gesture that changes it.
 function printDraft(sliceId, findings) {
   for (const [index, finding] of findings.entries()) {
     console.log(`  ${index + 1}. ${finding.evidence.path}:${finding.evidence.line_start}  ${finding.claim}`);
-    console.log(finding.pass_condition
-      ? `     passes when: ${finding.pass_condition}`
-      : `     passes when: NOT STATED — pair-loop finding --slice ${sliceId} --index ${index + 1} --pass-condition "<observable state>"`);
+    if (finding.pass_condition) console.log(`     passes when: ${finding.pass_condition}`);
   }
-  const unstated = findings.filter(finding => !finding.pass_condition).length;
-  console.log(unstated > 0
-    ? `Submission is refused until ${unstated} pass condition(s) are stated.`
-    : `Submit them as one Review Outcome: pair-loop finding --slice ${sliceId} --submit`);
+  console.log(`Submit them as one Review Outcome: pair-loop finding --slice ${sliceId} --submit`);
 }
 
 function help() {
@@ -523,6 +771,8 @@ function help() {
   pair-loop open --work <id> [--spec .pair/spec.md] [--manifest .pair/review-slices.json]
   pair-loop run [--runtime auto] [--review-policy architecture|sample|all|off]
   pair-loop status [--json]
+  pair-loop digest                                 (compact Work orientation — slices, ACs, next command — without reading spec.md)
+  pair-loop explain [<state>]                       (what each Review Slice state is for, and why the arc skips most of them)
   pair-loop show [--slice <id>] [--json]
   pair-loop verify [--slice <id>] [--json]
   pair-loop baseline list [--json]
@@ -531,11 +781,18 @@ function help() {
   pair-loop accept --slice <id> [--override --reason <evidence>]
   pair-loop finding --slice <id> --file <path> --line <n> --text <what is wrong>
                                  [--pass-condition <observable state>] [--severity BLOCKER|MAJOR]
+                                 [--allow-same-anchor]  (a second concern on lines already drafted)
+  pair-loop finding --slice <id> [--index <n>] --text <the claim, reworded>
+                                                  (rewords an already-drafted finding in place)
   pair-loop finding --slice <id> [--index <n>] --pass-condition <observable state>
-                                                  (states the remedy for an already-drafted finding)
+                                                  (optional: names the done-ness of an already-drafted finding)
+  pair-loop finding --slice <id> [--index <n>] --drop
+                                                  (retracts a drafted finding, before it is recorded)
   pair-loop finding --slice <id> --submit          (records the drafted findings as one Review Outcome)
   pair-loop unblock --reason <evidence>
   pair-loop direct --text <text> [--slice <id>]
+  pair-loop interrupt                              (stops the attempt in flight; spends no correction)
+  pair-loop steer --text <text> [--slice <id>]     (a human turn in the session carrying this slice, up to 8 KiB)
   pair-loop feedback --finding <id> --disposition valid|false-positive|not-worth-fixing|missing-context --reason <text>
   pair-loop reconcile [--slice <id>]               (re-derives status from recorded Review Feedback)
   pair-loop dispatch status|pause|continue|stop     (control the run that is in flight)
@@ -549,13 +806,22 @@ function help() {
 Bare pair-loop means run. Runtime Work/spec/review evidence stays in Git common directory; product branch receives code only.
 show assembles the checkpoint diffs, Design Check, Correction Direction, and adjudicated findings a human acceptance rests on.
 verify re-runs the declared verification and spends no correction; at correction-ready a clean run checkpoints the slice.
-baseline declares a test as already failing before this Work, so its failure never counts as this Work's failure.`);
+baseline declares a test as already failing before this Work, so its failure never counts as this Work's failure.
+interrupt and steer act on the warm implementation session a slice carries; reviews are always fresh sessions.
+digest — compact Work orientation (slices, ACs, next command) without reading spec.md.`);
 }
 
 function main(argv = process.argv.slice(2)) {
   let options;
   try { options = parseArgs(argv); } catch (error) { fail(error.message); return; }
   if (options.command === 'help') { help(); return; }
+  // Beside help, and before a repository is resolved: the arc is a property of the reducer, not of any one
+  // Work, so the question "what is this state for" must be answerable from anywhere — including from a
+  // human who is reading about the loop rather than standing in it.
+  if (options.command === 'explain') {
+    try { console.log(explainLines(options.subcommand).join('\n')); } catch (error) { fail(error.message); }
+    return;
+  }
   let root;
   try { root = repositoryRoot(process.cwd()); } catch (error) { fail(error.message); return; }
   try {
@@ -574,6 +840,13 @@ function main(argv = process.argv.slice(2)) {
     }
     if (options.command === 'status') {
       printStatus(selectedState(root, options), options.json, root);
+      return;
+    }
+    if (options.command === 'digest') {
+      const state = selectedState(root, options);
+      const context = workContext(root, state);
+      const next = activeSlice(state, context)?.projected;
+      console.log(digestLines(state, context, next).join('\n'));
       return;
     }
     if (options.command === 'show') {
@@ -623,20 +896,42 @@ function main(argv = process.argv.slice(2)) {
         const recorded = submitHumanFindings(root, options);
         console.log(`Submitted ${recorded.outcome.findings.length} human finding(s) as ${recorded.outcome.review_outcome_id}`);
         for (const finding of recorded.outcome.findings) console.log(`  ${finding.finding_id}  ${finding.severity}  ${finding.claim}`);
-        printStatus(currentState(root, options.workId || null), options.json, root);
+        // The submit IS the input, so the correction runs on it. Said out loud because a gesture that
+        // silently spends the one correction is worse than one that asks.
+        const dispatched = dispatchCorrectionOnSubmit(root, { ...options, sliceId: recorded.outcome.review_slice_id });
+        if (dispatched.dispatched) console.log('The correction ran on this submission. Set dispatch_correction_on_submit: false in ~/.config/pair/config.json to keep the explicit run.');
+        printStatus(dispatched.state, options.json, root);
         return;
       }
-      // Stating the remedy for a finding already drafted, so a submission refused for a missing pass
-      // condition is completed in place instead of re-drafted into a duplicate.
-      if (options.passCondition && !options.file && !options.text && !options.claim) {
+      // Retracting a drafted finding. Confined to the draft — the mutable half — so a duplicate never has
+      // to be submitted and dispositioned away, which would write it into the immutable record and into the
+      // Review Guidance bank that learns from it.
+      if (options.drop) {
+        const remaining = dropHumanFindingDraft(root, options);
+        console.log(`Dropped drafted finding for ${remaining.sliceId}: ${remaining.dropped.claim}`);
+        if (remaining.findings.length === 0) console.log(`No drafted findings remain for ${remaining.sliceId}.`);
+        else printDraft(remaining.sliceId, remaining.findings);
+        return;
+      }
+      // An --index with no --file names a finding already drafted, so a claim that ran past the bound or
+      // simply came out wrong is reworded in place instead of dropped and retyped from memory.
+      if (options.text && !options.file) {
+        const amended = amendHumanFinding(root, { ...options, claim: options.text });
+        console.log(`Reworded drafted finding ${amended.index} for ${amended.sliceId}.`);
+        printDraft(amended.sliceId, amended.findings);
+        return;
+      }
+      // Naming the done-ness of a finding already drafted. Optional — an unstated pass condition is absent
+      // rather than an echo of the claim — so this is for the finding that earns a separate sentence.
+      if (options.passCondition && !options.file && !options.text) {
         const amended = setHumanFindingPassCondition(root, options);
         console.log(`Drafted finding ${amended.index} for ${amended.sliceId} passes when: ${amended.findings[amended.index - 1].pass_condition}`);
         printDraft(amended.sliceId, amended.findings);
         return;
       }
       if (!options.file || !Number.isInteger(options.lineStart)) throw new Error('finding requires --file and --line');
-      if (!options.text && !options.claim) throw new Error('finding requires --text');
-      const drafted = recordHumanFinding(root, { ...options, claim: options.claim || options.text });
+      if (!options.text) throw new Error('finding requires --text');
+      const drafted = recordHumanFinding(root, { ...options, claim: options.text });
       console.log(`Drafted ${drafted.findings.length} finding(s) for ${drafted.sliceId} — not recorded yet.`);
       printDraft(drafted.sliceId, drafted.findings);
       return;
@@ -666,11 +961,13 @@ function main(argv = process.argv.slice(2)) {
       if (action === 'status') {
         console.log(`A dispatch has been running since ${owner.at} (pid ${owner.pid}).`);
         console.log(`Processes: ${processTree(owner.pid).join(', ')}`);
-        console.log('pair-loop dispatch pause | continue | stop');
+        console.log('pair-loop dispatch pause | continue | stop, or pair-loop interrupt to end the attempt and keep its session');
         return;
       }
-      // `continue`, not `resume`: this loop deliberately forbids the vocabulary of session reuse, and
-      // SIGCONT is what actually happens. A paused process is continued; a session is never resumed.
+      // `continue`, not `resume`, because these act on the OS process rather than the model session, and
+      // the two now both exist: `pair-loop steer` resumes the session, `dispatch continue` sends SIGCONT
+      // to a process that was stopped. Naming them the same would conflate a paused pipe with a warm
+      // conversation, which are recovered in completely different ways.
       const signals = { pause: 'SIGSTOP', continue: 'SIGCONT', stop: 'SIGTERM' };
       if (!signals[action]) throw new Error(`dispatch takes status, pause, continue, or stop — not ${action}`);
       const result = signalDispatch(root, selectedState(root, options).work_id, signals[action]);
@@ -694,9 +991,48 @@ function main(argv = process.argv.slice(2)) {
       printStatus(recordCorrectionDirection(root, options), options.json, root);
       return;
     }
+    // Stopping the attempt without ending the session that made it. The provider is signalled, this
+    // process is not: the run it owns notices the child died by signal and records the attempt as
+    // interrupted-by-human, which spends no correction and blocks nothing.
+    if (options.command === 'interrupt') {
+      const state = selectedState(root, options);
+      const result = signalDispatchChildren(root, state.work_id, 'SIGINT');
+      if (!result || result.signalled.length === 0) {
+        console.log('No provider session is in flight for this Work, so there is nothing to interrupt.');
+        return;
+      }
+      console.log(`Interrupted ${result.signalled.length} provider process(es): ${result.signalled.join(', ')}`);
+      console.log('The attempt ends as interrupted-by-human: no correction is spent and the Work stays ready.');
+      console.log('Edits already made stay in the worktree, and the next run picks them up rather than blocking on them.');
+      console.log('Add direction before continuing: pair-loop steer --text "<what to do differently>"');
+      return;
+    }
+    // A human message into the session that is already carrying this slice. Unlike `direct` it is not
+    // bounded to one correction and not reflowed, and it dispatches immediately when the Work is ready.
+    if (options.command === 'steer') {
+      if (!options.text) throw new Error('steer requires --text');
+      const steered = steerWarmSession(root, options);
+      console.log(`Steering recorded for ${steered.review_slice_id}.`);
+      // Said plainly, because this gesture spends a session. Reading "recorded" and discovering
+      // afterwards that a full coding session ran on it is the worst version of this command.
+      if (steered.dispatched) {
+        console.log(steered.warm_session
+          ? 'It ran as a turn in the warm session already carrying this slice.'
+          : 'This slice holds no warm session, so it ran as a fresh session carrying the full package.');
+      } else {
+        console.log('Not dispatched: this Work is waiting on a human, so the text is spent by whichever attempt runs next.');
+      }
+      printStatus(steered.state, options.json, root);
+      return;
+    }
     if (options.command === 'feedback') {
       if (!options.findingId || !options.disposition || !options.reason) throw new Error('feedback requires --finding, --disposition, and --reason');
-      printStatus(adjudicateFinding(root, options), options.json, root);
+      adjudicateFinding(root, options);
+      // Closing the last finding on a valid verdict IS the instruction to fix it. Dispatched here, at the
+      // gesture, rather than inside the reducer: recording a row must never spend a model session.
+      const dispatched = dispatchCorrectionOnSubmit(root, options);
+      if (dispatched.dispatched) console.log('That closed adjudication with a valid finding, so the correction ran on it.\n');
+      printStatus(dispatched.state, options.json, root);
       return;
     }
     if (options.command === 'hydrate') {
@@ -757,4 +1093,4 @@ function main(argv = process.argv.slice(2)) {
 
 if (require.main === module) main();
 
-module.exports = { adjudicationLines, blockedLines, evaluationSummary, main, nextCommand, orientationLines, parseArgs, printBaseline, printEvidence, printStatus, printVerification, workIdFromSpec };
+module.exports = { SLICE_ARC, adjudicationLines, blockedLines, digestLines, dispatchLines, evaluationSummary, evidenceClosingLines, evidenceDiffLine, explainLines, failedRunLines, main, nextCommand, orientationLines, parseArgs, printBaseline, printEvidence, printStatus, printVerification, workIdFromSpec };

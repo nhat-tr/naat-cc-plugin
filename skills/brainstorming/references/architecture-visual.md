@@ -1,6 +1,6 @@
 # Architecture Visual Interview
 
-Use this bounded runbook for a new Architecture Canvas. Do not read `visual-companion.md`, JSON schemas, generated Visual Shell assets, or renderer source on the normal path.
+Use this bounded runbook for a new Architecture Canvas. Do not read `visual-companion.md`, schemas, or generated shell assets on the normal path.
 
 ## Operating Budget
 
@@ -11,7 +11,7 @@ Use this bounded runbook for a new Architecture Canvas. Do not read `visual-comp
 
 ## Author The Draft
 
-Write one Architecture Draft under `$CLAUDE_SCRATCH_DIR/<repo>/brainstorm/`. It contains intent-owned facts only: Work ID, title, Evidence References, ownership boundaries, typed nodes and ports, edges, Scenario Paths, and optional Decisions.
+Write one Architecture Draft under `$CLAUDE_SCRATCH_DIR/<repo>/brainstorm/` with intent-owned facts only: Work ID, title, Evidence References, boundaries, typed nodes and ports, edges, Scenario Paths, and optional Decisions.
 
 Use this complete compact grammar; fields not listed are rejected:
 
@@ -19,9 +19,9 @@ Use this complete compact grammar; fields not listed are rejected:
 |---|---|---|
 | Every `id` | 1-120 characters, lower kebab case (`service-api`) | Evidence IDs use `EVD-name` |
 | Boundary | `id`, `label` | `parent_id` |
-| Node | `id`, `label`, `owner_id`, `ports` | `type`: `adapter`, `artifact`, `data_store`, `external_system`, `interface`, `service`, or `worker`; `modes`: `current`/`proposed`; `change`: `added`/`modified`/`removed`/`unchanged`; `points`: up to 6 short claims |
+| Node | `id`, `label`, `owner_id`, `ports` | `type`: `adapter`, `artifact`, `data_store`, `external_system`, `interface`, `service`, or `worker`; `modes`: always an array — `["current"]`, `["proposed"]`, or both; `change`: `added`/`modified`/`removed`/`unchanged`; `points`: up to 6 short claims |
 | Port | `id`, `label`, `direction`: `input`/`output`, `kind`, `protocol` | none |
-| Edge | `id`, `label`, `source`, `target` | `type`: `command`, `control`, `data`, `event`, or `evidence`; `modes` |
+| Edge | `id`, `label`, `source`, `target` | `type`: `command`, `control`, `data`, `event`, or `evidence`; `modes` (array, as on nodes) |
 | Scenario | `id`, `label`, `description`, both mode paths | none |
 | Decision | `id`, `title`, 2-5 Options | `multiselect` |
 
@@ -65,17 +65,18 @@ Use this complete compact grammar; fields not listed are rejected:
 
 Do not add `version`, `workspace_kind`, `revision`, `frames`, `components`, `component_id`, layout, camera, focus, annotation, feedback, HTML, or style fields. The compiler derives and validates them.
 
-## Present And Revise
+## Validate, Then Present
 
-Start the verified v2 Visual Session directly from the Draft:
+`validate` runs the same compiler, semantic, and ELK checks without a server — most first-present failures (broken scenario walks, non-array `modes`) die here for one cheap retry:
 
 ```bash
+node <skill-dir>/scripts/visual-session.cjs validate --draft <architecture-draft.json>
 node <skill-dir>/scripts/visual-session.cjs present --draft <architecture-draft.json>
 ```
 
-This path does not require scaffold, start, or migrate. Keep the command in the foreground. `elk_preflight.status="ready"` proves the pinned layout engine produced finite geometry; it does not prove the Visual Shell rendered. Share `connection_url` only after browser control confirms `data-layout-status="ready"` and at least one visible Architecture node.
+This path does not require scaffold, start, or migrate. **The first `present` becomes the server and does not exit** — run it via the harness background-command mechanism and retain the handle; a blocking foreground `present` dies at the ~2-minute shell timeout. A live session makes later `present`/`publish` quick foreground calls that reuse it in place. `elk_preflight.status="ready"` proves finite layout geometry, not a rendered shell — share `connection_url` only after browser control confirms `data-layout-status="ready"` and one visible node.
 
-After feedback, edit the same Draft while preserving stable IDs, then publish it without manual Revision work:
+After feedback, apply targeted edits to the same Draft preserving stable IDs, validate, then publish without manual Revision work:
 
 ```bash
 node <skill-dir>/scripts/visual-session.cjs publish --draft <architecture-draft.json>
@@ -83,10 +84,8 @@ node <skill-dir>/scripts/visual-session.cjs publish --draft <architecture-draft.
 
 ## Receive Feedback
 
-`feedback_delivery.mechanism` is `background_wait`; `wait_receiver: not_listening` means no wait has bound to the store yet.
-
-Run one `visual-session.cjs wait --timeout-ms <ms>` **as a background task** and end your turn; when the user submits feedback the wait exits and you are re-invoked automatically. Use `drain` only for an explicit synchronous check. Do not poll status on a timer, start a second model, or ask the user to type in the terminal.
+Run one `visual-session.cjs wait --timeout-ms <ms>` **as a background task** and end your turn; when the user submits feedback the wait exits and you are re-invoked automatically (`wait_receiver: not_listening` in status just means no wait is bound yet). Use `drain` only for an explicit synchronous check. Do not poll status on a timer, start a second model, or ask the user to type in the terminal.
 
 ## Recovery
 
-Only on failure, read the relevant recovery range in `visual-companion.md`. A render-preflight failure preserves the previous Visual Document. Do not simplify topology blindly; use the phase-specific compiler, semantic, or ELK error.
+On failure only, read the recovery range in `visual-companion.md`. A render-preflight failure preserves the previous Visual Document; fix the phase-specific compiler, semantic, or ELK error rather than blindly simplifying topology.

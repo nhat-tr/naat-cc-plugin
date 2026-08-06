@@ -12,6 +12,7 @@ const {
   ensureBrainstormingRegistration,
   formatFreshnessProjection,
   freshnessProjection,
+  mergeBrainstormCheckpointDelta,
   readAgentConversationHandover,
   readAgentConversationHandoverForAdoption,
   readAgentConversationRegistry,
@@ -179,8 +180,11 @@ function recordBrainstormCheckpoint(root, options, input = null) {
   const checkpoint = readCheckpointInput('--brainstorm-checkpoint', input);
   if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) throw new Error('--brainstorm-checkpoint requires one JSON object');
   validateAgentConversationCheckpointInput(checkpoint);
-  registerAgentConversation(root, { runtime, agentConversationId: identity.agentConversationId, kind: 'brainstorming' });
-  return updateAgentConversationCheckpoint(root, { runtime, agentConversationId: identity.agentConversationId, kind: 'brainstorming', checkpoint });
+  const registered = registerAgentConversation(root, { runtime, agentConversationId: identity.agentConversationId, kind: 'brainstorming' });
+  // Deltas suffice: stable fields merge cumulatively with the registered checkpoint engine-side,
+  // so a refresh never has to restate earlier findings, choices, or the Core Anchor.
+  const merged = mergeBrainstormCheckpointDelta(registered.checkpoint, checkpoint);
+  return updateAgentConversationCheckpoint(root, { runtime, agentConversationId: identity.agentConversationId, kind: 'brainstorming', checkpoint: merged });
 }
 
 function recordConversationCheckpoint(root, options, input = null) {

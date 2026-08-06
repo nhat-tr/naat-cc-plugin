@@ -112,6 +112,10 @@ function operate(root, operation, input) {
       review_slice_status: slice?.status || null,
       lifecycle: state.lifecycle,
       next_action: state.next_action,
+      // Reported rather than done here. The correction is a full provider session, and this adapter is
+      // called synchronously from the editor — dispatching inside it would freeze the editor for the
+      // length of a coding session. The editor kicks off `pair-loop run` itself when it sees this.
+      correction_dispatch_ready: state.lifecycle === 'ready' && slice?.status === 'correction-ready',
     };
   }
   if (operation === 'guidance') {

@@ -16,6 +16,7 @@ This file covers: NUnit structure, Testcontainers-based integration testing, Web
 - [Container Reuse Across Runs](#container-reuse-across-runs)
 - [Podman Compatibility](#podman-compatibility)
 - [When to Use Aspire.Hosting.Testing Instead](#when-to-use-aspirehostingtesting-instead)
+- [Architecture Fitness Tests](#architecture-fitness-tests)
 - [Common Pitfalls](#common-pitfalls)
 
 ## Test Naming and Structure
@@ -265,6 +266,8 @@ Port conflicts aren't an issue — Testcontainers binds to random high ports. CP
 
 ## Container Reuse Across Runs
 
+> Reuse must be enabled on the actual runner: either `TESTCONTAINERS_REUSE_ENABLE=true` (env) or `testcontainers.reuse.enable=true` in `~/.testcontainers.properties`. Without it — combined with Ryuk disabled (see § Podman Compatibility) — every run leaks a fresh container: neither reaped nor reused.
+
 For local dev, reuse containers across `dotnet test` invocations to skip the 2–5s startup per run. Off by default (shared state is a footgun in CI).
 
 ```csharp
@@ -369,3 +372,54 @@ Aspire internally orchestrates containers for declared resources — no separate
 - **EnsureCreated is a trap for integration tests.** Always `MigrateAsync`. If migrations are slow, bake a pre-migrated image in CI or use container reuse locally.
 - **Unhandled container leaks on Podman.** If Ryuk is disabled, add a CI post-step to `podman rm -f` any leftover testcontainers-labelled containers.
 - **Test host port conflicts.** `WebApplicationFactory` binds to a random port by default — don't hardcode ports in test URLs. Use `factory.Server.BaseAddress` or the `HttpClient` base address.
+
+## Architecture Fitness Tests
+
+Class-scoped rules ("no X anywhere") die as prose and survive as tests — a recurring defect class in mined sessions was closed only when a fitness test made it un-shippable. Pure reflection, no extra package:
+
+```csharp
+[UnitTest]
+public sealed class ArchitectureFitnessTests
+{
+    private static readonly Assembly[] _productionAssemblies =
+    [
+        typeof(Program).Assembly,
+    ];
+
+    [Test]
+    public void Turn_state_flows_through_explicit_context_not_AsyncLocal()
+    {
+        var offenders = _productionAssemblies
+            .SelectMany(assembly => assembly.GetTypes())
+            .SelectMany(type => type.GetFields(BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+            .Where(field => field.FieldType.IsGenericType
+                && field.FieldType.GetGenericTypeDefinition() == typeof(AsyncLocal<>))
+            .Select(field => $"{field.DeclaringType!.FullName}.{field.Name}")
+            .ToList();
+
+        Assert.That(offenders, Is.Empty,
+            "Request/turn state must be passed via an explicit context object, never AsyncLocal. Offenders: " + string.Join(", ", offenders));
+    }
+
+    [Test]
+    public void Controllers_reach_data_through_services_not_DbContext()
+    {
+        var offenders = _productionAssemblies
+            .SelectMany(assembly => assembly.GetTypes())
+            .Where(type => typeof(ControllerBase).IsAssignableFrom(type))
+            .SelectMany(type => type.GetConstructors())
+            .SelectMany(ctor => ctor.GetParameters())
+            .Where(parameter => typeof(DbContext).IsAssignableFrom(parameter.ParameterType))
+            .Select(parameter => $"{parameter.Member.DeclaringType!.FullName}({parameter.ParameterType.Name})")
+            .ToList();
+
+        Assert.That(offenders, Is.Empty,
+            "Inject a service or query class instead of DbContext. Offenders: " + string.Join(", ", offenders));
+    }
+}
+```
+
+Pattern notes:
+- One test per banned pattern; the assertion message states the rule and names every offender.
+- Pre-existing violations: fix them first, or start the test with an explicit allowlist (`HashSet<string>` of known offenders) that may only shrink — the test fails when the list grows OR contains a name that no longer offends (stale entry).
+- The same shape enforces grep-able invariants that reflection can't see (e.g. `[Description]` accuracy): read the source files in the test and assert on the text.

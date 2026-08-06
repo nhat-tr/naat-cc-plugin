@@ -13,6 +13,9 @@ const {
   acceptHumanReview,
   adjudicateFinding,
   advanceWork,
+  amendHumanFinding,
+  correctionShape,
+  dropHumanFindingDraft,
   humanFindingDrafts,
   openWork,
   recordCorrectionDirection,
@@ -22,8 +25,8 @@ const {
   submitHumanFindings,
   unblockWork,
 } = require('../scripts/lib/pair-engine');
-const { readEvents, readState } = require('../scripts/lib/pair-store');
-const { listReviewOutcomes } = require('../scripts/lib/review-evidence');
+const { blobAtCommit, readEvents, readState } = require('../scripts/lib/pair-store');
+const { feedbackForFinding, listReviewOutcomes } = require('../scripts/lib/review-evidence');
 
 // Pair's guards were written as walls: accept refused unless awaiting-human-review, a Correction
 // Direction was admitted only at correction-ready, and an architecture-sensitive slice could not reach
@@ -49,6 +52,41 @@ function providerResult(output) {
     duration_ms: 5,
     runtime: 'codex', model: 'default', effort: 'medium',
   };
+}
+
+// A model finding anchored to the fixture's own checkpoint, for the cases that must keep telling a claim
+// awaiting a verdict apart from one that arrived with it.
+function modelFinding(root, overrides = {}) {
+  const state = readState(root);
+  const projected = state.slices[0];
+  const lineStart = overrides.lineStart || 1;
+  return {
+    severity: 'MAJOR',
+    claim: overrides.claim || 'The export is a bare literal with no lookup seam.',
+    scenario: 'A second composition root cannot obtain its own value.',
+    impact: 'Callers share one module-global value.',
+    pass_condition: overrides.passCondition || 'Two independent roots each observe their own value.',
+    evidence: {
+      commit: projected.checkpoint_commit,
+      path: 'value.js',
+      blob: blobAtCommit(state.worktree, projected.checkpoint_commit, 'value.js'),
+      line_start: lineStart,
+      line_end: overrides.lineEnd || lineStart,
+    },
+  };
+}
+
+// Adjudication is the question "is this claim real?", and only a model finding leaves it open — a human
+// finding arrives with the answer. So every case exercising adjudication mechanics, reconciliation, or the
+// correction a valid finding earns is staged from a model review rather than from a human draft.
+function awaitingFeedbackFixture(t, overrides = [{}]) {
+  const { root, worktree } = reviewReadyFixture(t);
+  advanceWork(worktree, { runtime: 'codex' }, {
+    runProvider: () => providerResult({ verdict: 'findings', findings: overrides.map(item => modelFinding(root, item)) }),
+  });
+  const state = readState(root);
+  const outcome = listReviewOutcomes(root, 'work-override').find(item => item.review_outcome_id === state.slices[0].review_outcome_id);
+  return { root, worktree, outcome, findings: outcome.findings };
 }
 
 // A Work whose only slice has a green checkpoint sitting at review-ready: the exact state the human
@@ -164,7 +202,7 @@ test('a human-authored finding drives the one correction exactly like a model fi
   assert.equal(outcome.findings.length, 1);
   assert.equal(outcome.reviewer.human, true, 'provenance distinguishes a human finding from a model one');
   assert.equal(outcome.findings[0].evidence.commit, readState(root).slices[0].checkpoint_commit);
-  assert.equal(readState(root).slices[0].status, 'awaiting-feedback', 'it enters the normal adjudication path');
+  assert.equal(readState(root).slices[0].status, 'correction-ready', 'it reaches the same one correction a model finding does');
 });
 
 test('a Correction Direction is admitted at any status so steering never waits for the reducer', t => {
@@ -199,7 +237,9 @@ test('a blocked Work is unblocked by a recorded human decision rather than by ha
 // draft and become exactly one Review Outcome on submit.
 test('findings gather in a draft and mint no Review Outcome until submitted', t => {
   const { root, worktree } = reviewReadyFixture(t);
-  const common = { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1 };
+  // The fixture repo is one line long, so every finding here anchors it. These are separate concerns about
+  // that line rather than re-drafts of one, which is exactly what allowSameAnchor declares.
+  const common = { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, allowSameAnchor: true };
 
   recordHumanFinding(worktree, { ...common, claim: 'The export is a bare literal with no lookup seam.' });
   recordHumanFinding(worktree, { ...common, claim: 'No timeout bounds the lookup.' });
@@ -211,7 +251,7 @@ test('findings gather in a draft and mint no Review Outcome until submitted', t 
 
 test('submitting a draft records exactly one Review Outcome carrying every finding', t => {
   const { root, worktree } = reviewReadyFixture(t);
-  const common = { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, passCondition: 'Two roots each observe their own value.' };
+  const common = { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, allowSameAnchor: true, passCondition: 'Two roots each observe their own value.' };
   recordHumanFinding(worktree, { ...common, claim: 'The export is a bare literal with no lookup seam.' });
   recordHumanFinding(worktree, { ...common, claim: 'No timeout bounds the lookup.' });
 
@@ -223,13 +263,13 @@ test('submitting a draft records exactly one Review Outcome carrying every findi
   assert.equal(outcomes[0].reviewer.human, true);
   const state = readState(root);
   assert.equal(state.slices[0].review_outcome_id, submitted.outcome.review_outcome_id);
-  assert.equal(state.slices[0].status, 'awaiting-feedback');
+  assert.equal(state.slices[0].status, 'correction-ready');
   assert.equal(listHumanFindingDraft(worktree, 'work-override', 'S1').length, 0, 'the draft is cleared by submission');
 });
 
 test('a human review is not capped at the three findings a model review is bounded to', t => {
   const { root, worktree } = reviewReadyFixture(t);
-  const common = { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, passCondition: 'Two roots each observe their own value.' };
+  const common = { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, allowSameAnchor: true, passCondition: 'Two roots each observe their own value.' };
   for (const claim of ['First concern.', 'Second concern.', 'Third concern.', 'Fourth concern.', 'Fifth concern.']) {
     recordHumanFinding(worktree, { ...common, claim });
   }
@@ -246,30 +286,229 @@ test('submitting nothing is refused rather than recording an empty review', t =>
   assert.throws(() => submitHumanFindings(worktree, { sliceId: 'S1' }), /no drafted finding/u);
 });
 
-// correctionPrompt tells the corrector to "make only the bounded correction that satisfies each pass
-// condition", so for a human finding the pass condition is the ONLY statement of done-ness it receives.
-// A fabricated placeholder — "the human who raised this confirms it is addressed" — is not falsifiable
-// by the corrector, which removes the bound from a bounded correction. The user's first real finding was
-// a performance one, where that placeholder named no number to hit.
-test('a finding stating no pass condition is refused at submission instead of given a placeholder', t => {
+// A pass condition was first a second prompt, then a copy of the claim. Both were the loop asking the human
+// to restate what they had already written: the copy printed every finding twice under two headings, once as
+// the claim and once as "passes when". A human raises the issue; working out what "addressed" looks like is
+// the correcting session's job, and the claim is what it has to go on. So a pass condition is optional, and
+// an unstated one is absent rather than an echo — stating one stays available for the finding that earns it.
+test('a finding with no stated pass condition records none rather than an echo of its claim', t => {
   const { root, worktree } = reviewReadyFixture(t);
 
   recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'The lookup is unbounded.' });
+  const submitted = submitHumanFindings(worktree, { sliceId: 'S1' });
 
-  assert.throws(() => submitHumanFindings(worktree, { sliceId: 'S1' }), error => {
-    assert.match(error.message, /pass condition/u);
-    // A refusal with no command to satisfy it is the dead end this loop has already been bitten by.
-    assert.match(error.message, /--pass-condition/u, 'the refusal names the command that completes the draft');
-    return true;
+  assert.equal(submitted.outcome.findings[0].pass_condition, undefined, 'the claim is not repeated under a second heading');
+  assert.equal(listReviewOutcomes(root, 'work-override').length, 1, 'one prompt is enough to reach the record');
+  assert.equal(listHumanFindingDraft(worktree, 'work-override', 'S1').length, 0, 'the draft is cleared by submission');
+});
+
+// Every draft written while the claim WAS the default pass condition carries a copy of its own claim, and
+// those drafts are still on disk in live Work. Reading one back must not resurrect the echo the surfaces
+// above just stopped producing.
+test('a draft carrying a pass condition identical to its claim reads back with the echo gone', t => {
+  const { worktree } = reviewReadyFixture(t);
+
+  recordHumanFinding(worktree, {
+    sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1,
+    claim: 'The lookup is unbounded.', passCondition: 'The lookup is unbounded.',
   });
-  assert.equal(listReviewOutcomes(root, 'work-override').length, 0, 'nothing enters the record half-stated');
-  assert.equal(readState(root).slices[0].status, 'review-ready', 'the slice does not move on a refused submission');
-  assert.equal(listHumanFindingDraft(worktree, 'work-override', 'S1').length, 1, 'the draft survives so the human can complete it');
+
+  assert.equal(listHumanFindingDraft(worktree, 'work-override', 'S1')[0].pass_condition, undefined);
+  assert.equal(humanFindingDrafts(worktree)[0].findings[0].pass_condition, undefined);
+});
+
+// The 180-character claim bound is a token budget on what a MODEL review may emit — the same budget
+// MODEL_FINDING_CAP bounds the count with, and the same carve-out a human count already has. A human typing
+// into their editor is not spending it. Observed live: the fourth finding of a human review was 202
+// characters of domain reasoning about when catalog data is synced, and the bound refused the WHOLE
+// submission for it, after three other findings had already been drafted against the same checkpoint.
+test('a human finding carries a claim longer than the budget a model review is held to', t => {
+  const { worktree } = reviewReadyFixture(t);
+  const claim = 'This does not seem correct, we deploy and start only when all needed data is synced. '
+    + 'The assumption is that all cutting tools and metrology devices are synced and ready in the database '
+    + 'before any Catalog Search can perform.';
+  assert.ok(claim.length > 180 && claim.length <= 400, 'the live claim that was refused sits in this band');
+
+  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim });
+  const submitted = submitHumanFindings(worktree, { sliceId: 'S1' });
+
+  assert.equal(submitted.outcome.findings[0].claim, claim);
+  // scenario and impact default to the claim, and each carried its own model-sized bound — so the same
+  // finding failed three separate limits and the refusal only ever named the first.
+  assert.equal(submitted.outcome.findings[0].impact, claim);
+});
+
+// Past even the human bound the refusal still stands, but it arrives at the gesture still holding the text
+// and it names the length. Refusing at submission instead made a batch of four findings unsubmittable for
+// one of them, at the one gesture that cannot edit anything.
+test('an over-long claim is refused while it is drafted rather than when the review is submitted', t => {
+  const { worktree } = reviewReadyFixture(t);
+
+  assert.throws(
+    () => recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'x'.repeat(420) }),
+    /420 characters.*400/su,
+  );
+  assert.equal(listHumanFindingDraft(worktree, 'work-override', 'S1').length, 0, 'nothing half-written is left behind');
+});
+
+// A draft was mutable for its pass condition and for nothing else, so a claim that was too long — or simply
+// mistyped — could only be dropped and retyped from memory. Amending takes the same shape stating a pass
+// condition does: an --index with no --file names a finding already drafted.
+test('a drafted claim is amended in place, so fixing one never costs the finding', t => {
+  const { worktree } = reviewReadyFixture(t);
+  const common = { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, allowSameAnchor: true };
+  recordHumanFinding(worktree, { ...common, claim: 'The lookup is unbounded.' });
+  recordHumanFinding(worktree, { ...common, claim: 'The index is rebuit per reqest.' });
+
+  amendHumanFinding(worktree, { sliceId: 'S1', claim: 'The index is rebuilt per request.' });
+
+  const findings = listHumanFindingDraft(worktree, 'work-override', 'S1');
+  assert.equal(findings.length, 2, 'amending replaces a finding rather than adding a second copy');
+  assert.equal(findings[0].claim, 'The lookup is unbounded.', 'no index means the finding just drafted');
+  assert.equal(findings[1].claim, 'The index is rebuilt per request.');
+  // scenario and impact defaulted to the old claim, so leaving them behind would record the typo anyway.
+  assert.equal(findings[1].scenario, 'The index is rebuilt per request.');
+  assert.equal(findings[1].impact, 'The index is rebuilt per request.');
+});
+
+// The engine gesture is only half of it: what a human types is `--index <n> --text`, and a --text with no
+// --file used to fall through to "finding requires --file and --line" — the refusal for a gesture nobody
+// made. Driven through the CLI's own dispatch, because that is the surface the keymap and the shell reach.
+test('the CLI routes an --index with no --file to rewording, not to drafting', t => {
+  const { worktree } = reviewReadyFixture(t);
+  const { main } = require('../scripts/pair-cli');
+  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'The lookup is unbouned.' });
+  const previous = process.cwd();
+  t.after(() => { process.chdir(previous); process.exitCode = 0; });
+  process.chdir(worktree);
+
+  main(['finding', '--slice', 'S1', '--index', '1', '--text', 'The lookup is unbounded.']);
+
+  assert.ok(!process.exitCode, 'the route exists, so nothing is refused');
+  const findings = listHumanFindingDraft(worktree, 'work-override', 'S1');
+  assert.equal(findings.length, 1, 'the reworded claim replaces the finding rather than drafting a second');
+  assert.equal(findings[0].claim, 'The lookup is unbounded.');
+});
+
+// The human wrote the finding. Asking them to then declare it valid — with a reason, once per finding, in
+// a different buffer — is the reducer asking a person to adjudicate themselves, which acceptHumanReview
+// already refuses to do for an override ("the reducer second-guessing the decision it was just told to
+// yield"). Observed live: five gestures and two buffers stood between typing a finding and spending the
+// correction on it. Submission is the human's verdict, so it records the verdict.
+test('submitting a human draft is itself the verdict and lands the slice on the one correction', t => {
+  const { root, worktree } = reviewReadyFixture(t);
+  const common = { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, allowSameAnchor: true };
+  recordHumanFinding(worktree, { ...common, claim: 'The export is a bare literal with no lookup seam.' });
+  recordHumanFinding(worktree, { ...common, claim: 'No timeout bounds the lookup.' });
+
+  const submitted = submitHumanFindings(worktree, { sliceId: 'S1' });
+
+  const state = readState(root);
+  assert.equal(state.slices[0].status, 'correction-ready', 'no second pass over the same findings');
+  assert.equal(state.lifecycle, 'ready');
+  assert.match(state.next_action, /correction/u);
+  // The audit trail is not skipped, only authored: every finding carries real Review Feedback, so
+  // acceptHumanReview's per-finding gate and the Review Guidance bank both still see a disposition.
+  for (const finding of submitted.outcome.findings) {
+    const feedback = feedbackForFinding(root, 'work-override', finding.finding_id);
+    assert.equal(feedback.length, 1, 'each finding is adjudicated exactly once');
+    assert.equal(feedback[0].disposition, 'valid');
+    assert.match(feedback[0].reason, /human/iu, 'the record says whose verdict this is');
+  }
+});
+
+// A model finding is a claim awaiting a verdict; a human finding arrives with one. Auto-adjudication must
+// not leak across that line, or the human loses the only gesture that can call a model wrong.
+test('a model finding still waits for the human verdict that a human finding arrives with', t => {
+  const { root, worktree } = reviewReadyFixture(t);
+
+  advanceWork(worktree, {}, { runProvider: () => providerResult({ verdict: 'findings', findings: [modelFinding(root)] }) });
+
+  const state = readState(root);
+  assert.equal(state.slices[0].status, 'awaiting-feedback');
+  assert.match(state.next_action, /adjudicate/u);
+});
+
+// A correcting provider that produces a fresh green checkpoint, so a round of review can be followed by
+// another round reading the checkpoint the correction produced.
+function correctionRun(value) {
+  return {
+    runProvider(input) {
+      fs.writeFileSync(path.join(input.root, 'value.js'), [`module.exports = ${value};`, ...Array.from({ length: 39 }, (_item, index) => `// line ${index + 2}`)].join('\n') + '\n');
+      return providerResult({
+        status: 'completed', architecture_risk: null, design_check: null,
+        failure_proof: { boundary: 'module export', method: 'unit', negative_control: 'Returning 1 fails the verification.' }, blocker: null,
+      });
+    },
+    verify() { return { status: 0, stdout: '', stderr: '', durationMs: 1 }; },
+  };
+}
+
+// The one-correction budget bounds a MODEL loop: a fresh reviewer can always find something, so
+// find → correct → find → correct never terminates on its own. A human review is not that loop. Observed
+// live on S-08: round one's finding was corrected, the human read the checkpoint the correction produced,
+// raised one more finding against it, and the submission blocked on "exhausted its one correction" —
+// asking them to justify a second correction with `unblock --reason` one gesture after they had typed the
+// finding that says why. Writing and submitting a finding against a new checkpoint IS that deliberation.
+test('a second round of human findings on the corrected checkpoint earns its correction without an unblock', t => {
+  const { root, worktree } = reviewReadyFixture(t);
+  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'The lookup is unbounded.' });
+  submitHumanFindings(worktree, { sliceId: 'S1' });
+  advanceWork(worktree, { runtime: 'codex' }, correctionRun(3));
+  const corrected = readState(root).slices[0];
+  assert.equal(corrected.correction_count, 1, 'round one spent the budget');
+  assert.equal(corrected.status, 'awaiting-human-review', 'a corrected checkpoint comes back to the human, which is where round two starts');
+
+  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 2, lineEnd: 2, claim: 'What about multi-language? The app ships English and German.' });
+  submitHumanFindings(worktree, { sliceId: 'S1' });
+
+  const state = readState(root);
+  assert.equal(state.slices[0].status, 'correction-ready', 'the human writing the finding is the grant unblock would have asked for');
+  assert.equal(state.lifecycle, 'ready');
+  assert.ok(!state.blocked_reason, 'nothing is blocked, so nothing has to be justified twice');
+  assert.match(state.next_action, /correction/u);
+});
+
+// The other half of the same rule: nothing here loosens the bound on a MODEL finding once the correction is
+// spent. A corrected checkpoint returns to awaiting-human-review rather than to a second model review, so
+// the spent budget is written directly — what is pinned is the rule, not a route the reducer walks today.
+test('a model finding still blocks once the correction is spent, because that loop has no human in it', t => {
+  const { root, worktree, findings } = awaitingFeedbackFixture(t);
+  const state = readState(root);
+  state.slices[0].correction_count = 1;
+  require('../scripts/lib/pair-store').writeState(root, 'work-override', state);
+
+  adjudicateFinding(worktree, { findingId: findings[0].finding_id, disposition: 'valid', reason: 'The seam is missing.' });
+
+  const after = readState(root);
+  assert.equal(after.slices[0].status, 'blocked');
+  assert.match(after.blocked_reason, /exhausted its one correction/u);
+});
+
+// A correction that fails its OWN verification is the case the budget was written for, and it is untouched:
+// the model could not do it, and a second automatic attempt at the same thing is the runaway the bound exists
+// to stop — whoever raised the finding.
+test('a human-raised correction that fails verification still blocks rather than retrying itself', t => {
+  const { root, worktree } = reviewReadyFixture(t);
+  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'The lookup is unbounded.' });
+  submitHumanFindings(worktree, { sliceId: 'S1' });
+
+  advanceWork(worktree, { runtime: 'codex' }, {
+    runProvider: () => providerResult({
+      status: 'completed', architecture_risk: null, design_check: null,
+      failure_proof: { boundary: 'module export', method: 'unit', negative_control: 'Returning 1 fails.' }, blocker: null,
+    }),
+    verify() { return { status: 1, stdout: '', stderr: 'Expected: 2 But was: 1', durationMs: 1 }; },
+  });
+
+  const state = readState(root);
+  assert.equal(state.slices[0].status, 'blocked');
+  assert.match(state.blocked_reason, /failed after its one bounded correction/u);
 });
 
 test('a pass condition is stated on a draft in place, so a refused submission is completed not duplicated', t => {
   const { worktree } = reviewReadyFixture(t);
-  const common = { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1 };
+  const common = { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, allowSameAnchor: true };
   recordHumanFinding(worktree, { ...common, claim: 'The lookup is unbounded.' });
   recordHumanFinding(worktree, { ...common, claim: 'The index is rebuilt per request.' });
 
@@ -289,15 +528,14 @@ test('a pass condition is stated on a draft in place, so a refused submission is
 // early on the partial case without touching next_action — so status reported "adjudicate 3 finding(s)"
 // after two were already adjudicated, and the human could not tell progress from no progress.
 test('adjudicating some of the findings reports what still holds the Review Slice', t => {
-  const { root, worktree } = reviewReadyFixture(t);
-  const common = { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, passCondition: 'Two roots each observe their own value.' };
-  recordHumanFinding(worktree, { ...common, claim: 'First concern.' });
-  recordHumanFinding(worktree, { ...common, claim: 'Second concern.' });
-  recordHumanFinding(worktree, { ...common, claim: 'Third concern.' });
-  const submitted = submitHumanFindings(worktree, { sliceId: 'S1' });
+  const { root, worktree, findings } = awaitingFeedbackFixture(t, [
+    { claim: 'First concern.' },
+    { claim: 'Second concern.', lineStart: 2 },
+    { claim: 'Third concern.', lineStart: 3 },
+  ]);
   assert.match(readState(root).next_action, /3 finding\(s\)/u);
 
-  adjudicateFinding(worktree, { findingId: submitted.outcome.findings[0].finding_id, disposition: 'valid', reason: 'The lookup seam is genuinely missing.' });
+  adjudicateFinding(worktree, { findingId: findings[0].finding_id, disposition: 'valid', reason: 'The lookup seam is genuinely missing.' });
 
   const state = readState(root);
   assert.equal(state.slices[0].status, 'awaiting-feedback', 'the slice still holds');
@@ -311,14 +549,12 @@ test('adjudicating some of the findings reports what still holds the Review Slic
 // advanced it could no longer be used. `pair-loop run` at awaiting-human returns the state unchanged, so
 // the loop wedged silently. Observed live on S-03 with all three findings adjudicated valid.
 test('adjudicating through pair-review advances the Review Slice, not just the evidence', t => {
-  const { root, worktree } = reviewReadyFixture(t);
+  const { root, worktree, findings } = awaitingFeedbackFixture(t);
   const { operate } = require('../scripts/pair-review');
-  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'The lookup is unbounded.', passCondition: 'A timeout bounds the lookup.' });
-  const submitted = submitHumanFindings(worktree, { sliceId: 'S1' });
 
   operate(worktree, 'feedback', {
     work: 'work-override',
-    finding: submitted.outcome.findings[0].finding_id,
+    finding: findings[0].finding_id,
     disposition: 'valid',
     reason: 'The seam is genuinely missing.',
   });
@@ -330,15 +566,13 @@ test('adjudicating through pair-review advances the Review Slice, not just the e
 });
 
 test('a Review Slice whose projection fell behind its recorded feedback is reconciled, not wedged', t => {
-  const { root, worktree } = reviewReadyFixture(t);
+  const { root, worktree, findings } = awaitingFeedbackFixture(t);
   const { reconcileAdjudication } = require('../scripts/lib/pair-engine');
   const { recordReviewFeedback } = require('../scripts/lib/review-evidence');
-  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'The lookup is unbounded.', passCondition: 'A timeout bounds the lookup.' });
-  const submitted = submitHumanFindings(worktree, { sliceId: 'S1' });
   // Exactly the wedge: durable feedback, untouched projection, and no second feedback possible.
   recordReviewFeedback(worktree, {
     workId: 'work-override',
-    findingId: submitted.outcome.findings[0].finding_id,
+    findingId: findings[0].finding_id,
     disposition: 'valid',
     reason: 'Recorded without the reducer, as the editor used to do.',
   });
@@ -360,13 +594,11 @@ test('a Review Slice whose projection fell behind its recorded feedback is recon
 // detectable and derivable from evidence already on disk, so the ordinary next transition repairs it
 // rather than returning unchanged and leaving the human to discover `reconcile`.
 test('the ordinary next transition repairs a stale projection instead of silently doing nothing', t => {
-  const { root, worktree } = reviewReadyFixture(t);
+  const { root, worktree, findings } = awaitingFeedbackFixture(t);
   const { recordReviewFeedback } = require('../scripts/lib/review-evidence');
-  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'The lookup is unbounded.', passCondition: 'A timeout bounds the lookup.' });
-  const submitted = submitHumanFindings(worktree, { sliceId: 'S1' });
   recordReviewFeedback(worktree, {
     workId: 'work-override',
-    findingId: submitted.outcome.findings[0].finding_id,
+    findingId: findings[0].finding_id,
     disposition: 'valid',
     reason: 'Recorded without the reducer.',
   });
@@ -388,14 +620,9 @@ test('the ordinary next transition repairs a stale projection instead of silentl
 // deciding whether to steer with `direct` first had to infer the brief from `show` and trust the
 // inference. Observed live on S-03, whose three valid findings carry placeholder pass conditions.
 test('the correction brief can be read before the one correction is spent', t => {
-  const { root, worktree } = reviewReadyFixture(t);
+  const { root, worktree, findings } = awaitingFeedbackFixture(t, [{ passCondition: 'Two roots each observe their own value.' }]);
   const { correctionBrief } = require('../scripts/lib/pair-engine');
-  recordHumanFinding(worktree, {
-    sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1,
-    claim: 'The export is a bare literal.', passCondition: 'Two roots each observe their own value.',
-  });
-  const submitted = submitHumanFindings(worktree, { sliceId: 'S1' });
-  adjudicateFinding(worktree, { findingId: submitted.outcome.findings[0].finding_id, disposition: 'valid', reason: 'The seam is missing.' });
+  adjudicateFinding(worktree, { findingId: findings[0].finding_id, disposition: 'valid', reason: 'The seam is missing.' });
   recordCorrectionDirection(worktree, { sliceId: 'S1', text: 'Bound the fix to the lookup seam only.' });
 
   const brief = correctionBrief(worktree, { sliceId: 'S1' });
@@ -407,18 +634,30 @@ test('the correction brief can be read before the one correction is spent', t =>
   assert.equal(readState(root).slices[0].status, 'correction-ready', 'reading the brief changes nothing');
 });
 
+// With no pass condition stated the corrector still has to be told what "addressed" means, and the claim is
+// what it has. The instruction said "satisfies each pass condition", which now points at an absent field.
+test('the correction brief falls back to the claim as done-ness when no pass condition is stated', t => {
+  const { worktree } = reviewReadyFixture(t);
+  const { correctionBrief } = require('../scripts/lib/pair-engine');
+  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'The lookup is unbounded.' });
+  submitHumanFindings(worktree, { sliceId: 'S1' });
+
+  const brief = correctionBrief(worktree, { sliceId: 'S1' });
+
+  assert.match(brief.prompt, /The lookup is unbounded/u, 'the claim travels as the statement of done-ness');
+  assert.match(brief.prompt, /satisfies each finding's claim/u, 'and the instruction points at it');
+});
+
 // Every valid finding goes into the one correction and the corrector is told to satisfy all of them, but
 // nothing afterwards said whether it did. With a placeholder pass condition there is nothing to check
 // mechanically either — so the loop reports the one fact it can establish from evidence: whether the
 // correction opened the file each finding is anchored to. A file the correction never touched cannot
 // contain a fix, which is the half of this that is proof.
 test('slice evidence reports whether the correction touched each valid finding', t => {
-  const { root, worktree } = reviewReadyFixture(t);
+  const { root, worktree, findings } = awaitingFeedbackFixture(t);
   const { sliceEvidence } = require('../scripts/lib/pair-engine');
   fs.writeFileSync(path.join(worktree, 'other.js'), 'module.exports = 3;\n');
-  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'The export is bare.', passCondition: 'Two roots observe their own value.' });
-  const submitted = submitHumanFindings(worktree, { sliceId: 'S1' });
-  adjudicateFinding(worktree, { findingId: submitted.outcome.findings[0].finding_id, disposition: 'valid', reason: 'The seam is missing.' });
+  adjudicateFinding(worktree, { findingId: findings[0].finding_id, disposition: 'valid', reason: 'The seam is missing.' });
 
   // The correction changes a different file than the one the finding is anchored to.
   advanceWork(worktree, { runtime: 'codex' }, {
@@ -443,11 +682,9 @@ test('slice evidence reports whether the correction touched each valid finding',
 // split is derivable: hunks overlapping an anchor belong to that finding, and everything else is scope
 // nobody asked for and must be reviewed as such.
 test('a correction is attributed hunk by hunk to the finding that asked for it', t => {
-  const { worktree } = reviewReadyFixture(t);
+  const { worktree, findings } = awaitingFeedbackFixture(t);
   const { sliceEvidence } = require('../scripts/lib/pair-engine');
-  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'The export is bare.', passCondition: 'Two roots observe their own value.' });
-  const submitted = submitHumanFindings(worktree, { sliceId: 'S1' });
-  adjudicateFinding(worktree, { findingId: submitted.outcome.findings[0].finding_id, disposition: 'valid', reason: 'The seam is missing.' });
+  adjudicateFinding(worktree, { findingId: findings[0].finding_id, disposition: 'valid', reason: 'The seam is missing.' });
 
   advanceWork(worktree, { runtime: 'codex' }, {
     runProvider(input) {
@@ -474,11 +711,9 @@ test('a correction is attributed hunk by hunk to the finding that asked for it',
 // counted the same hunks as scope nobody asked for: wrong twice, in opposite directions. So proximity is
 // attributed, and labelled as proximity.
 test('a fix landing beside the anchored line is attributed to the finding, not to unrequested scope', t => {
-  const { worktree } = reviewReadyFixture(t);
+  const { worktree, findings } = awaitingFeedbackFixture(t);
   const { sliceEvidence } = require('../scripts/lib/pair-engine');
-  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'The export is bare.', passCondition: 'Two roots observe their own value.' });
-  const submitted = submitHumanFindings(worktree, { sliceId: 'S1' });
-  adjudicateFinding(worktree, { findingId: submitted.outcome.findings[0].finding_id, disposition: 'valid', reason: 'The seam is missing.' });
+  adjudicateFinding(worktree, { findingId: findings[0].finding_id, disposition: 'valid', reason: 'The seam is missing.' });
 
   advanceWork(worktree, { runtime: 'codex' }, {
     runProvider(input) {
@@ -514,13 +749,11 @@ test('a correction brief exists only where a correction does', t => {
 // the worse of the two beliefs: it sends a human looking for a diff that was never produced. The repair
 // is therefore labelled on the returned state, and only there — the label is not durable state.
 test('a run that only repairs bookkeeping says so, and does not persist saying it', t => {
-  const { root, worktree } = reviewReadyFixture(t);
+  const { root, worktree, findings } = awaitingFeedbackFixture(t);
   const { recordReviewFeedback } = require('../scripts/lib/review-evidence');
-  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'The lookup is unbounded.', passCondition: 'A timeout bounds the lookup.' });
-  const submitted = submitHumanFindings(worktree, { sliceId: 'S1' });
   recordReviewFeedback(worktree, {
     workId: 'work-override',
-    findingId: submitted.outcome.findings[0].finding_id,
+    findingId: findings[0].finding_id,
     disposition: 'valid',
     reason: 'Recorded without the reducer.',
   });
@@ -791,14 +1024,44 @@ test('unblocking an exhausted correction restores correction-ready so the human 
   assert.match(after.next_action, /S1/u);
 });
 
+// Granting a retry is one of two ways out of an exhausted correction; accepting the checkpoint with the
+// finding left open is the other, and it is the right one when the finding is hygiene on a green checkpoint.
+// acceptSlice sets lifecycle straight to ready without clearing what made the Work blocked, so the accepted
+// state kept a blocked_reason naming a slice that had already moved on — invisible in status, which renders
+// that reason only while the lifecycle is blocked, and misleading to anything that reads state.json since
+// (a handover, a later session).
+test('accepting a blocked checkpoint by override leaves no block recorded behind it', t => {
+  const { root, worktree } = reviewReadyFixture(t);
+  const state = readState(root);
+  state.lifecycle = 'blocked';
+  state.blocked_reason = 'Review Slice S1 exhausted its one correction';
+  state.next_action = 'human correction required';
+  state.slices[0].status = 'blocked';
+  state.slices[0].correction_count = 1;
+  require('../scripts/lib/pair-store').writeState(root, 'work-override', state);
+
+  // Verification is injected so the fixture's only slice can complete: a real cumulative failure blocks
+  // again with its own accurate reason, which would hide whether the old one was ever cleared.
+  acceptHumanReview(
+    worktree,
+    { sliceId: 'S1', override: true, reason: 'Naming and lint hygiene on a green checkpoint; not worth a second correction.' },
+    { verify: () => ({ status: 0, duration_ms: 1 }) },
+  );
+
+  const after = readState(root);
+  assert.equal(after.slices[0].status, 'accepted');
+  assert.notEqual(after.lifecycle, 'blocked', 'accepting clears the Work-level block');
+  assert.ok(!after.blocked_reason, 'and the reason it was blocked, which no longer describes anything');
+  assert.ok(!after.blocked_precondition);
+});
+
 // Drafting printed the draft once, as transient output, and nothing read the draft directory afterwards —
-// not status, not show, not the Review Inbox. So the human who skipped the pass condition could not see
-// that they had, and the only signal was the refusal at submission, by which point re-drafting the finding
-// looked like the only way forward. Observed live: one slice held two drafts of the same claim, the first
-// with no pass condition and the second added because the first was invisible.
-test('an unsubmitted draft is listed with what still blocks its submission', t => {
+// not status, not show, not the Review Inbox. So a human gathering findings while reading could not see
+// what they had gathered, and re-drafting the same claim looked like the only way forward. Observed live:
+// one slice held two drafts of the same claim because the first was invisible.
+test('an unsubmitted draft is listed so it is read back before a submission is spent on it', t => {
   const { worktree } = reviewReadyFixture(t);
-  const common = { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1 };
+  const common = { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, allowSameAnchor: true };
   recordHumanFinding(worktree, { ...common, claim: 'The lookup is unbounded.' });
   recordHumanFinding(worktree, { ...common, claim: 'The index is rebuilt per request.', passCondition: 'The index is built once per process.' });
 
@@ -807,7 +1070,11 @@ test('an unsubmitted draft is listed with what still blocks its submission', t =
   assert.equal(drafts.length, 1, 'one draft per Review Slice, not one per finding');
   assert.equal(drafts[0].review_slice_id, 'S1');
   assert.equal(drafts[0].findings.length, 2);
-  assert.equal(drafts[0].unstated_count, 1, 'the count is what submission will refuse on');
+  assert.deepEqual(
+    drafts[0].findings.map(finding => finding.pass_condition),
+    [undefined, 'The index is built once per process.'],
+    'a pass condition appears only where one was worth typing — an unstated one is absent, not an echo',
+  );
   assert.equal(drafts[0].stale, false, 'the slice still carries the checkpoint the draft anchors to');
 });
 
@@ -849,6 +1116,86 @@ test('a pass condition that defers back to the human is refused like a missing o
   );
   setHumanFindingPassCondition(worktree, { sliceId: 'S1', passCondition: 'A timeout bounds the lookup.' });
   assert.equal(listHumanFindingDraft(worktree, 'work-override', 'S1')[0].pass_condition, 'A timeout bounds the lookup.');
+});
+
+// Making the duplicate visible was not enough to stop it. Observed live: the same anchor was drafted three
+// times — file and line identical, claim reworded each time — because every refusal named a problem and
+// handed back a shell command, so the next gesture the human made was the only one bound to a key. A second
+// finding at an anchor that already has one is a re-draft far more often than it is a second concern, so it
+// is refused where it is made, and the refusal names both ways forward instead of just the problem.
+test('a second drafted finding at an anchor that already has one is refused as a re-draft', t => {
+  const { worktree } = reviewReadyFixture(t);
+  const common = { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1 };
+  recordHumanFinding(worktree, { ...common, claim: 'The lookup is unbounded.' });
+
+  assert.throws(
+    () => recordHumanFinding(worktree, { ...common, claim: 'Reworded: the lookup has no timeout.' }),
+    error => {
+      assert.match(error.message, /already/u);
+      assert.match(error.message, /--index 1 --text/u, 'the refusal names how to reword the finding already there');
+      assert.match(error.message, /--drop/u, 'and how to discard it, since a draft is the mutable half');
+      assert.match(error.message, /--allow-same-anchor/u, 'and how to say this really is a second concern');
+      return true;
+    },
+  );
+  assert.equal(listHumanFindingDraft(worktree, 'work-override', 'S1').length, 1, 'the re-draft is not appended');
+});
+
+test('a genuinely separate concern at the same anchor is drafted when it is declared as one', t => {
+  const { worktree } = reviewReadyFixture(t);
+  const common = { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1 };
+  recordHumanFinding(worktree, { ...common, claim: 'The lookup is unbounded.' });
+
+  recordHumanFinding(worktree, { ...common, claim: 'The export is a bare literal.', allowSameAnchor: true });
+
+  assert.equal(listHumanFindingDraft(worktree, 'work-override', 'S1').length, 2);
+});
+
+// A draft is the mutable half of review by design — "a draft may be half-written; a Review Outcome may not"
+// — but it had no way to retract anything, so the only route out of three duplicates was to submit all
+// three and disposition two away. That writes the duplicates into the immutable record and into the Review
+// Guidance bank, which is exactly what keeping the draft separate exists to prevent.
+test('a drafted finding is dropped so duplicates never reach the immutable record', t => {
+  const { worktree } = reviewReadyFixture(t);
+  const common = { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1 };
+  recordHumanFinding(worktree, { ...common, claim: 'Keep this one.' });
+  recordHumanFinding(worktree, { ...common, claim: 'Drop this one.', allowSameAnchor: true });
+
+  const result = dropHumanFindingDraft(worktree, { sliceId: 'S1', index: 2 });
+
+  assert.equal(result.dropped.claim, 'Drop this one.', 'the refusal-free path names what it discarded');
+  assert.deepEqual(listHumanFindingDraft(worktree, 'work-override', 'S1').map(item => item.claim), ['Keep this one.']);
+  assert.throws(() => dropHumanFindingDraft(worktree, { sliceId: 'S1', index: 4 }), /1-1/u);
+
+  dropHumanFindingDraft(worktree, { sliceId: 'S1', index: 1 });
+  assert.equal(listHumanFindingDraft(worktree, 'work-override', 'S1').length, 0, 'dropping the last one leaves no empty draft behind');
+  assert.equal(humanFindingDrafts(worktree, 'work-override').length, 0, 'and status stops reporting a draft that holds nothing');
+});
+
+// Observed live on S-05: a correction renamed 9 tests, and the human opened the whole-slice diff to check it
+// and reported "no new changes". They were right about what they saw — the slice CREATED that test file, so
+// in base..checkpoint it is one +110 block and a rename inside it is not a delta at all. The whole-slice diff
+// structurally cannot show a correction to a file the slice introduced. The shape of the correction answers
+// "did it do anything" without opening any diff, and it comes free from hunks already parsed.
+test('the shape of a correction is reported so it never has to be hunted for in the cumulative diff', () => {
+  const files = new Map([
+    ['tests/Fitness.cs', [
+      { old_start: 26, old_lines: 1, new_start: 26, new_lines: 1 },
+      { old_start: 32, old_lines: 1, new_start: 32, new_lines: 2 },
+    ]],
+    ['src/Router.cs', [{ old_start: 10, old_lines: 0, new_start: 11, new_lines: 4 }]],
+  ]);
+
+  const shape = correctionShape(files);
+
+  assert.equal(shape.file_count, 2);
+  assert.equal(shape.hunk_count, 3);
+  assert.equal(shape.lines_added, 7, 'new_lines summed, so a pure insertion counts');
+  assert.equal(shape.lines_removed, 2, 'old_lines summed, and a 0 does not become 1 here');
+});
+
+test('a checkpoint with no prior checkpoint reports no correction shape rather than an empty one', () => {
+  assert.equal(correctionShape(null), null, 'a first implementation checkpoint corrected nothing');
 });
 
 test('a human finding refuses a missing or inverted line anchor instead of storing unusable evidence', t => {

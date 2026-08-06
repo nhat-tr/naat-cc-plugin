@@ -10,7 +10,19 @@ const {
   renderDesignCheckMarkdown,
   validateDesignCheck,
 } = require('./architecture-routing');
-const { runFreshProvider } = require('./provider-runtime');
+const { runProviderSession } = require('./provider-runtime');
+const {
+  correctionPrompt,
+  implementationPrompt,
+  postDiffDesignPrompt,
+  reviewPrompt,
+} = require('./pair-prompts');
+const {
+  warmSessionPlan,
+  warmSessionPolicy,
+  warmSessionSettings,
+  warmSettingsForWork,
+} = require('./warm-session');
 const {
   appendEvent,
   atomicWrite,
@@ -45,6 +57,7 @@ const {
   relevantAcceptanceCriteria,
 } = require('./review-slice-manifest');
 const {
+  HUMAN_TEXT_BOUNDS,
   feedbackForFinding,
   listReviewOutcomes,
   recordReviewFeedback,
@@ -60,10 +73,10 @@ const SLICE_SCHEMA_PATH = path.join(SKILL_DIRECTORY, 'schemas', 'slice-result.js
 const REVIEW_SCHEMA_PATH = path.join(SKILL_DIRECTORY, 'schemas', 'precision-review-result.json');
 const SLICE_OUTPUT_LIMIT_BYTES = 2 * 1024;
 const REVIEW_OUTPUT_LIMIT_BYTES = 6 * 1024;
-// This session's Bash tool is sandboxed independently of the parent that spawned it, and the sandbox
-// denies the socket bind MSBuild's parallel worker nodes need. A parallel build then stalls for
-// minutes and reports "Build FAILED" with 0 errors, leaving the session iterating with no diagnostics.
-const SANDBOXED_BUILD_NOTE = ' If this repository builds with MSBuild, pass `-m:1` to every `dotnet build` and `dotnet test`; without it a sandboxed build stalls for minutes and then reports `Build FAILED` with 0 errors instead of the real compiler output.';
+// Bounded generously and deliberately unlike the 1000-character caps around it: those bound what a model
+// may emit, and a cap sized for model output is the wrong shape for a sentence a person types by hand.
+// Held as a Git blob rather than in state.json, which has a 16 KiB budget for the whole Work.
+const STEER_TEXT_LIMIT_BYTES = 8 * 1024;
 
 function now() {
   return new Date().toISOString();
@@ -91,16 +104,28 @@ function resolvedModel(options = {}, state = null) {
   return null;
 }
 
-function invocationSummary(kind, sliceId, run) {
+// Every field the warm-session claim is falsifiable against: which session ran, whether it was resumed,
+// why it was not, how big its context had grown, and the cache read/write split that decides the money.
+// The result envelope already carries all of it, so none of this costs a round trip.
+function invocationSummary(kind, sliceId, run, plan = null) {
+  const usage = run.usage || {};
   return {
     kind,
     review_slice_id: sliceId,
     runtime: run.runtime,
     model: run.model,
     effort: run.effort,
-    input_tokens: run.usage?.input_tokens || 0,
-    cached_input_tokens: run.usage?.cached_input_tokens || 0,
-    output_tokens: run.usage?.output_tokens || 0,
+    session_id: run.session_id || null,
+    resumed: Boolean(run.resumed),
+    rotation_reason: plan?.rotation_reason || null,
+    input_tokens: usage.input_tokens || 0,
+    cached_input_tokens: usage.cached_input_tokens || 0,
+    cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+    cache_creation_5m_input_tokens: usage.cache_creation_5m_input_tokens || 0,
+    cache_creation_1h_input_tokens: usage.cache_creation_1h_input_tokens || 0,
+    output_tokens: usage.output_tokens || 0,
+    context_tokens: usage.context_tokens || 0,
+    cost_usd: Number.isFinite(usage.cost_usd) ? usage.cost_usd : null,
     duration_ms: run.duration_ms || 0,
     at: now(),
   };
@@ -180,8 +205,12 @@ function openWork(root, options) {
     // correction ran fable while every earlier round of the same Work ran opus. A Work that spans hours
     // has to be one model's work unless a human says otherwise.
     model: resolvedModel(options),
+    // Pinned at open for the same reason the model is, and it is also what keeps this change inert for
+    // Work already in flight: a state written before warm sessions existed carries no policy, and every
+    // read of it answers "not enabled". No migration, and the running ParagonAgent Work is untouched.
+    warm_session_policy: warmSessionPolicy(warmSessionSettings(process.env)),
     slices: loaded.manifest.slices.map(initialSliceState),
-    invocation_totals: { calls: 0, input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, duration_ms: 0 },
+    invocation_totals: { ...EMPTY_TOTALS },
     recent_invocations: [],
     created_at: now(),
     updated_at: now(),
@@ -227,21 +256,24 @@ function criteriaText(context, slice) {
   return relevantAcceptanceCriteria(context.criteria, slice).map(item => `- ${item.id}: ${item.text}`).join('\n');
 }
 
-function implementationPrompt(context, slice, projected) {
-  const mapped = criteriaText(context, slice);
-  if (projected.status === 'design-ready') {
-    const designCheck = fs.readFileSync(path.join(context.paths.designChecks, `${slice.id}.md`), 'utf8');
-    return `Implement one Architecture-Sensitive Path checkpoint for Review Slice ${slice.id}.\n\nOutcome: ${slice.outcome}\nAcceptance Criteria:\n${mapped}\n\nApproved Design Check for this checkpoint:\n${designCheck}\nRead applicable AGENTS.md and current code at the named seam and callers. Implement the first thin production path through entrypoint, changed boundary, result, and first real usage. Do not expand horizontally, create unused abstractions, copy nearby patterns without matching ownership/lifetime/failure/concurrency, edit Pair files, commit, or run the final verification command. Return completed with the same bounded architecture risk and one risk-appropriate Failure Proof. Pair runs exact verification after handoff.${SANDBOXED_BUILD_NOTE}`;
-  }
-  return `Implement one bounded Review Slice ${slice.id}.\n\nOutcome: ${slice.outcome}\nAcceptance Criteria:\n${mapped}\n\nRead applicable AGENTS.md plus only current code, callers, contracts, and tests needed for this outcome. Before editing, look for a changed or unknown runtime responsibility: owner/lifetime/state, public or data contract, request middleware ordering, remote/distributed boundary, event ordering/idempotency, background-job shutdown, concurrency/transactions/retries, security, replica/load-balancer behavior, deployment topology, or React state ownership. If one exists or remains unknown, do not edit: return design-required with one risk sentence and the compact Design Check. Otherwise return architecture_risk null and implement direct readable code on the Routine Path. Existing code is evidence, not authority. Do not edit Pair files, commit, or run final verification. Return one risk-appropriate Failure Proof; Pair runs exact verification after handoff.${SANDBOXED_BUILD_NOTE}`;
+function recordedDesignCheck(context, slice) {
+  const file = path.join(context.paths.designChecks, `${slice.id}.md`);
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
 }
 
-function correctionPrompt(context, slice, projected, state) {
-  const mapped = criteriaText(context, slice);
-  // The disposition reason is why a human called this finding valid, and it is the most specific
-  // steering that exists for that finding. Dropping it forced every human note through the single
-  // 1000-character Correction Direction, or through hand-edits when it would not fit. It travels
-  // attached to the finding it adjudicates, so it can never be read as evidence of its own.
+// Human steering lives as a blob because state.json budgets 16 KiB for the whole Work and steering
+// alone may be 8 KiB. Read back at the moment a prompt is built, so a steer recorded between two runs
+// reaches the next turn whether or not that turn resumes a warm session.
+function steeringText(root, state, projected) {
+  if (!projected.steering_ref) return null;
+  return readPairRefText(root, `refs/pair/${state.work_id}`, `steering/${projected.id}`);
+}
+
+// The disposition reason is why a human called this finding valid, and it is the most specific
+// steering that exists for that finding. Dropping it forced every human note through the single
+// 1000-character Correction Direction, or through hand-edits when it would not fit. It travels
+// attached to the finding it adjudicates, so it can never be read as evidence of its own.
+function correctionEvidence(state, slice, projected) {
   const findings = projected.review_outcome_id
     ? (listReviewOutcomes(state.worktree, state.work_id)
         .find(item => item.review_outcome_id === projected.review_outcome_id)?.findings || [])
@@ -255,16 +287,26 @@ function correctionPrompt(context, slice, projected, state) {
   const deterministic = projected.verification_failure
     ? [{ claim: 'Declared verification failed.', scenario: projected.verification_failure, pass_condition: `Command succeeds: ${slice.verify}` }]
     : [];
-  // Kept out of the evidence array: a Correction Direction is human intent, not a falsifiable finding,
-  // and conflating the two would let it be read as evidence the checkpoint already contradicts.
-  const direction = projected.correction_direction
-    ? `\n\nCorrection Direction (bounded, human-authored, binding for this correction):\n${projected.correction_direction}`
-    : '';
-  return `Correct Review Slice ${slice.id} once.\n\nOutcome: ${slice.outcome}\nAcceptance Criteria:\n${mapped}\n\nHuman-valid or deterministic evidence:\n${JSON.stringify([...findings, ...deterministic])}${direction}\n\nInspect current checkpoint and exact evidence. Make only the bounded correction that satisfies each pass condition. Do not broaden design, edit Pair files, commit, or run final verification. Return completed with the bounded architecture risk and Failure Proof. This is the only automatic correction; another failure pauses for human control.${SANDBOXED_BUILD_NOTE}`;
+  return [...findings, ...deterministic];
 }
 
-function postDiffDesignPrompt(context, slice, projected) {
-  return `Inspect immutable checkpoint ${projected.checkpoint_commit} for Review Slice ${slice.id}. Do not edit.\nOutcome: ${slice.outcome}\nAcceptance Criteria:\n${criteriaText(context, slice)}\nRun git diff ${projected.base_commit}..${projected.checkpoint_commit} and inspect changed seams plus exact callers. Return design-required with one bounded architecture risk and the compact Design Check grounded in actual code. Use failure_proof null and blocker null.`;
+function sliceAttemptPrompt(root, state, context, slice, projected, { correction, warm }) {
+  const criteria = criteriaText(context, slice);
+  const steering = steeringText(root, state, projected);
+  if (correction) {
+    return correctionPrompt({
+      slice, criteria, warm, steering,
+      evidence: correctionEvidence(state, slice, projected),
+      direction: projected.correction_direction || null,
+    });
+  }
+  // design-ready means the session before this one refused to write code until a decision was recorded.
+  // Running the routine prompt because the file is missing would silently discard that refusal.
+  const designCheck = projected.status === 'design-ready' ? recordedDesignCheck(context, slice) : null;
+  if (projected.status === 'design-ready' && !designCheck) {
+    throw new Error(`Review Slice ${slice.id} is design-ready but its Design Check is missing from ${context.paths.designChecks}`);
+  }
+  return implementationPrompt({ slice, criteria, warm, steering, designCheck });
 }
 
 function validateFailureProof(value) {
@@ -302,16 +344,34 @@ function validateSliceResult(output) {
   };
 }
 
-function recordInvocation(root, state, sliceId, kind, run) {
-  const summary = invocationSummary(kind, sliceId, run);
-  const totals = state.invocation_totals || { calls: 0, input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, duration_ms: 0 };
-  state.invocation_totals = {
+const EMPTY_TOTALS = {
+  calls: 0,
+  warm_calls: 0,
+  input_tokens: 0,
+  cached_input_tokens: 0,
+  cache_creation_input_tokens: 0,
+  output_tokens: 0,
+  cost_usd: 0,
+  duration_ms: 0,
+};
+
+function accumulatedTotals(state, summary) {
+  const totals = { ...EMPTY_TOTALS, ...(state.invocation_totals || {}) };
+  return {
     calls: totals.calls + 1,
+    warm_calls: totals.warm_calls + (summary.resumed ? 1 : 0),
     input_tokens: totals.input_tokens + summary.input_tokens,
     cached_input_tokens: totals.cached_input_tokens + summary.cached_input_tokens,
+    cache_creation_input_tokens: totals.cache_creation_input_tokens + summary.cache_creation_input_tokens,
     output_tokens: totals.output_tokens + summary.output_tokens,
+    cost_usd: Number((totals.cost_usd + (summary.cost_usd || 0)).toFixed(6)),
     duration_ms: totals.duration_ms + summary.duration_ms,
   };
+}
+
+function recordInvocation(root, state, sliceId, kind, run, plan = null) {
+  const summary = invocationSummary(kind, sliceId, run, plan);
+  state.invocation_totals = accumulatedTotals(state, summary);
   state.recent_invocations = [...(state.recent_invocations || []), summary].slice(-3);
   appendEvent(root, state.work_id, { event: 'provider-finished', ...summary });
 }
@@ -327,39 +387,129 @@ function streamLogPath(env, workId, sliceId, kind) {
   return path.join(directory, workId, `${sliceId}-${kind}.jsonl`);
 }
 
-function providerCall(root, state, sliceId, kind, prompt, options, dependencies, mode = 'implementation', reviewSchema = false) {
+// A resumed call that never reached the model spent nothing, and a session id the runtime no longer
+// recognises fails exactly that way. Rotating on that is free; rotating on a call that burned a full
+// session — a schema it could not satisfy, a refusal, a timeout — would pay for the whole thing twice,
+// so the retry is deliberately narrow rather than "the resumed call failed".
+function resumeNeverStarted(error) {
+  const usage = error?.pair_invocation?.usage;
+  if (!usage) return true;
+  return (usage.input_tokens || 0) === 0
+    && (usage.cached_input_tokens || 0) === 0
+    && (usage.output_tokens || 0) === 0;
+}
+
+// Exactly once per rotation, from whichever path settled it: the report counts these, so recording the
+// same abandonment twice would say a slice started over more often than it did.
+function recordRotation(root, state, sliceId, { reason, previous, sessionId = null, detail = null }) {
+  appendEvent(root, state.work_id, {
+    event: 'warm-session-rotated',
+    review_slice_id: sliceId,
+    reason,
+    retired_session_id: previous?.session_id || null,
+    retired_context_tokens: previous?.context_tokens || 0,
+    session_id: sessionId,
+    ...(detail ? { detail } : {}),
+  });
+}
+
+// What a slice keeps of the session that implemented it. Recorded after every implementation call, so a
+// runtime that forks rather than continues on resume still leaves the chain pointing at a live session.
+function adoptWarmSession(root, state, projected, run, { runtime, model, rotated }) {
+  const previous = projected.warm_session || null;
+  if (!run.session_id) {
+    // Nothing resumable came back — an --ephemeral runtime, a stubbed provider, an older CLI. The slice
+    // simply stays cold, which is the behavior every Work had before warm sessions existed.
+    delete projected.warm_session;
+    return;
+  }
+  const continuing = Boolean(previous) && !rotated;
+  projected.warm_session = {
+    session_id: run.session_id,
+    runtime,
+    model: model || run.model || null,
+    context_tokens: run.usage?.context_tokens || 0,
+    calls: (continuing ? previous.calls || 0 : 0) + 1,
+  };
+  if (!previous && !rotated) {
+    appendEvent(root, state.work_id, {
+      event: 'warm-session-opened',
+      review_slice_id: projected.id,
+      runtime,
+      session_id: run.session_id,
+    });
+  }
+}
+
+// `buildPrompt` rather than a prompt string: whether this call resumes is decided here, and a resumed
+// call must not carry the slice-stable package the session already holds. A degrade-to-fresh retry then
+// rebuilds the full prompt from the same function, so the fresh session is seeded with everything.
+function providerCall(root, state, call, options, dependencies) {
+  const { sliceId, kind, buildPrompt, mode = 'implementation', reviewSchema = false, warm = null } = call;
   const runtime = options.runtime && options.runtime !== 'auto'
     ? options.runtime
     : resolveRuntime('auto', { env: dependencies.env || process.env, available: dependencies.availableRuntimes });
+  const model = resolvedModel(options, state);
   const scratch = defaultScratchDirectory(root, state.work_id);
   fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
-  const outputPath = path.join(scratch, `${sliceId}-${kind}-${crypto.randomUUID()}.json`);
   const schemaPath = reviewSchema ? REVIEW_SCHEMA_PATH : SLICE_SCHEMA_PATH;
   const schema = readJson(schemaPath);
-  const runProvider = dependencies.runProvider || runFreshProvider;
-  let run;
-  try {
-    run = runProvider({
-      runtime,
-      mode,
-      root: state.worktree,
-      prompt,
-      schemaPath,
-      schema,
-      outputPath,
-      model: resolvedModel(options, state),
-      effort: options.effort || 'medium',
-      maxOutputBytes: reviewSchema ? REVIEW_OUTPUT_LIMIT_BYTES : SLICE_OUTPUT_LIMIT_BYTES,
-      streamLog: streamLogPath(dependencies.env || process.env, state.work_id, sliceId, kind),
-    });
-  } catch (error) {
+  const runProvider = dependencies.runProvider || runProviderSession;
+  const settings = warmSettingsForWork(state, dependencies.env || process.env);
+  const previousWarm = warm ? warm.projected.warm_session || null : null;
+  let plan = warm
+    ? warmSessionPlan(previousWarm, { runtime, model, settings })
+    : { resume: null, persist: false, rotation_reason: null };
+  let rotationRecorded = false;
+  const recordPendingRotation = (sessionId) => {
+    if (!plan.rotation_reason || rotationRecorded) return;
+    recordRotation(root, state, sliceId, { reason: plan.rotation_reason, previous: previousWarm, sessionId });
+    rotationRecorded = true;
+  };
+  for (;;) {
+    const outputPath = path.join(scratch, `${sliceId}-${kind}-${crypto.randomUUID()}.json`);
+    let run;
+    try {
+      run = runProvider({
+        runtime,
+        mode,
+        root: state.worktree,
+        prompt: buildPrompt({ warm: Boolean(plan.resume) }),
+        schemaPath,
+        schema,
+        outputPath,
+        model,
+        effort: options.effort || 'medium',
+        maxOutputBytes: reviewSchema ? REVIEW_OUTPUT_LIMIT_BYTES : SLICE_OUTPUT_LIMIT_BYTES,
+        streamLog: streamLogPath(dependencies.env || process.env, state.work_id, sliceId, kind),
+        resumeSessionId: plan.resume,
+        persistSession: plan.persist,
+      });
+    } catch (error) {
+      fs.rmSync(outputPath, { force: true });
+      if (plan.resume && !error.pair_interrupted && resumeNeverStarted(error)) {
+        recordRotation(root, state, sliceId, {
+          reason: 'resume-failed',
+          previous: previousWarm,
+          detail: String(error.message || '').slice(0, 200),
+        });
+        rotationRecorded = true;
+        // Dropped now rather than on the retry's success: if the fresh retry fails too, the next run must
+        // not walk back into the same dead session id.
+        delete warm.projected.warm_session;
+        plan = { resume: null, persist: true, rotation_reason: 'resume-failed' };
+        continue;
+      }
+      recordPendingRotation(null);
+      recordFailedInvocation(root, state, sliceId, kind, error, runtime, plan);
+      throw error;
+    }
     fs.rmSync(outputPath, { force: true });
-    recordFailedInvocation(root, state, sliceId, kind, error, runtime);
-    throw error;
+    recordPendingRotation(run.session_id || null);
+    recordInvocation(root, state, sliceId, kind, run, plan);
+    if (warm) adoptWarmSession(root, state, warm.projected, run, { runtime, model, rotated: Boolean(plan.rotation_reason) });
+    return run;
   }
-  fs.rmSync(outputPath, { force: true });
-  recordInvocation(root, state, sliceId, kind, run);
-  return run;
 }
 
 // A failed provider call used to leave nothing at all: recordInvocation runs after runProvider returns, so
@@ -368,31 +518,35 @@ function providerCall(root, state, sliceId, kind, prompt, options, dependencies,
 // showed the review had never been attempted. Cost that real cannot be invisible, and a phase that fails
 // repeatedly must be countable. The failure is recorded and then re-thrown: the loop still refuses to
 // advance, which was always correct.
-function recordFailedInvocation(root, state, sliceId, kind, error, runtime) {
+function recordFailedInvocation(root, state, sliceId, kind, error, runtime, plan = null) {
   const telemetry = error?.pair_invocation || {};
   const usage = telemetry.usage || {};
   const summary = {
     review_slice_id: sliceId,
     kind,
     runtime: telemetry.runtime || runtime,
+    session_id: telemetry.session_id || null,
+    resumed: Boolean(telemetry.resumed),
+    rotation_reason: plan?.rotation_reason || null,
     input_tokens: usage.input_tokens || 0,
     cached_input_tokens: usage.cached_input_tokens || 0,
+    cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+    cache_creation_5m_input_tokens: usage.cache_creation_5m_input_tokens || 0,
+    cache_creation_1h_input_tokens: usage.cache_creation_1h_input_tokens || 0,
     output_tokens: usage.output_tokens || 0,
+    context_tokens: usage.context_tokens || 0,
+    cost_usd: Number.isFinite(usage.cost_usd) ? usage.cost_usd : null,
     duration_ms: telemetry.duration_ms || 0,
     failure: telemetry.failure || null,
     // Bounded, and already redacted by the runtime: the reason is a diagnosis, not transcript content.
     error: String(error?.message || 'unknown provider failure').slice(0, 500),
   };
-  const totals = state.invocation_totals || { calls: 0, input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, duration_ms: 0 };
-  state.invocation_totals = {
-    calls: totals.calls + 1,
-    input_tokens: totals.input_tokens + summary.input_tokens,
-    cached_input_tokens: totals.cached_input_tokens + summary.cached_input_tokens,
-    output_tokens: totals.output_tokens + summary.output_tokens,
-    duration_ms: totals.duration_ms + summary.duration_ms,
-  };
+  state.invocation_totals = accumulatedTotals(state, summary);
   state.recent_invocations = [...(state.recent_invocations || []), { ...summary, failed: true }].slice(-3);
-  appendEvent(root, state.work_id, { event: 'provider-failed', ...summary });
+  appendEvent(root, state.work_id, {
+    event: error?.pair_interrupted ? 'provider-interrupted' : 'provider-failed',
+    ...summary,
+  });
   saveState(root, state);
 }
 
@@ -439,12 +593,16 @@ function verificationCommand(command, cwd) {
     maxBuffer: 8 * 1024 * 1024,
   });
   const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+  // Split once and reuse: the two identity scans below would otherwise each re-strip and re-split the
+  // same up-to-8 MB verification log.
+  const lines = cleanOutputLines(output);
   return {
     status: result.error ? null : result.status,
     duration_ms: Date.now() - started,
     log_digest: digest(output),
     diagnostic: result.error ? String(result.error.message).slice(0, 500) : verificationDiagnostic(result),
-    failing_tests: failingTestIdentities(output),
+    failing_tests: failingTestIdentitiesFromLines(lines),
+    warnings: warningIdentitiesFromLines(lines),
   };
 }
 
@@ -467,17 +625,50 @@ const FAILING_TEST_PATTERNS = [
 ];
 const FAILING_TEST_IDENTITY_LIMIT = 300;
 
-function failingTestIdentities(output) {
+// Shared by every identity scan below: strip ANSI, split into lines, and drop blanks once so a caller
+// holding an 8 MB verification log never pays for that pass twice on the same output.
+function cleanOutputLines(output) {
+  return String(output).replaceAll(ANSI_ESCAPE, '').split(/\r?\n/u).map(line => line.trim()).filter(Boolean);
+}
+
+// One skeleton for every line-oriented identity scan: try each pattern in order, stop at the first
+// match, extract, dedupe, and return sorted. `extract` receives the regexp match and returns the final
+// identity string (or a falsy value to treat the pattern as a non-match).
+function identitiesFromLines(lines, patterns, extract) {
   const identities = new Set();
-  for (const raw of String(output).replaceAll(ANSI_ESCAPE, '').split(/\r?\n/u)) {
-    const line = raw.trim();
-    if (!line) continue;
-    for (const pattern of FAILING_TEST_PATTERNS) {
-      const id = line.match(pattern)?.groups?.id?.trim();
-      if (id) { identities.add(id.slice(0, FAILING_TEST_IDENTITY_LIMIT)); break; }
+  for (const line of lines) {
+    for (const pattern of patterns) {
+      const match = line.match(pattern);
+      if (!match) continue;
+      const id = extract(match);
+      if (id) { identities.add(id); break; }
     }
   }
   return [...identities].sort();
+}
+
+function failingTestIdentitiesFromLines(lines) {
+  return identitiesFromLines(lines, FAILING_TEST_PATTERNS, match => match.groups?.id?.trim()?.slice(0, FAILING_TEST_IDENTITY_LIMIT));
+}
+
+function failingTestIdentities(output) {
+  return failingTestIdentitiesFromLines(cleanOutputLines(output));
+}
+
+// MSBuild/dotnet warning lines carry a full source path, which is noisy and machine-specific (a
+// sandboxed build and a developer checkout report the same warning under different absolute prefixes).
+// The short filename plus the compiler code is the stable part, and it is what a baseline compares run
+// over run.
+const WARNING_PATTERNS = [
+  /^(?<file>.+?)\(\d+,\d+\):\s+warning\s+(?<code>[A-Za-z]+\d+):/u,
+];
+
+function warningIdentitiesFromLines(lines) {
+  return identitiesFromLines(lines, WARNING_PATTERNS, match => `${match.groups.file.split('/').pop()}:${match.groups.code}`);
+}
+
+function warningIdentities(output) {
+  return warningIdentitiesFromLines(cleanOutputLines(output));
 }
 
 const KNOWN_FAILURE_REASON_LIMIT = 500;
@@ -558,6 +749,39 @@ function applyKnownFailureBaseline(root, workId, result) {
   return { ...result, status: 0, observed_status: result.status, baselined_failing_tests: observed };
 }
 
+// Unlike the Known Failure Baseline, no human declares this one: a warning count varies with cache
+// state and machine, so the first verification a Work ever runs is captured as its baseline rather
+// than compared against one. Every verification after that diffs against exactly that first capture.
+function knownWarningFile(root, workId) {
+  return path.join(workPaths(root, workId).directory, 'warning-baseline.json');
+}
+
+function recordKnownWarnings(root, workId, entries) {
+  const value = { schema: 1, entries };
+  writeJson(knownWarningFile(root, workId), value, 16 * 1024);
+  const stored = storeJsonBlob(root, workId, 'known-warnings', value);
+  appendEvent(root, workId, {
+    event: 'warning-baseline-captured',
+    warnings_digest: digest(JSON.stringify(entries)),
+    evidence_ref: stored.ref,
+    evidence_blob: stored.objectId,
+    entry_count: entries.length,
+  });
+  return stored;
+}
+
+function applyWarningBaseline(root, workId, result) {
+  const observed = Array.isArray(result.warnings) ? result.warnings : [];
+  const stored = readJson(knownWarningFile(root, workId));
+  if (stored === null) {
+    recordKnownWarnings(root, workId, observed);
+    return { ...result, introduced_warnings: [] };
+  }
+  const baseline = new Set(Array.isArray(stored.entries) ? stored.entries : []);
+  const introduced = observed.filter(warning => !baseline.has(warning));
+  return { ...result, introduced_warnings: introduced };
+}
+
 const DIAGNOSTIC_LIMIT = 500;
 // What names a failure is the assertion, the compiler error, or the exception message. Stack frames
 // are the bulk of a runner's output and the least of its meaning, so a tail window returns framework
@@ -616,7 +840,7 @@ function verify(root, state, slice, dependencies) {
     { review_slice_id: slice.id, command_digest: digest(slice.verify) },
     () => execute({ command: slice.verify, cwd: state.worktree, workId: state.work_id, sliceId: slice.id }),
   );
-  const result = applyKnownFailureBaseline(root, state.work_id, raw);
+  const result = applyWarningBaseline(root, state.work_id, applyKnownFailureBaseline(root, state.work_id, raw));
   appendEvent(root, state.work_id, {
     event: 'verification-finished',
     review_slice_id: slice.id,
@@ -638,6 +862,9 @@ function verificationRecord(slice, verification) {
     log_digest: verification.log_digest || null,
     // Kept out of the status field so a baselined pass never reads as an unconditional green.
     ...(verification.baselined_failing_tests ? { baselined_test_count: verification.baselined_failing_tests.length } : {}),
+    // Unconditional, unlike the field above: a warning never flips verification status, so there is no
+    // "unconditional green" for this count to be mistaken for.
+    introduced_warning_count: (verification.introduced_warnings || []).length,
   };
 }
 
@@ -709,9 +936,34 @@ function recordHumanOverride(root, state, projected, action, reason) {
   return text;
 }
 
+// Acceptance is where continuity has done its whole job: the slice is settled, and every later slice
+// starts from a codebase this session no longer describes. Keeping it alive would be the bloat the
+// rotation budget exists to prevent, so it retires here — on the record, before compaction drops it.
+function retireWarmSession(root, state, projected, reason) {
+  const warm = projected.warm_session;
+  if (!warm) return;
+  appendEvent(root, state.work_id, {
+    event: 'warm-session-retired',
+    review_slice_id: projected.id,
+    reason,
+    session_id: warm.session_id,
+    calls: warm.calls || 0,
+    context_tokens: warm.context_tokens || 0,
+  });
+  delete projected.warm_session;
+}
+
 function acceptSlice(root, state, context, projected) {
   markCompositionRisk(state, projected);
+  retireWarmSession(root, state, projected, 'acceptance');
   projected.status = 'accepted';
+  // An accepted Review Slice is not a blocked one. Override-accept is a real way out of an exhausted
+  // correction, and it reached here with the Work still carrying the block that stopped it — so a Work that
+  // moved on to its next slice kept a blocked_reason naming a slice already accepted. status renders that
+  // reason only while the lifecycle is blocked, which is exactly what made it survive unnoticed in
+  // state.json, where a handover or a later session reads it as current.
+  state.blocked_reason = null;
+  state.blocked_precondition = null;
   appendEvent(root, state.work_id, {
     event: 'slice-accepted',
     review_slice_id: projected.id,
@@ -767,15 +1019,39 @@ function cumulativeVerification(root, state, context, dependencies) {
   return saveState(root, state);
 }
 
-function reviewPrompt(context, slice, projected, verification, guidance) {
-  const design = projected.design_check_ref ? fs.readFileSync(path.join(context.paths.designChecks, `${slice.id}.md`), 'utf8').trim() : null;
-  const guidanceText = guidance.length > 0 ? `\nApplicable approved Review Guidance:\n${guidance.map(item => `- ${item.rule}`).join('\n')}` : '';
-  return `Review one immutable checkpoint. Do not edit. Approval must be {"verdict":"approve","findings":[]} with no narrative. Return at most three BLOCKER/MAJOR findings; omit style, preferences, optional hardening, speculative edges, and unsupported architecture claims. Every finding requires a falsifiable claim, reachable scenario, impact, pass condition, and exact checkpoint commit/path/blob/line anchor.\n\nReview Slice: ${slice.id}\nOutcome: ${slice.outcome}\nAcceptance Criteria:\n${criteriaText(context, slice)}\nBase: ${projected.base_commit}\nCheckpoint: ${projected.checkpoint_commit}\nVerification: ${JSON.stringify(verification)}\nDesign Check:\n${design || 'not applicable'}\nArchitecture risk: ${projected.architecture_risk || 'none declared or detected'}${guidanceText}\n\nStart with git diff ${projected.base_commit}..${projected.checkpoint_commit}. Inspect only changed files, named Design Check callers, and exact contracts needed to test reachable behavior. Existing patterns are evidence only; judge responsibility, ownership, lifetime, state, failure ownership, concurrency, contract compatibility, middleware/event ordering, and replica behavior against this change.${SANDBOXED_BUILD_NOTE}`;
+// The coordinator already holds the two commit ids, so it can hand the reviewer the diff itself instead
+// of two ids and an instruction to derive it. Over the cap the reviewer derives it exactly as before —
+// an oversized diff inlined would crowd out the code reading that makes the review worth having.
+function checkpointDiff(worktree, baseCommit, checkpointCommit, maxBytes) {
+  if (!baseCommit || !checkpointCommit) return null;
+  const text = git(worktree, ['diff', '--no-color', `${baseCommit}..${checkpointCommit}`], { trim: false }).stdout;
+  return Buffer.byteLength(text, 'utf8') <= maxBytes ? text : null;
+}
+
+function checkpointReviewPrompt(root, state, context, slice, projected, guidance, dependencies) {
+  const settings = warmSettingsForWork(state, dependencies.env || process.env);
+  return reviewPrompt({
+    slice,
+    criteria: criteriaText(context, slice),
+    designCheck: projected.design_check_ref ? recordedDesignCheck(context, slice)?.trim() || null : null,
+    baseCommit: projected.base_commit,
+    checkpointCommit: projected.checkpoint_commit,
+    verification: projected.verification,
+    architectureRisk: projected.architecture_risk || null,
+    guidance,
+    diff: checkpointDiff(state.worktree, projected.base_commit, projected.checkpoint_commit, settings.reviewDiffInlineMaxBytes),
+  });
 }
 
 function runCheckpointReview(root, state, context, slice, projected, options, dependencies) {
   const guidance = activeReviewGuidance(root, state.work_id, [projected.route]);
-  const run = providerCall(root, state, slice.id, 'review', reviewPrompt(context, slice, projected, projected.verification, guidance), options, dependencies, 'review', true);
+  const run = providerCall(root, state, {
+    sliceId: slice.id,
+    kind: 'review',
+    mode: 'review',
+    reviewSchema: true,
+    buildPrompt: () => checkpointReviewPrompt(root, state, context, slice, projected, guidance, dependencies),
+  }, options, dependencies);
   const recorded = recordReviewOutcome(root, {
     workId: state.work_id,
     sliceId: slice.id,
@@ -945,13 +1221,25 @@ function clearedDirtyWorktreeBlock(root, state) {
 
 function runSliceImplementation(root, state, context, slice, projected, options, dependencies) {
   const correction = projected.status === 'correction-ready';
-  if (!correction && unwaivedDirtyWorktree(state)) {
+  // The gate asks "did something outside this loop leave changes here" — and after an interrupt the
+  // answer is no: the changes are the interrupted attempt's own half-finished work, which continuing is
+  // supposed to pick up. Blocking on them would make interrupt-then-continue impossible.
+  if (!correction && !projected.interrupted_at && unwaivedDirtyWorktree(state)) {
     return blockOnDirtyWorktree(root, state, projected, `Pair worktree is dirty before Review Slice ${slice.id}`);
   }
   if (!projected.base_commit) projected.base_commit = git(state.worktree, ['rev-parse', 'HEAD']).stdout;
   const headBefore = git(state.worktree, ['rev-parse', 'HEAD']).stdout;
-  const prompt = correction ? correctionPrompt(context, slice, projected, state) : implementationPrompt(context, slice, projected);
-  const run = providerCall(root, state, slice.id, correction ? 'correction' : 'implementation', prompt, options, dependencies);
+  const run = providerCall(root, state, {
+    sliceId: slice.id,
+    kind: correction ? 'correction' : 'implementation',
+    warm: { projected },
+    buildPrompt: ({ warm }) => sliceAttemptPrompt(root, state, context, slice, projected, { correction, warm }),
+  }, options, dependencies);
+  // Spent by the attempt that carried it, exactly as a Correction Direction is: a warm session already
+  // remembers the turn it was delivered in, and re-sending it every round would make one sentence read
+  // as standing policy.
+  spendSteering(root, state, projected);
+  delete projected.interrupted_at;
   const output = validateSliceResult(run.output);
   const headAfter = git(state.worktree, ['rev-parse', 'HEAD']).stdout;
   if (headAfter !== headBefore) {
@@ -983,7 +1271,17 @@ function runSliceImplementation(root, state, context, slice, projected, options,
 }
 
 function runPostDiffDesign(root, state, context, slice, projected, options, dependencies) {
-  const run = providerCall(root, state, slice.id, 'post-diff-design', postDiffDesignPrompt(context, slice, projected), options, dependencies, 'review');
+  const run = providerCall(root, state, {
+    sliceId: slice.id,
+    kind: 'post-diff-design',
+    mode: 'review',
+    buildPrompt: () => postDiffDesignPrompt({
+      slice,
+      criteria: criteriaText(context, slice),
+      baseCommit: projected.base_commit,
+      checkpointCommit: projected.checkpoint_commit,
+    }),
+  }, options, dependencies);
   const output = validateSliceResult(run.output);
   if (output.status !== 'design-required') throw new Error('post-diff escalation must return a Design Check without editing');
   saveDesignCheck(root, state, slice, projected, output.design_check, output.architecture_risk || projected.architecture_risk);
@@ -1007,7 +1305,23 @@ function combinedReview(root, state, context, options, dependencies) {
     verification: { status: 0, cumulative: true },
     design_check_ref: null,
   };
-  const run = providerCall(root, state, synthetic.id, 'combined-review', reviewPrompt(context, synthetic, projected, projected.verification, []), options, dependencies, 'review', true);
+  const settings = warmSettingsForWork(state, dependencies.env || process.env);
+  const run = providerCall(root, state, {
+    sliceId: synthetic.id,
+    kind: 'combined-review',
+    mode: 'review',
+    reviewSchema: true,
+    buildPrompt: () => reviewPrompt({
+      slice: synthetic,
+      criteria: criteriaText(context, synthetic),
+      baseCommit: projected.base_commit,
+      checkpointCommit: projected.checkpoint_commit,
+      verification: projected.verification,
+      architectureRisk: projected.architecture_risk,
+      guidance: [],
+      diff: checkpointDiff(state.worktree, projected.base_commit, projected.checkpoint_commit, settings.reviewDiffInlineMaxBytes),
+    }),
+  }, options, dependencies);
   const recorded = recordReviewOutcome(root, {
     workId: state.work_id,
     sliceId: synthetic.id,
@@ -1056,7 +1370,40 @@ function advanceWork(root, options = {}, dependencies = {}) {
   return withDispatchLease(root, state.work_id, { command: 'run' }, () => advanceHeldWork(root, options, dependencies));
 }
 
+// An interrupted attempt is a human decision, not a fault, so it does not block the Work, does not spend
+// the one correction, and is never recorded as an environment failure — that misclassification is what
+// used to make stopping a run cost the loop its patience. recordFailedInvocation has already journalled
+// the attempt by the time this runs; all that is left is to say where the slice stands.
+function recordInterruptedAttempt(root, options) {
+  const state = currentState(root, options.workId || null);
+  const context = workContext(root, state);
+  const projected = activeSlice(state, context)?.projected;
+  if (projected) {
+    projected.interrupted_at = now();
+    appendEvent(root, state.work_id, {
+      event: 'attempt-interrupted',
+      review_slice_id: projected.id,
+      status: projected.status,
+      warm_session: Boolean(projected.warm_session?.session_id),
+    });
+  }
+  state.lifecycle = 'ready';
+  state.next_action = projected
+    ? `steer or re-run ${projected.id}: pair-loop steer --text "<direction>" then pair-loop run`
+    : 'run again';
+  return saveState(root, state);
+}
+
 function advanceHeldWork(root, options = {}, dependencies = {}) {
+  try {
+    return dispatchHeldWork(root, options, dependencies);
+  } catch (error) {
+    if (!error.pair_interrupted) throw error;
+    return recordInterruptedAttempt(root, options);
+  }
+}
+
+function dispatchHeldWork(root, options = {}, dependencies = {}) {
   const state = currentState(root, options.workId || null);
   const context = workContext(root, state);
   clearedDirtyWorktreeBlock(root, state);
@@ -1115,6 +1462,61 @@ function recordCorrectionDirection(root, options = {}) {
   return saveState(root, state);
 }
 
+function spendSteering(root, state, projected) {
+  if (!projected.steering_ref) return;
+  appendEvent(root, state.work_id, { event: 'steering-delivered', review_slice_id: projected.id, evidence_ref: projected.steering_ref });
+  delete projected.steering_ref;
+  delete projected.steering_blob;
+  delete projected.steering_bytes;
+}
+
+// The human half of a warm session. `direct` writes a Correction Direction — a model-facing field, bound
+// at 1000 characters, spent by one correction. This is the other thing a person needs: say something to
+// the session that is already carrying this slice, in as many words as it takes, and have it continue.
+// Bounded at 8 KiB because that is a bound on typing, not on generation.
+function steerWarmSession(root, options = {}, dependencies = {}) {
+  const state = currentState(root, options.workId || null);
+  const context = workContext(root, state);
+  const projected = options.sliceId
+    ? state.slices.find(item => item.id === options.sliceId)
+    : activeSlice(state, context)?.projected;
+  if (!projected) throw new Error('no Review Slice selected to steer');
+  // Trimmed at the ends only. Collapsing whitespace is right for a field a model must parse as one
+  // claim; a human writing eight kilobytes is writing paragraphs, and reflowing them loses their shape.
+  const text = String(options.text || '').trim();
+  if (!text) throw new Error('steering requires --text');
+  const bytes = Buffer.byteLength(text, 'utf8');
+  if (bytes > STEER_TEXT_LIMIT_BYTES) {
+    throw new Error(`human steering is bounded at ${STEER_TEXT_LIMIT_BYTES} bytes and this is ${bytes}. Cut ${bytes - STEER_TEXT_LIMIT_BYTES}, or record the longer half as a finding against the checkpoint it concerns.`);
+  }
+  const stored = storeBlob(root, state.work_id, `steering/${projected.id}`, text);
+  projected.steering_ref = stored.ref;
+  projected.steering_blob = stored.objectId;
+  projected.steering_bytes = bytes;
+  const warm = Boolean(projected.warm_session?.session_id);
+  appendEvent(root, state.work_id, {
+    event: 'steering-recorded',
+    review_slice_id: projected.id,
+    bytes,
+    warm_session: warm,
+    evidence_ref: stored.ref,
+    evidence_blob: stored.objectId,
+  });
+  saveState(root, state);
+  // Dispatching is what makes this a turn in the warm session rather than a note nobody reads. Only from
+  // `ready`: steering a Work that is waiting on adjudication must not jump the gate that is waiting for
+  // the human, and the text still reaches whichever attempt runs next.
+  if (options.dispatch === false || state.lifecycle !== 'ready') {
+    return { state, dispatched: false, warm_session: warm, review_slice_id: projected.id };
+  }
+  return {
+    state: advanceWork(root, options, dependencies),
+    dispatched: true,
+    warm_session: warm,
+    review_slice_id: projected.id,
+  };
+}
+
 // Re-running the declared verification is not a model action, so it costs no correction. That is the
 // point: a Review Slice parked at correction-ready by an environmental failure — a flake, a missing
 // build step, a pre-existing failure inside its verify scope — has sound code and no defect for a
@@ -1140,6 +1542,7 @@ function verifyActiveSlice(root, options = {}, dependencies = {}) {
     failing_tests: verification.failing_tests || [],
     baselined_failing_tests: verification.baselined_failing_tests || [],
     introduced_failing_tests: verification.introduced_failing_tests || [],
+    introduced_warnings: verification.introduced_warnings || [],
     diagnostic: verification.status === 0 ? null : verification.diagnostic || null,
     checkpoint_created: false,
   };
@@ -1197,6 +1600,26 @@ function correctionHunks(worktree, priorCheckpoint, checkpointCommit) {
     }
   }
   return files;
+}
+
+// "Did the correction change anything" was only answerable by opening a diff and reading it, and the diff a
+// human reaches for first — the whole slice — cannot answer it at all when the slice created the file being
+// corrected: the file is one added block there, so an edit inside it is invisible as a delta. Observed live on
+// S-05, where 9 renamed tests read as no change. The counts come from hunks already parsed, so this costs
+// nothing beyond the diff correctionAttribution already ran.
+function correctionShape(files) {
+  if (!files) return null;
+  let hunkCount = 0;
+  let added = 0;
+  let removed = 0;
+  for (const hunks of files.values()) {
+    for (const hunk of hunks) {
+      hunkCount += 1;
+      added += hunk.new_lines;
+      removed += hunk.old_lines;
+    }
+  }
+  return { file_count: files.size, hunk_count: hunkCount, lines_added: added, lines_removed: removed };
 }
 
 // A pure insertion carries old_lines 0; it still sits at a place in the old file, so it is compared as a
@@ -1284,6 +1707,7 @@ function sliceEvidence(root, options = {}) {
     ? listReviewOutcomes(root, state.work_id).find(item => item.review_outcome_id === projected.review_outcome_id)
     : null;
   const attribution = correctionAttribution(state.worktree, priorCheckpoint, projected.checkpoint_commit, outcome?.findings || []);
+  const shape = correctionShape(correctionHunks(state.worktree, priorCheckpoint, projected.checkpoint_commit));
   return {
     work_id: state.work_id,
     worktree: state.worktree,
@@ -1295,6 +1719,7 @@ function sliceEvidence(root, options = {}) {
     base_commit: projected.base_commit || state.base_commit,
     checkpoint_commit: projected.checkpoint_commit || null,
     prior_checkpoint_commit: priorCheckpoint,
+    correction_shape: shape,
     correction_count: projected.correction_count,
     architecture_risk: projected.architecture_risk || null,
     design_check: readPairRefText(root, workRef, `design-checks/${projected.id}`),
@@ -1363,7 +1788,17 @@ function projectAdjudication(root, state, projected) {
     return saveState(root, state);
   }
   const valid = outcome.findings.some(finding => feedbackForFinding(root, state.work_id, finding.finding_id).some(item => item.disposition === 'valid'));
-  if (valid && projected.correction_count >= 1) {
+  // The budget bounds a MODEL loop. A fresh reviewer can always find something, so find → correct → find →
+  // correct never terminates on its own, and the block is what puts a human back in it. A human review is
+  // already that human: reading the checkpoint the last correction produced, writing a finding against it
+  // and submitting it IS the deliberation `unblock --reason "<why a second correction is warranted>"` asks
+  // for. Observed live on S-08 — round two of a human review blocked one gesture after the human typed the
+  // finding that says why, and the only way forward was to write the same justification again in different
+  // words. The failure path in handleCompletedImplementation is deliberately untouched: a correction that
+  // fails its own verification still blocks whoever raised it, because that bounds a model that cannot do
+  // the work rather than a human who keeps finding more of it.
+  const humanReview = Boolean(outcome.reviewer?.human);
+  if (valid && projected.correction_count >= 1 && !humanReview) {
     projected.status = 'blocked';
     state.lifecycle = 'blocked';
     state.blocked_reason = `Review Slice ${projected.id} exhausted its one correction`;
@@ -1394,11 +1829,16 @@ function correctionBrief(root, options = {}) {
   if (projected.status !== 'correction-ready') {
     throw new Error(`Review Slice ${projected.id} is ${projected.status}; a correction brief exists only at correction-ready`);
   }
+  // Shown as the correction would run right now: a slice holding a warm session receives only the
+  // call-variable tail, and a brief that pretended otherwise would misrepresent the very thing it exists
+  // to make visible.
+  const warm = Boolean(projected.warm_session?.session_id);
   return {
     work_id: state.work_id,
     review_slice_id: projected.id,
     correction_direction: projected.correction_direction || null,
-    prompt: correctionPrompt(context, manifestSlice(context, projected.id), projected, state),
+    warm_session: warm,
+    prompt: sliceAttemptPrompt(root, state, context, manifestSlice(context, projected.id), projected, { correction: true, warm }),
   };
 }
 
@@ -1417,6 +1857,27 @@ function reconcileAdjudication(root, options = {}) {
   }
   if (!projected.review_outcome_id) throw new Error(`Review Slice ${projected.id} has no Review Outcome to reconcile against`);
   return projectAdjudication(root, state, projected);
+}
+
+// The submit IS the human input. Closing adjudication on a valid finding and then waiting to be told
+// "now run" is a second gesture asking the human to confirm what they just said — and the wait it
+// creates is where a 30-to-55-minute review round is spent.
+//
+// Called by the human surfaces after their gesture lands, and deliberately NOT folded into
+// adjudicateFinding or submitHumanFindings. Those are bookkeeping: a projection repair, a batch, or a
+// test that records feedback must not spend a model session as a side effect of writing a row. A
+// dispatch belongs to the gesture a person actually made, which is the only place that knows one was
+// made — which is also what keeps "never spends autonomously" structural rather than conventional.
+function dispatchCorrectionOnSubmit(root, options = {}, dependencies = {}) {
+  const state = currentState(root, options.workId || null);
+  const settings = warmSettingsForWork(state, dependencies.env || process.env);
+  if (!settings.dispatchCorrectionOnSubmit || state.lifecycle !== 'ready') return { state, dispatched: false };
+  const context = workContext(root, state);
+  const projected = options.sliceId
+    ? state.slices.find(item => item.id === options.sliceId)
+    : activeSlice(state, context)?.projected;
+  if (projected?.status !== 'correction-ready') return { state, dispatched: false };
+  return { state: advanceWork(root, { ...options, sliceId: projected.id }, dependencies), dispatched: true };
 }
 
 function adjudicateFinding(root, options = {}) {
@@ -1447,8 +1908,19 @@ function humanDraftFile(root, workId, sliceId) {
   return path.join(workPaths(root, workId).findingDrafts, `${safeSegment(sliceId, 'Review Slice ID')}.json`);
 }
 
+// A pass condition identical to the claim is residue from the version that defaulted one from the other, and
+// every draft written then still carries it on disk. Stripping it on read means no surface downstream has to
+// decide whether a "passes when" line is a second statement or the first one repeated.
+function withoutEchoedPassCondition(finding) {
+  const claim = String(finding.claim ?? '').replace(/\s+/gu, ' ').trim();
+  const passCondition = String(finding.pass_condition ?? '').replace(/\s+/gu, ' ').trim();
+  if (passCondition && passCondition !== claim) return finding;
+  const { pass_condition: echoed, ...rest } = finding;
+  return rest;
+}
+
 function listHumanFindingDraft(root, workId, sliceId) {
-  return readJson(humanDraftFile(root, workId, sliceId))?.findings || [];
+  return (readJson(humanDraftFile(root, workId, sliceId))?.findings || []).map(withoutEchoedPassCondition);
 }
 
 function selectedSlice(state, context, options) {
@@ -1484,6 +1956,23 @@ function humanPassCondition(value) {
   return text;
 }
 
+// Bounded here, at the gesture still holding the text, and not only in the Review Outcome the submission
+// mints. Observed live: four findings drafted against one checkpoint, the fourth 202 characters long, and
+// the bound surfaced as a refusal of the whole submission — from a gesture that can edit nothing, naming a
+// limit but not the length, for a finding the human had stopped looking at three findings ago.
+function humanClaim(value) {
+  const text = String(value ?? '').replace(/\s+/gu, ' ').trim();
+  if (!text) throw new Error('a human finding requires a claim');
+  if (text.length > HUMAN_TEXT_BOUNDS.claim) {
+    throw new Error([
+      `This claim is ${text.length} characters and a finding carries at most ${HUMAN_TEXT_BOUNDS.claim}.`,
+      `Cut ${text.length - HUMAN_TEXT_BOUNDS.claim} and it drafts. What does not fit is usually the reasoning`,
+      'behind the claim, and the correcting session reads the lines you are anchoring it to anyway.',
+    ].join('\n'));
+  }
+  return text;
+}
+
 // Every route to a drafted finding ran through the human's memory: drafting printed the draft once as
 // transient output, and status, show, and the Review Inbox never read the draft directory at all. A draft
 // is the one piece of review evidence a human authors, so a write-only draft is the one piece they cannot
@@ -1511,8 +2000,7 @@ function humanFindingDrafts(root, workId = null) {
       return {
         review_slice_id: stored.review_slice_id || path.basename(name, '.json'),
         checkpoint_commit: stored.checkpoint_commit || null,
-        findings,
-        unstated_count: findings.filter(finding => !finding.pass_condition).length,
+        findings: findings.map(withoutEchoedPassCondition),
         stale: Boolean(staleReason),
         stale_reason: staleReason,
       };
@@ -1532,17 +2020,21 @@ function recordHumanFinding(root, options = {}) {
   // Drafting only: no Review Outcome, no status change. Reading a diff produces findings one at a time,
   // and minting an immutable content-addressed outcome per finding is what filled the Review Inbox with
   // stale duplicates whose dispositions the adjudication gate could never see.
+  const claim = humanClaim(options.claim);
+  // A pass condition is optional and, when unstated, absent — not a copy of the claim. Requiring one cost a
+  // second prompt per finding and bought nothing (the answers it produced live were a null, the phrase
+  // "coding convention", and the deferring tautology humanPassCondition refuses); defaulting it to the claim
+  // cost nothing but printed every finding twice under two headings. The human raises the issue; working out
+  // what "addressed" looks like is the correcting session's job, and the claim is what it goes on. The
+  // deferral guard applies only to a condition someone chose to type — a claim is never second-guessed for
+  // its wording, because refusing it would block the drafting gesture rather than a placeholder at a gate.
+  const passCondition = humanPassCondition(options.passCondition);
   const finding = {
     severity: options.severity || 'MAJOR',
-    claim: options.claim,
-    scenario: options.scenario || options.claim,
-    impact: options.impact || options.claim,
-    // Left unstated rather than fabricated: correctionPrompt tells the corrector to satisfy each pass
-    // condition and nothing else says when a human finding is done, so a placeholder like "the human who
-    // raised this confirms it is addressed" is unfalsifiable by the corrector and unbounds the one
-    // bounded correction. Drafting still allows it to be missing — reading produces the claim before the
-    // remedy — and submission is where it becomes required.
-    pass_condition: humanPassCondition(options.passCondition),
+    claim,
+    scenario: options.scenario || claim,
+    impact: options.impact || claim,
+    ...(passCondition && passCondition !== claim ? { pass_condition: passCondition } : {}),
     evidence: {
       commit: projected.checkpoint_commit,
       path: options.file,
@@ -1552,33 +2044,101 @@ function recordHumanFinding(root, options = {}) {
     },
   };
   const file = humanDraftFile(state.worktree, state.work_id, projected.id);
-  const findings = [...listHumanFindingDraft(state.worktree, state.work_id, projected.id), finding];
+  const existing = listHumanFindingDraft(state.worktree, state.work_id, projected.id);
+  // Refused here rather than merely displayed. Observed live: the same anchor was drafted three times, the
+  // claim reworded each time, because each refusal named a problem and answered it with a shell command
+  // while the only gesture bound to a key was "draft another". A second finding on the same lines is a
+  // re-draft far more often than a second concern, so the escape is explicit and the refusal names every
+  // way forward — complete the one already there, discard it, or declare this a separate concern.
+  if (!options.allowSameAnchor) {
+    const clash = existing.findIndex(item => item.evidence?.path === options.file
+      && Number(item.evidence?.line_start) <= lineEnd
+      && Number(item.evidence?.line_end) >= lineStart);
+    if (clash !== -1) {
+      throw new Error([
+        `Drafted finding ${clash + 1} for ${projected.id} already anchors ${options.file}:${existing[clash].evidence.line_start}-${existing[clash].evidence.line_end}:`,
+        `  ${existing[clash].claim}`,
+        ...(existing[clash].pass_condition ? [`  passes when: ${existing[clash].pass_condition}`] : []),
+        'If this is the same concern, reword or discard that one rather than drafting a second copy:',
+        `  pair-loop finding --slice ${projected.id} --index ${clash + 1} --text "<the claim, reworded>"`,
+        `  pair-loop finding --slice ${projected.id} --index ${clash + 1} --drop`,
+        'If it is genuinely a separate concern on the same lines, say so:',
+        `  ...--allow-same-anchor`,
+      ].join('\n'));
+    }
+  }
+  const findings = [...existing, finding];
   writeJson(file, { schema: 1, review_slice_id: projected.id, checkpoint_commit: projected.checkpoint_commit, findings });
   return { drafted: finding, findings, file, sliceId: projected.id };
 }
 
-// Completing a draft in place: the submission gate below refuses a finding with no pass condition, and a
-// refusal whose only escape is to re-draft the finding would leave a duplicate in the outcome. Default
-// target is the finding just drafted, because that is the one the human is still looking at.
-function setHumanFindingPassCondition(root, options = {}) {
+// Every gesture that edits a draft resolves the same three things — which slice, which findings, which one
+// of them — and defaults to the finding just drafted, because that is the one the human is still looking at.
+function draftTarget(root, options, verb) {
   const state = currentState(root, options.workId || null);
   const context = workContext(root, state);
   const projected = selectedSlice(state, context, options);
   const findings = listHumanFindingDraft(state.worktree, state.work_id, projected.id);
-  if (findings.length === 0) throw new Error(`Review Slice ${projected.id} has no drafted finding to give a pass condition`);
+  if (findings.length === 0) throw new Error(`Review Slice ${projected.id} has no drafted finding to ${verb}`);
   const index = options.index === undefined || options.index === null ? findings.length : Number(options.index);
   if (!Number.isInteger(index) || index < 1 || index > findings.length) {
     throw new Error(`drafted finding ${options.index} is outside 1-${findings.length} for ${projected.id}`);
   }
-  const passCondition = humanPassCondition(options.passCondition);
-  if (!passCondition) throw new Error('a pass condition must name the observable state that makes the finding addressed');
-  findings[index - 1].pass_condition = passCondition;
+  return { state, projected, findings, index };
+}
+
+function writeDraft(state, projected, findings) {
   writeJson(humanDraftFile(state.worktree, state.work_id, projected.id), {
     schema: 1,
     review_slice_id: projected.id,
     checkpoint_commit: projected.checkpoint_commit,
     findings,
   });
+}
+
+// A draft is the mutable half of review on purpose — a Review Outcome is immutable and content-addressed,
+// a draft is where findings gather before they become one. It had no retraction, so the only way out of a
+// duplicate was to submit it and disposition it away, which writes the duplicate into the immutable record
+// and into the Review Guidance bank that learns from it. Dropping is confined to the draft: nothing already
+// recorded can be reached by it.
+function dropHumanFindingDraft(root, options = {}) {
+  const { state, projected, findings, index } = draftTarget(root, options, 'drop');
+  const [dropped] = findings.splice(index - 1, 1);
+  // An empty draft file would keep reporting a draft that holds nothing, which is the orphan shape status
+  // already had to learn to explain. Removing it means "no draft" and "a draft of nothing" stay the same
+  // state rather than two.
+  if (findings.length === 0) fs.rmSync(humanDraftFile(state.worktree, state.work_id, projected.id), { force: true });
+  else writeDraft(state, projected, findings);
+  return { sliceId: projected.id, dropped, findings };
+}
+
+// Rewording a drafted claim. The draft was mutable for its pass condition and nothing else, so a claim that
+// ran past the bound — or simply came out wrong — could only be dropped and retyped from memory, which is
+// how the same anchor came to be drafted three times live. The claim also travels into scenario and impact
+// when those were defaulted from it, or a reworded finding would record the old wording twice.
+function amendHumanFinding(root, options = {}) {
+  const { state, projected, findings, index } = draftTarget(root, options, 'reword');
+  const previous = findings[index - 1];
+  const claim = humanClaim(options.claim);
+  findings[index - 1] = {
+    ...previous,
+    claim,
+    scenario: previous.scenario === previous.claim ? claim : previous.scenario,
+    impact: previous.impact === previous.claim ? claim : previous.impact,
+  };
+  writeDraft(state, projected, findings);
+  return { sliceId: projected.id, index, findings };
+}
+
+// Stating a pass condition on a draft in place. Optional now — an unstated one is absent rather than an echo
+// of the claim — so this is the gesture for the finding whose done-ness is worth naming separately, not a
+// gate every finding has to walk through.
+function setHumanFindingPassCondition(root, options = {}) {
+  const { state, projected, findings, index } = draftTarget(root, options, 'give a pass condition');
+  const passCondition = humanPassCondition(options.passCondition);
+  if (!passCondition) throw new Error('a pass condition must name the observable state that makes the finding addressed');
+  findings[index - 1].pass_condition = passCondition;
+  writeDraft(state, projected, findings);
   return { sliceId: projected.id, index, findings };
 }
 
@@ -1588,19 +2148,6 @@ function submitHumanFindings(root, options = {}) {
   const projected = selectedSlice(state, context, options);
   const findings = listHumanFindingDraft(state.worktree, state.work_id, projected.id);
   if (findings.length === 0) throw new Error(`Review Slice ${projected.id} has no drafted finding to submit`);
-  // A draft may be half-written; a Review Outcome may not. This is the seam where a human finding gains
-  // the force to steer a correction, so it is the seam that requires something falsifiable to satisfy.
-  const unstated = findings.filter(finding => !finding.pass_condition);
-  if (unstated.length > 0) {
-    throw new Error([
-      `${unstated.length} of ${findings.length} drafted finding(s) for ${projected.id} state no pass condition, so the correction has nothing falsifiable to satisfy:`,
-      ...findings
-        .map((finding, index) => ({ finding, position: index + 1 }))
-        .filter(item => !item.finding.pass_condition)
-        .map(item => `  ${item.position}. ${item.finding.evidence.path}:${item.finding.evidence.line_start}  ${item.finding.claim}`),
-      `Name the observable state that makes each one addressed: pair-loop finding --slice ${projected.id} --index <n> --pass-condition "<observable state>"`,
-    ].join('\n'));
-  }
   const recorded = recordReviewOutcome(state.worktree, {
     workId: state.work_id,
     sliceId: projected.id,
@@ -1612,10 +2159,22 @@ function submitHumanFindings(root, options = {}) {
   });
   fs.rmSync(humanDraftFile(state.worktree, state.work_id, projected.id), { force: true });
   projected.review_outcome_id = recorded.outcome.review_outcome_id;
-  projected.status = 'awaiting-feedback';
-  state.lifecycle = 'awaiting-human';
-  state.next_action = `adjudicate ${recorded.outcome.findings.length} finding(s) for ${projected.id}`;
-  saveState(root, state);
+  // Adjudication asks "is this claim real?" — a question only a model finding has open. The human wrote
+  // these, read them back in the draft, and chose to submit; asking them to answer it again, once per
+  // finding and with a reason, is the reducer second-guessing a verdict it was just handed, which
+  // acceptHumanReview already refuses to do for an override. So submission records the verdict it is.
+  // The feedback rows are real, not skipped: the acceptance gate and the Review Guidance bank both read
+  // dispositions, and an outcome with none would wedge the slice at awaiting-feedback with no gesture
+  // left that could clear it.
+  for (const finding of recorded.outcome.findings) {
+    recordReviewFeedback(root, {
+      workId: state.work_id,
+      findingId: finding.finding_id,
+      disposition: 'valid',
+      reason: 'raised by the human reviewing this checkpoint, so submission is the verdict',
+    });
+  }
+  projectAdjudication(root, state, projected);
   return recorded;
 }
 
@@ -1660,11 +2219,21 @@ module.exports = {
   DIRTY_WORKTREE_PRECONDITION,
   REVIEW_OUTPUT_LIMIT_BYTES,
   SLICE_OUTPUT_LIMIT_BYTES,
+  STEER_TEXT_LIMIT_BYTES,
+  checkpointDiff,
+  dispatchCorrectionOnSubmit,
+  sliceAttemptPrompt,
+  steerWarmSession,
   acceptHumanReview,
+  activeSlice,
   adjudicateFinding,
   advanceWork,
+  amendHumanFinding,
+  applyWarningBaseline,
   correctionBrief,
+  correctionShape,
   currentState,
+  dropHumanFindingDraft,
   failingTestIdentities,
   forgetKnownFailure,
   humanFindingDrafts,
@@ -1674,6 +2243,7 @@ module.exports = {
   listHumanFindingDraft,
   recordHumanFinding,
   recordKnownFailure,
+  recordKnownWarnings,
   reconcileAdjudication,
   removeWorktree,
   setHumanFindingPassCondition,
@@ -1684,4 +2254,6 @@ module.exports = {
   verificationCommand,
   verifyActiveSlice,
   validateSliceResult,
+  warningIdentities,
+  workContext,
 };

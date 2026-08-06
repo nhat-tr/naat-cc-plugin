@@ -130,6 +130,27 @@ Use only when the repo's target framework supports the feature:
 | `System.Threading.Lock` | .NET 9 / C# 13 | Explicit lock objects with better semantics than `object` |
 | `field` keyword in property accessors | .NET 10 / C# 14 | Validation/normalization without backing field boilerplate |
 | Null-conditional assignment (`x?.Prop = value;`) | .NET 10 / C# 14 | Concise null-safe property setting |
+| Extension members (`extension` blocks) | .NET 10 / C# 14 | Extension properties/static members on types you don't own — groups related extensions under one receiver |
+| `nameof` with unbound generics (`nameof(List<>)`) | .NET 10 / C# 14 | Referring to generic type names without a dummy type argument |
+| First-class `Span<T>`/`ReadOnlySpan<T>` conversions | .NET 10 / C# 14 | Span-taking APIs accept arrays/strings without explicit `.AsSpan()` |
+| Partial constructors & partial events | .NET 10 / C# 14 | Source-generator scenarios splitting declaration from implementation |
+
+**LangVersion pins override the table**: a repo with `<LangVersion>12</LangVersion>` (e.g. WorkCalCore) gets C# 12 features only, regardless of its net10.0 target.
+
+**C# 15 / .NET 11 (GA November 2026, preview as of mid-2026)**: headline features are union types, collection expression arguments, and extension indexers. Do **not** use in any repo until it targets net11.0 — preview features are off-limits in production repos.
+
+## Static-Analysis & Review Fixes
+
+- **Fix every instance of the defect pattern in the touched file**, not only the reported line numbers — a Sonar fix that patches lines 20/23 but leaves the identical call shape at lines 47/217 is not done. Grep the file for the same shape before closing.
+- **Check public-contract blast radius before closing a "compliance" fix**: model-binding/attribute changes can alter the API surface (e.g. `[FromHeader]` adding a header to every published Swagger operation). A code-smell fix that changes a published contract needs an explicit decision, not a silent side effect.
+- **A review comment states an intent, not a diff**: "any user can use this" means remove *all* role gates, not just the named one. Verify the fix achieves the stated intent fully; flag contradictions instead of patching literally.
+
+## LLM-Facing Tool Contracts
+
+- **Every `[Description]` on a tool, parameter, or enum must state what the implementation currently does.** If enforcing code is disabled or commented out, the description must say so or be removed — stale descriptions make the model act on false promises.
+- **Never return `null`/empty as an "already handled" signal to a model** — return an explicit advisory string; silence gets re-narrated as fresh output.
+- Every exception type that can reach an LLM-facing error message needs its own specific, value-echoing message — a generic catch-all burns the model's corrective retry on an unchanged bad value.
+- Closed enums serialized to a wire schema need `[Description]`/values in the schema, or the model will guess.
 
 ## Aspire CLI Non-Interactive Note
 

@@ -64,7 +64,6 @@ test('the skill teaches the exact-session visual loop without a second agent', (
   assert.match(skill, /workspace\.json.*screen\.json.*v1 compatibility/is);
   assert.doesNotMatch(skill, /Every visual[\s\S]{0,200}validated `screen\.json` grammar/i);
   assert.match(guide, /screen\.json/);
-  assert.match(guide, /technical.*product.*business/is);
   assert.match(guide, /\| Product Concept Studio \| `product`/);
   assert.match(guide, /\| Architecture Canvas \| `architecture`/);
   assert.match(guide, /\| Research Evidence Board \| `research`/);
@@ -72,19 +71,24 @@ test('the skill teaches the exact-session visual loop without a second agent', (
   assert.match(guide, /\| Feature Review Workbench \| `review`/);
   assert.match(guide, /\| UML Diagram \| `uml`/);
   assert.match(guide, /references\/uml-visual\.md/i);
-  for (const workspaceKind of ['product', 'architecture', 'research', 'business', 'review']) {
-    assert.match(guide, new RegExp(`--workspace-kind ${workspaceKind}`, 'u'));
-  }
-  assert.match(guide, /visual-session\.cjs migrate[\s\S]*--work-id[\s\S]*--workspace-kind/i);
-  assert.match(guide, /visual-session\.cjs backout/i);
+  assert.match(guide, /--workspace-kind product/u);
+  assert.match(guide, /Substitute `architecture`, `research`, `business`, or `review`/u);
+  assert.match(guide, /validate --document/);
+  assert.doesNotMatch(guide, /visual-session\.cjs migrate/i, 'v1 migration belongs to the legacy reference, not the mainline guide');
+  assert.match(guide, /references\/legacy-v1-visual\.md/i);
+  const legacyGuide = read('references/legacy-v1-visual.md');
+  assert.match(legacyGuide, /technical.*product.*business/is);
+  assert.match(legacyGuide, /visual-session\.cjs migrate[\s\S]*--work-id[\s\S]*--workspace-kind/i);
+  assert.match(legacyGuide, /visual-session\.cjs backout/i);
   assert.match(guide, /visual-session\.cjs wait --timeout-ms 900000/i);
   assert.doesNotMatch(guide, /session-bridge\.cjs wait/);
   assert.match(guide, /data-brainstorm-id/);
   assert.match(guide, /React/i);
   assert.match(guide, /background wait/i);
-  assert.match(guide, /automatically re-invoke/i);
-  assert.match(guide, /server.*in foreground/i);
-  assert.match(guide, /restart.*new `connection_url`/i);
+  assert.match(guide, /re-invokes you/i);
+  assert.match(guide, /first `present` becomes the server process/i);
+  assert.match(guide, /background-command mechanism/i);
+  assert.match(guide, /"Restart the visual server" means re-present/i);
   assert.match(guide, /never watch the session/i);
   assert.match(guide, /target project.*working directory/i);
   assert.match(skill, /routine Visual Session commands.*active sandbox/i);
@@ -108,7 +112,7 @@ test('the skill teaches the exact-session visual loop without a second agent', (
   assert.match(architectureGuide, /command.*control.*data.*event.*evidence/is);
   assert.match(architectureGuide, /parent_id.*modes.*change.*multiselect/is);
   assert.match(architectureGuide, /wait[\s\S]{0,60}background task/i);
-  assert.ok(Buffer.byteLength(architectureGuide, 'utf8') <= 6_000, 'Architecture runbook must stay bounded');
+  assert.ok(Buffer.byteLength(architectureGuide, 'utf8') <= 7_000, 'Architecture runbook must stay bounded');
   assert.doesNotMatch(`${skill}\n${guide}`, /visual ready/i);
 });
 

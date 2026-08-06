@@ -702,6 +702,46 @@ function normalizeCheckpoint(input) {
   return checkpoint;
 }
 
+// A brainstorming checkpoint refresh is a delta, not a restatement: stable fields (Core Anchor,
+// findings, confirmed choices, rejected alternatives, artifacts) merge cumulatively engine-side so
+// the coordinator never re-types earlier state, while volatile fields (current direction,
+// unresolved decisions, next action) are replaced when the delta provides them. An explicitly
+// provided empty unresolved-decisions list therefore resolves the decisions; an omitted one keeps
+// the previous list.
+function mergeBrainstormCheckpointDelta(existing, input) {
+  if (!existing || typeof existing !== 'object') return input;
+  const raw = input && typeof input === 'object' ? input : {};
+  const providedUnresolved = Object.prototype.hasOwnProperty.call(raw, 'unresolvedDecisions')
+    || Object.prototype.hasOwnProperty.call(raw, 'unresolved_decisions');
+  const base = normalizeCheckpoint(existing);
+  const delta = normalizeCheckpoint(raw);
+  const mergeList = (previous, next) => {
+    const merged = [...previous];
+    for (const value of next) if (!merged.includes(value)) merged.push(value);
+    return merged;
+  };
+  const findingKey = finding => JSON.stringify([finding.finding || '', finding.reference || '']);
+  const findings = [...base.findings];
+  const seenFindings = new Set(findings.map(findingKey));
+  for (const finding of delta.findings) {
+    if (seenFindings.has(findingKey(finding))) continue;
+    findings.push(finding);
+    seenFindings.add(findingKey(finding));
+  }
+  const artifacts = new Map(base.artifacts.map(artifact => [artifact.path, artifact]));
+  for (const artifact of delta.artifacts) artifacts.set(artifact.path, artifact);
+  return normalizeCheckpoint({
+    core_anchor: delta.core_anchor || base.core_anchor,
+    findings,
+    confirmed_choices: mergeList(base.confirmed_choices, delta.confirmed_choices),
+    rejected_alternatives: mergeList(base.rejected_alternatives, delta.rejected_alternatives),
+    current_direction: delta.current_direction || base.current_direction,
+    unresolved_decisions: providedUnresolved ? delta.unresolved_decisions : base.unresolved_decisions,
+    next_action: delta.next_action || base.next_action,
+    artifacts: [...artifacts.values()],
+  });
+}
+
 function registerAgentConversation(root, input) {
   const identity = conversationIdentity(input);
   if (!identity.kind) throw new Error('Agent Conversation registration requires a kind');
@@ -888,7 +928,7 @@ function freshStartInstruction(conversation) {
 }
 
 function repairInstruction(conversation) {
-  return `Sealing has not produced an Agent Conversation Handover; run pair-loop --freshness-status --runtime ${conversation.runtime} and repair .pair/handovers before prompting again.`;
+  return `Sealing has not produced an Agent Conversation Handover yet; it retries automatically at the next freshness assessment (any pair-orient or gate run). Check pair-loop --freshness-status --runtime ${conversation.runtime} afterwards; if it still reports no handover, the checkpoint itself is incomplete — refresh it from the source conversation or seal explicitly there with pair-loop --handover-now.`;
 }
 
 // `general` is what a conversation gets when nothing declared a kind, so resolving it to `pair`
@@ -1220,8 +1260,9 @@ function sealColdAgentConversations(root, input = {}) {
   const now = Number(input.now === undefined ? Date.now() : input.now);
   if (!Number.isFinite(now) || now < 0) throw new Error('Agent Conversation timestamp must be a non-negative finite millisecond value');
   const at = timestamp(now);
-  const sealed = withRegistry(root, (registry, paths) => {
+  const swept = withRegistry(root, (registry, paths) => {
     const results = [];
+    const failures = [];
     for (const conversation of Object.values(registry.conversations)) {
       if (conversation.status !== 'warm' || !conversation.checkpoint) continue;
       const activity = activityAge(conversation.last_active_at, now);
@@ -1230,14 +1271,16 @@ function sealColdAgentConversations(root, input = {}) {
         const identity = { sourceKey: conversation.source_key, runtime: conversation.runtime };
         const result = sealConversation(root, registry, paths, identity, at);
         results.push({ sourceKey: conversation.source_key, handoverId: result.handoverId });
-      } catch {
-        // A single conversation's failure to seal must not abort the others.
+      } catch (error) {
+        // A single conversation's failure to seal must not abort the others, but a swallowed
+        // failure left conversations cold and handoverless with nothing naming the reason.
+        failures.push({ sourceKey: conversation.source_key, error: error.message });
       }
     }
-    return results;
+    return { results, failures };
   });
-  if (sealed.length) withRegistry(root, () => null);
-  return { sealed };
+  if (swept.results.length) withRegistry(root, () => null);
+  return { sealed: swept.results, failures: swept.failures };
 }
 
 function freshnessProjection(root, now = Date.now()) {
@@ -1587,31 +1630,59 @@ function validatePairWorkManifestBinding(root, reference, kind, checkpoint) {
   if (!artifact) throw new Error('invalid handover');
 }
 
+function nonPairArtifactMatchesDisk(root, rootReal, artifact) {
+  const absolute = path.resolve(root, artifact.path);
+  const relative = path.relative(root, absolute).split(path.sep).join('/');
+  const stat = fs.lstatSync(absolute, { throwIfNoEntry: false });
+  if (
+    relative !== artifact.path ||
+    relative === '..' ||
+    relative.startsWith('../') ||
+    !stat ||
+    !stat.isFile() ||
+    stat.isSymbolicLink()
+  ) {
+    return false;
+  }
+  const real = fs.realpathSync(absolute);
+  if (real !== rootReal && !real.startsWith(`${rootReal}${path.sep}`)) return false;
+  return sha256(fs.readFileSync(real)) === artifact.sha256;
+}
+
 function validateNonPairArtifactDigests(root, checkpoint, kind) {
   if (kind === 'pair') return;
   const rootReal = fs.realpathSync(root);
   for (const artifact of checkpoint.artifacts || []) {
-    const absolute = path.resolve(root, artifact.path);
-    const relative = path.relative(root, absolute).split(path.sep).join('/');
-    const stat = fs.lstatSync(absolute, { throwIfNoEntry: false });
-    if (
-      relative !== artifact.path ||
-      relative === '..' ||
-      relative.startsWith('../') ||
-      !stat ||
-      !stat.isFile() ||
-      stat.isSymbolicLink()
-    ) {
-      throw new Error(`Agent Conversation Checkpoint artifact is missing or changed: ${artifact.path}`);
-    }
-    const real = fs.realpathSync(absolute);
-    if (real !== rootReal && !real.startsWith(`${rootReal}${path.sep}`)) {
-      throw new Error(`Agent Conversation Checkpoint artifact is missing or changed: ${artifact.path}`);
-    }
-    if (sha256(fs.readFileSync(real)) !== artifact.sha256) {
+    if (!nonPairArtifactMatchesDisk(root, rootReal, artifact)) {
       throw new Error(`Agent Conversation Checkpoint artifact is missing or changed: ${artifact.path}`);
     }
   }
+}
+
+// A brainstorming or general checkpoint pins evidence digests at checkpoint time, but sealing runs
+// later — often after the designed work was implemented and those very files changed. Refusing the
+// seal would trade the entire handover for a stale digest, so drift demotes the artifact to a
+// bounded finding instead and the seal proceeds with the artifacts that still match.
+function settleNonPairArtifactDrift(root, checkpoint) {
+  const rootReal = fs.realpathSync(root);
+  const kept = [];
+  const dropped = [];
+  for (const artifact of checkpoint.artifacts || []) {
+    (nonPairArtifactMatchesDisk(root, rootReal, artifact) ? kept : dropped).push(artifact);
+  }
+  if (!dropped.length) return { checkpoint, dropped: [] };
+  const driftFinding = {
+    finding: `Artifacts changed or disappeared after this checkpoint and were dropped from the handover: ${dropped.map(artifact => artifact.path).join(', ')}`,
+    digest: null,
+  };
+  return {
+    checkpoint: normalizeCheckpoint({
+      ...checkpoint,
+      findings: [...(checkpoint.findings || []), driftFinding],
+      artifacts: kept,
+    }),
+    dropped: dropped.map(artifact => artifact.path),
+  };
 }
 
 function expectedPairOwnershipExists(root, identity, agentConversationId, expectedWorkId) {
@@ -1678,6 +1749,13 @@ function sealConversation(root, registry, paths, identity, at) {
       const checkpoint = deriveBrainstormingCheckpoint(root, conversation.checkpoint);
       if (JSON.stringify(conversation.checkpoint) !== JSON.stringify(checkpoint)) {
         conversation.checkpoint = checkpoint;
+        conversation.checkpoint_revision += 1;
+      }
+    }
+    if (conversation.kind !== 'pair') {
+      const settled = settleNonPairArtifactDrift(root, conversation.checkpoint);
+      if (settled.dropped.length) {
+        conversation.checkpoint = settled.checkpoint;
         conversation.checkpoint_revision += 1;
       }
     }
@@ -1866,7 +1944,10 @@ function readAgentConversationHandoverUnchecked(root, handoverId, options = {}) 
   if (!isPlainObject(checkpoint) || checkpointBytes !== JSON.stringify(checkpoint)) throw new Error('invalid handover');
   if (checkpointBytes !== JSON.stringify(normalizeCheckpoint(checkpoint))) throw new Error('invalid handover');
   validatePairWorkManifestBinding(root, manifest.pair_work, manifest.kind, checkpoint);
-  validateNonPairArtifactDigests(root, checkpoint, manifest.kind);
+  // Artifact digests are deliberately not re-validated against the worktree here: this read path
+  // serves freshness assessment and adoption long after sealing, when the repository has usually
+  // moved on. Repo evolution is not corruption — handover integrity is already bound by
+  // checkpoint_sha256/manifest_sha256 above, and adoption settles drift into findings instead.
   const modernClaim = claim.runtime !== undefined || claim.kind !== undefined ||
     claim.checkpoint_revision !== undefined || claim.checkpoint_sha256 !== undefined;
   if (modernClaim) {
@@ -2040,6 +2121,11 @@ function adoptAgentConversationHandover(root, input) {
     if (!source || !['sealed', 'retired'].includes(source.status) || source.sealed_handover_id !== handoverId) {
       throw new Error('invalid Agent Conversation adoption transaction');
     }
+    // The sealed handover files stay immutable; only the adopting conversation's live checkpoint
+    // settles post-seal artifact drift, so the adopter continues from truthful pointers.
+    const settled = source.kind === 'pair'
+      ? { checkpoint, dropped: [] }
+      : settleNonPairArtifactDrift(root, checkpoint);
     registry.conversations[identity.sourceKey] = {
       source_key: identity.sourceKey,
       runtime: identity.runtime,
@@ -2047,7 +2133,7 @@ function adoptAgentConversationHandover(root, input) {
       status: 'warm',
       registered_at: at,
       last_active_at: at,
-      checkpoint,
+      checkpoint: settled.checkpoint,
       checkpoint_revision: manifest.checkpoint_revision,
       sealed_handover_id: null,
       adopted_handover_id: handoverId,
@@ -2065,7 +2151,8 @@ function adoptAgentConversationHandover(root, input) {
     delete handover.adopting_at;
     return {
       status: 'adopted', handoverId, sourceKey: handover.source_key,
-      adopterKey: identity.sourceKey, checkpoint, directory,
+      adopterKey: identity.sourceKey, checkpoint: settled.checkpoint, directory,
+      ...(settled.dropped.length ? { driftedArtifacts: settled.dropped } : {}),
     };
   });
   withRegistry(root, registry => readAgentConversationHandoverUnchecked(root, handoverId, {
@@ -2162,6 +2249,7 @@ module.exports = {
   generalHandoverEnabled,
   hasAgentConversationRegistration,
   handoverPaths,
+  mergeBrainstormCheckpointDelta,
   normalizeCheckpoint,
   validateAgentConversationCheckpointInput,
   readAgentConversationHandover,

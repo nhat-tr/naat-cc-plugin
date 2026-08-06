@@ -6,7 +6,7 @@ const test = require('node:test');
 
 const {
   buildProviderCommand,
-  runFreshProvider,
+  runProviderSession,
   structuredOutput,
   usageFromOutput,
 } = require('../scripts/lib/provider-runtime');
@@ -80,7 +80,7 @@ test('a requested stream log receives the provider events and still yields the s
     JSON.stringify({ type: 'result', structured_output: { status: 'completed' }, usage: { output_tokens: 7 } }),
   ].join('\n');
 
-  const result = runFreshProvider(
+  const result = runProviderSession(
     { ...common(), runtime: 'claude', mode: 'implementation', streamLog },
     {
       spawnSync(file, args, options) {
@@ -110,7 +110,7 @@ test('an exhausted structured-output retry loop is named by its cause and keeps 
 
   let thrown = null;
   try {
-    runFreshProvider(
+    runProviderSession(
       { runtime: 'claude', mode: 'review', root: process.cwd(), prompt: 'p', schemaPath: '/tmp/schema.json', schema: {}, outputPath: '/tmp/out.json', model: 'claude-opus-5', streamLog },
       // Written from inside the stub, because openStreamLog opens the log with 'w': anything staged before
       // the spawn is truncated away, exactly as the real child's first write would truncate it.
@@ -131,7 +131,7 @@ test('an exhausted structured-output retry loop is named by its cause and keeps 
 test('a second run of the same slice and kind appends to the stream log instead of erasing the first', () => {
   const directory = fs.mkdtempSync(path.join(process.env.CLAUDE_SCRATCH_DIR || os.tmpdir(), 'pair-stream-append-'));
   const streamLog = path.join(directory, 'run.jsonl');
-  const invoke = marker => runFreshProvider(
+  const invoke = marker => runProviderSession(
     { ...common(), runtime: 'claude', mode: 'implementation', streamLog },
     {
       spawnSync(file, args, options) {
