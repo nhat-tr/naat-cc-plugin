@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "work_id": "work-20260807-runtime-ownership",
+  "title": "the loop observes only a program it can prove is its own",
+  "status": "design-approved",
+  "spec": {
+    "path": "docs/work/work-20260807-runtime-ownership/spec.md",
+    "sha256": "e33b1c142c1eb23e26f1143a2141b7839cb8f83ba33dfce21c7298ff71d77750"
+  },
+  "active_pair_mirror": ".pair/spec.md",
+  "engineering_quality_contract": {
+    "path": "docs/work/work-20260807-runtime-ownership/spec.md",
+    "section": "Engineering Quality Contract",
+    "status": "approved"
+  },
+  "decision_records": [],
+  "decision_supersessions": [],
+  "changes": [],
+  "outcomes": [],
+  "evidence_records": []
+}

@@ -7,7 +7,7 @@ const test = require('node:test');
 
 const { blobAtCommit, pairCommonDirectory } = require('../scripts/lib/pair-store');
 const { evaluationSummary } = require('../scripts/pair-cli');
-const { recordReviewFeedback, recordReviewOutcome } = require('../scripts/lib/review-evidence');
+const { effectiveFeedback, feedbackForFinding, recordReviewFeedback, recordReviewOutcome } = require('../scripts/lib/review-evidence');
 const { EVALUATION_BANK_LIMIT_BYTES, evaluateBank } = require('../scripts/lib/review-evaluation');
 const {
   ACTIVE_GUIDANCE_LIMIT,
@@ -97,9 +97,21 @@ test('Review Outcome uses immutable commit/blob evidence and human feedback gate
     reason: 'Production contract rejects division by zero.',
   });
   assert.equal(feedback.disposition, 'valid');
+  // Immutable ROWS, not one write. A human who reads a finding again — after a correction failed to address
+  // it, or after the loop adjudicated it for them — must be able to change the verdict, and the record keeps
+  // both with the newer one carrying `supersedes`. Write-once meant the first verdict was the only one a
+  // finding could ever have, which is not what an audit trail is for.
+  const revised = recordReviewFeedback(root, {
+    workId: 'work-review', findingId: finding.finding_id, disposition: 'false-positive', reason: 'Read it again: the contract already rejects this input.',
+  });
+  assert.equal(revised.disposition, 'false-positive');
+  assert.equal(revised.supersedes, feedback.review_feedback_id, 'the earlier verdict is superseded, not erased');
+  assert.equal(effectiveFeedback(feedbackForFinding(root, 'work-review', finding.finding_id)).disposition, 'false-positive',
+    'and the newest verdict is the one every gate reads');
+  // The one direction that stays refused: the loop does not overrule a person.
   assert.throws(() => recordReviewFeedback(root, {
-    workId: 'work-review', findingId: finding.finding_id, disposition: 'false-positive', reason: 'Conflicting second disposition.',
-  }), /already has Review Feedback/);
+    workId: 'work-review', findingId: finding.finding_id, disposition: 'valid', reason: 'The loop disagrees.', adjudicator: 'autonomous',
+  }), /does not overrule/);
   assert.throws(() => recordReviewOutcome(root, {
     workId: 'work-review', sliceId: 'S2', baseCommit: commit, checkpointCommit: commit, runtime: 'codex',
     review: { verdict: 'findings', findings: Array.from({ length: 4 }, () => recorded.outcome.findings[0]) },

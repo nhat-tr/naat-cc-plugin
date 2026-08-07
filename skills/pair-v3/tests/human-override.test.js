@@ -1108,18 +1108,30 @@ test('an unsubmitted draft is listed so it is read back before a submission is s
   assert.equal(drafts[0].stale, false, 'the slice still carries the checkpoint the draft anchors to');
 });
 
-// A draft is deleted when it is submitted and never otherwise, so a slice accepted by any other route
-// leaves its draft on disk forever. Observed live: a question drafted against an accepted slice was still
-// sitting there a day later, unsubmittable and unmentioned, and the slice had been accepted without it.
-test('a draft whose Review Slice is already accepted is reported stale rather than pending', t => {
+// A human reviews when they read, not when the loop offers a gate, and they routinely submit later — by which
+// time the slice they drafted against may be accepted. Reporting that draft as dead and offering to delete it
+// was the loop telling a human their own finding no longer counted. Said live: "the findings is still there, I
+// need to be able to submit and trigger correction anytime I want … if the findings is in a done slice, then
+// migrate to the current slice, never block me." So the claim keeps the commit it was made against, and the
+// correction lands wherever one can land now — reopening the accepted slice when nothing else is left.
+test('a draft on an accepted Review Slice migrates on submission instead of dying', t => {
   const { worktree } = reviewReadyFixture(t);
-  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'What is this for?' });
-
+  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'A tool can reference the same service many times.' });
   acceptHumanReview(worktree, { sliceId: 'S1', override: true, reason: 'Read the whole diff; the seam matches the Design Check.' });
 
   const [draft] = humanFindingDrafts(worktree, 'work-override');
-  assert.equal(draft.stale, true, 'an accepted slice can no longer carry a submission, so the draft is not pending work');
-  assert.match(draft.stale_reason, /accepted/u, 'the reason names why it can never be submitted');
+  assert.equal(draft.stale, false, 'nothing about a written finding is stale');
+  assert.equal(draft.slice_status, 'accepted');
+
+  const recorded = submitHumanFindings(worktree, { sliceId: 'S1' });
+  const state = readState(worktree, 'work-override');
+  const slice = state.slices.find(item => item.id === 'S1');
+
+  assert.equal(recorded.outcome.findings.length, 1, 'the submission went through');
+  assert.equal(slice.status, 'correction-ready', 'and it earned the correction it always would have');
+  assert.equal(state.lifecycle, 'ready');
+  assert.match(readEvents(worktree, 'work-override').map(item => item.action || '').join(' '), /reopen/u,
+    'reopening accepted work is recorded as the human decision it is');
 });
 
 // The submission gate refuses a MISSING pass condition, and that is the hole a typed placeholder walks

@@ -12,6 +12,7 @@ const {
 } = require('./architecture-routing');
 const {
   autonomousActionCap,
+  deterministicAttemptBudget,
   humanLoopDefault,
   humanLoopPolicy,
   humanLoopSettings,
@@ -67,6 +68,8 @@ const {
 } = require('./review-slice-manifest');
 const {
   HUMAN_TEXT_BOUNDS,
+  effectiveFeedback,
+  effectiveFeedbackForFinding,
   feedbackForFinding,
   listReviewOutcomes,
   recordReviewFeedback,
@@ -314,6 +317,31 @@ function openWork(root, options) {
   return { state, worktree: worktree.path, created: true };
 }
 
+// Review Slice ids are behaviour sentences — `S-07-both-sides-share-a-tier` — because that is what makes a
+// manifest readable. Requiring one typed back exactly is a different matter: every lookup was an equality
+// test, so `--slice S-07` matched nothing and the refusal said "no Review Slice selected for verification",
+// which reads as "this Work has no slices" rather than "that is not the whole id". A unique prefix is the
+// name a human actually holds in their head, and an ambiguous one is answered with the candidates.
+function resolveSlice(state, sliceId) {
+  const wanted = String(sliceId || '').trim();
+  if (!wanted) return null;
+  const exact = state.slices.find(item => item.id === wanted);
+  if (exact) return exact;
+  const needle = wanted.toLowerCase();
+  const prefixed = state.slices.filter(item => item.id.toLowerCase().startsWith(needle));
+  const matches = prefixed.length > 0
+    ? prefixed
+    : state.slices.filter(item => item.id.toLowerCase().includes(needle));
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    throw new Error(`"${wanted}" names ${matches.length} Review Slices — ${matches.map(item => item.id).join(', ')}. Say which.`);
+  }
+  throw new Error([
+    `No Review Slice matches "${wanted}". This Work has:`,
+    ...state.slices.map(item => `  ${item.id}  (${item.status})`),
+  ].join('\n'));
+}
+
 function manifestSlice(context, sliceId) {
   const slice = context.manifest.slices.find(item => item.id === sliceId);
   if (!slice) throw new Error(`Review Slice ${sliceId} is absent from the manifest`);
@@ -362,10 +390,9 @@ function correctionEvidence(state, slice, projected) {
     ? (listReviewOutcomes(state.worktree, state.work_id)
         .find(item => item.review_outcome_id === projected.review_outcome_id)?.findings || [])
       .flatMap(item => {
-        const valid = feedbackForFinding(state.worktree, state.work_id, item.finding_id)
-          .filter(feedback => feedback.disposition === 'valid');
-        if (valid.length === 0) return [];
-        return [{ ...item, human_adjudication: valid.map(feedback => feedback.reason).join(' ') }];
+        const verdict = effectiveFeedbackForFinding(state.worktree, state.work_id, item.finding_id);
+        if (verdict?.disposition !== 'valid') return [];
+        return [{ ...item, human_adjudication: verdict.reason }];
       })
     : [];
   const deterministic = projected.verification_failure
@@ -1343,6 +1370,36 @@ function handleCompletedImplementation(root, state, context, slice, projected, o
   projected.failure_proof = output.failure_proof;
   projected.verification = verificationRecord(slice, verification);
   if (verification.status !== 0) {
+    return handleRedGate(root, state, context, slice, projected, options, dependencies, { correction, verification });
+  }
+  if (correction) projected.correction_count += 1;
+  return checkpointVerifiedSlice(root, state, context, slice, projected, options, dependencies, {
+    correction,
+    declaredRisk: output.architecture_risk,
+    provenance: correction ? 'correction' : 'implementation',
+  });
+}
+
+// The identity of a failure, not its text: the set of tests that failed, order-independent. Two attempts with
+// the same signature changed nothing the suite can see, which is the only usable definition of "stuck".
+function failureSignature(verification) {
+  const failures = (verification.introduced_failing_tests?.length
+    ? verification.introduced_failing_tests
+    : verification.failing_tests) || [];
+  return failures.length > 0 ? digest([...failures].sort().join('\n')) : null;
+}
+
+// A red gate on a slice nobody is watching. Pair's own instruction — "re-run verification before treating a
+// red gate as a defect" — was written for a human and only a human ever followed it, so every flake, every
+// pre-existing failure inside a verify scope, and every busy port blocked the Work and waited. The loop is the
+// only thing touching this code, so it can do both halves itself: prove the failure is real, then keep at it.
+//
+// What it must NOT do is retry forever. The bound is progress rather than permission: while each attempt
+// changes which tests fail, the loop is working the problem and is allowed to continue up to its budget; an
+// attempt that leaves the identical set failing has stopped moving and stops here, which is the honest moment
+// to want a human. A `hitl` slice keeps exactly today's shape — one correction, then the human.
+function handleRedGate(root, state, context, slice, projected, options, dependencies, { correction, verification }) {
+  if (inHumanLoop(state, projected)) {
     if (correction || projected.correction_count >= 1) {
       projected.status = 'blocked';
       state.lifecycle = 'blocked';
@@ -1356,12 +1413,48 @@ function handleCompletedImplementation(root, state, context, slice, projected, o
     }
     return saveState(root, state);
   }
-  if (correction) projected.correction_count += 1;
-  return checkpointVerifiedSlice(root, state, context, slice, projected, options, dependencies, {
-    correction,
-    declaredRisk: output.architecture_risk,
-    provenance: correction ? 'correction' : 'implementation',
-  });
+  // Deterministic, so it spends no correction: the cheapest possible way to find out whether there is a defect
+  // here at all. A correction spent on a flake is worse than the flake — it edits working code to chase a
+  // failure that was never in it.
+  reportProgress(dependencies, { phase: 'gate-reverifying', review_slice_id: slice.id });
+  const confirmed = verify(root, state, slice, dependencies);
+  projected.verification = verificationRecord(slice, confirmed);
+  if (confirmed.status === 0) {
+    appendEvent(root, state.work_id, { event: 'red-gate-not-reproduced', review_slice_id: slice.id });
+    delete projected.gate_signature;
+    return checkpointVerifiedSlice(root, state, context, slice, projected, options, dependencies, {
+      correction,
+      declaredRisk: projected.architecture_risk,
+      provenance: correction ? 'correction' : 'implementation',
+    });
+  }
+  const signature = failureSignature(confirmed);
+  const stalled = Boolean(signature) && signature === projected.gate_signature;
+  const attempts = (projected.gate_attempts || 0) + 1;
+  const budget = deterministicAttemptBudget(dependencies.env || process.env);
+  projected.gate_attempts = attempts;
+  projected.gate_signature = signature;
+  if (stalled || attempts > budget) {
+    projected.status = 'blocked';
+    state.lifecycle = 'blocked';
+    state.blocked_reason = stalled
+      ? `Review Slice ${slice.id} left the same tests failing twice running, so it has stopped making progress`
+      : `Review Slice ${slice.id} failed its verification ${attempts} times, which is its whole deterministic budget`;
+    state.next_action = 'human diagnosis required';
+    appendEvent(root, state.work_id, {
+      event: 'deterministic-budget-exhausted',
+      review_slice_id: slice.id,
+      attempts,
+      budget,
+      stalled,
+    });
+    return saveState(root, state);
+  }
+  projected.status = 'correction-ready';
+  projected.verification_failure = confirmed.diagnostic || 'verification command failed';
+  state.lifecycle = 'ready';
+  state.next_action = `run deterministic-failure correction ${attempts} of ${budget} for ${slice.id}`;
+  return saveState(root, state);
 }
 
 // The green tail of a verified Review Slice, shared by the implementation run and by a standalone
@@ -1760,7 +1853,7 @@ function setHumanLoop(root, options = {}) {
     return saveState(root, state);
   }
   const projected = options.sliceId
-    ? state.slices.find(item => item.id === options.sliceId)
+    ? resolveSlice(state, options.sliceId)
     : activeSlice(state, context)?.projected;
   if (!projected) throw new Error('no Review Slice selected: pass --slice <id>, or --all for the whole Work');
   projected.hitl = enabled;
@@ -1799,7 +1892,7 @@ function recordCorrectionDirection(root, options = {}) {
   const context = workContext(root, state);
   const active = activeSlice(state, context);
   const projected = options.sliceId
-    ? state.slices.find(item => item.id === options.sliceId)
+    ? resolveSlice(state, options.sliceId)
     : active?.projected;
   if (!projected) throw new Error('no Review Slice selected for a Correction Direction');
   // Policy, not structure: the direction is stored on the slice and spent by whichever attempt runs
@@ -1841,7 +1934,7 @@ function steerWarmSession(root, options = {}, dependencies = {}) {
   const state = currentState(root, options.workId || null);
   const context = workContext(root, state);
   const projected = options.sliceId
-    ? state.slices.find(item => item.id === options.sliceId)
+    ? resolveSlice(state, options.sliceId)
     : activeSlice(state, context)?.projected;
   if (!projected) throw new Error('no Review Slice selected to steer');
   // Trimmed at the ends only. Collapsing whitespace is right for a field a model must parse as one
@@ -1890,7 +1983,7 @@ function verifyActiveSlice(root, options = {}, dependencies = {}) {
   const context = workContext(root, state);
   const active = activeSlice(state, context);
   const projected = options.sliceId
-    ? state.slices.find(item => item.id === options.sliceId)
+    ? resolveSlice(state, options.sliceId)
     : active?.projected;
   if (!projected) throw new Error('no Review Slice selected for verification');
   if (projected.status === 'accepted') throw new Error(`Review Slice ${projected.id} is already accepted`);
@@ -1909,11 +2002,16 @@ function verifyActiveSlice(root, options = {}, dependencies = {}) {
     diagnostic: verification.status === 0 ? null : verification.diagnostic || null,
     checkpoint_created: false,
   };
-  // Only the deterministic-failure road can be cleared by re-verification. A slice sitting at
-  // correction-ready because a human called a review finding valid already has a green checkpoint:
-  // its verification was never the problem, and promoting again would try to commit an unchanged
-  // worktree. That one owes a correction, not another suite run.
-  const clearsDeterministicFailure = projected.status === 'correction-ready' && Boolean(projected.verification_failure);
+  // Asked against reality rather than against a flag: is this Review Slice parked, and is there work in the
+  // tree that a green suite would make a checkpoint? A slice parked by a human-valid finding has a green
+  // checkpoint and an unchanged tree, so it still owes a correction rather than another suite run — the case
+  // the old flag existed to exclude, now excluded by the fact itself. What the flag ALSO excluded, wrongly,
+  // was a slice the loop had blocked on a red gate: observed live, a human re-verified a blocked slice, got a
+  // clean run after 3m19s, and nothing moved — the block outlived the evidence that refuted it, and the only
+  // way on was an unblock the evidence had already earned.
+  const parked = ['correction-ready', 'blocked'].includes(projected.status);
+  const clearsDeterministicFailure = parked
+    && (changedPaths(state.worktree).length > 0 || Boolean(projected.verification_failure));
   report.clears_deterministic_failure = clearsDeterministicFailure;
   if (verification.status !== 0) {
     if (clearsDeterministicFailure) projected.verification_failure = verification.diagnostic || 'verification command failed';
@@ -1926,6 +2024,16 @@ function verifyActiveSlice(root, options = {}, dependencies = {}) {
   }
   if (!clearsDeterministicFailure) return { report, state: saveState(root, state) };
   if (!projected.failure_proof) throw new Error(`Review Slice ${projected.id} has no recorded Failure Proof; a checkpoint cannot be created from re-verification alone`);
+  // The block's premise was a failing gate, and the gate just came back green. Clearing it here is not a
+  // policy override — it is the same evidence the block was made of, read again.
+  if (projected.status === 'blocked') {
+    appendEvent(root, state.work_id, {
+      event: 'red-gate-block-cleared',
+      review_slice_id: projected.id,
+      cleared_by: 'reverification',
+    });
+    delete projected.gate_signature;
+  }
   const promoted = checkpointVerifiedSlice(root, state, context, slice, projected, options, dependencies, {
     correction: false,
     declaredRisk: projected.architecture_risk,
@@ -2073,7 +2181,7 @@ function sliceEvidence(root, options = {}) {
   const readRoot = evidenceRoot(root, state);
   const active = activeSlice(state, context);
   const projected = options.sliceId
-    ? state.slices.find(item => item.id === options.sliceId)
+    ? resolveSlice(state, options.sliceId)
     : active?.projected;
   if (!projected) throw new Error('no Review Slice selected');
   const slice = manifestSlice(context, projected.id);
@@ -2146,7 +2254,7 @@ function readPairRefText(root, workRef, suffix) {
 function acceptHumanReview(root, options = {}, dependencies = {}) {
   const state = currentState(root, options.workId || null);
   const context = workContext(root, state);
-  const projected = state.slices.find(item => item.id === options.sliceId);
+  const projected = resolveSlice(state, options.sliceId);
   if (!projected) throw new Error('Review Slice is not awaiting human acceptance');
   if (projected.status !== 'awaiting-human-review') {
     if (!options.override) throw new Error('Review Slice is not awaiting human acceptance');
@@ -2172,7 +2280,7 @@ function acceptHumanReview(root, options = {}, dependencies = {}) {
     for (const finding of outcome.findings) {
       const feedback = feedbackForFinding(root, state.work_id, finding.finding_id);
       if (feedback.length === 0) throw new Error(`finding ${finding.finding_id} has no Review Feedback`);
-      if (feedback.some(item => item.disposition === 'valid') && projected.correction_count === 0) {
+      if (effectiveFeedback(feedback)?.disposition === 'valid' && projected.correction_count === 0) {
         throw new Error(`valid finding ${finding.finding_id} requires correction`);
       }
     }
@@ -2195,7 +2303,7 @@ function projectAdjudication(root, state, projected, context = null) {
     state.next_action = `adjudicate ${unadjudicated.length} of ${outcome.findings.length} remaining finding(s) for ${projected.id}`;
     return saveState(root, state);
   }
-  const valid = outcome.findings.some(finding => feedbackForFinding(root, state.work_id, finding.finding_id).some(item => item.disposition === 'valid'));
+  const valid = outcome.findings.some(finding => effectiveFeedbackForFinding(root, state.work_id, finding.finding_id)?.disposition === 'valid');
   // The budget bounds a MODEL loop. A fresh reviewer can always find something, so find → correct → find →
   // correct never terminates on its own, and the block is what puts a human back in it. A human review is
   // already that human: reading the checkpoint the last correction produced, writing a finding against it
@@ -2236,7 +2344,7 @@ function correctionBrief(root, options = {}) {
   const state = currentState(root, options.workId || null);
   const context = workContext(root, state);
   const projected = options.sliceId
-    ? state.slices.find(item => item.id === options.sliceId)
+    ? resolveSlice(state, options.sliceId)
     : activeSlice(state, context)?.projected;
   if (!projected) throw new Error('no Review Slice selected for a correction brief');
   if (projected.status !== 'correction-ready') {
@@ -2262,7 +2370,7 @@ function reconcileAdjudication(root, options = {}) {
   const state = currentState(root, options.workId || null);
   const context = workContext(root, state);
   const projected = options.sliceId
-    ? state.slices.find(item => item.id === options.sliceId)
+    ? resolveSlice(state, options.sliceId)
     : state.slices.find(item => item.status === 'awaiting-feedback') || activeSlice(state, context)?.projected;
   if (!projected) throw new Error('no Review Slice selected to reconcile');
   if (projected.status !== 'awaiting-feedback') {
@@ -2287,7 +2395,7 @@ function dispatchCorrectionOnSubmit(root, options = {}, dependencies = {}) {
   if (!settings.dispatchCorrectionOnSubmit || state.lifecycle !== 'ready') return { state, dispatched: false };
   const context = workContext(root, state);
   const projected = options.sliceId
-    ? state.slices.find(item => item.id === options.sliceId)
+    ? resolveSlice(state, options.sliceId)
     : activeSlice(state, context)?.projected;
   if (projected?.status !== 'correction-ready') return { state, dispatched: false };
   return { state: advanceWork(root, { ...options, sliceId: projected.id }, dependencies), dispatched: true };
@@ -2353,14 +2461,32 @@ function listHumanFindingDraft(root, workId, sliceId) {
   return (readJson(humanDraftFile(root, workId, sliceId))?.findings || []).map(withoutEchoedPassCondition);
 }
 
+// Where a correction can land right now. Reading code and having something to say about it is not an activity
+// the loop schedules, so this never refuses: the slice in flight if there is one, the next queued slice if
+// nothing is in flight, and the last accepted slice if the Work has run out of them — a human who finds
+// something in work already accepted is reopening that work, which is theirs to do.
+function correctableSlice(state, context) {
+  const active = activeSlice(state, context)?.projected;
+  if (active) return active;
+  const accepted = state.slices.filter(item => item.status === 'accepted');
+  return accepted.at(-1) || state.slices.at(-1) || null;
+}
+
+// The commit a claim is about. A checkpoint when there is one, the unverified attempt when the gate is red,
+// and the worktree's own HEAD before either exists — all three are immutable commits, which is the only
+// property an anchor actually needs. Requiring a *checkpoint* meant a human reading code before the first
+// gate had nowhere to put what they saw.
+function anchorCommit(state, projected) {
+  return projected.checkpoint_commit
+    || projected.attempt_commit
+    || git(state.worktree, ['rev-parse', 'HEAD']).stdout;
+}
+
 function selectedSlice(state, context, options) {
   const projected = options.sliceId
-    ? state.slices.find(item => item.id === options.sliceId)
-    : activeSlice(state, context)?.projected;
-  if (!projected) throw new Error('no Review Slice selected for a finding');
-  if (!projected.checkpoint_commit) {
-    throw new Error(`Review Slice ${projected.id} has no checkpoint to anchor a finding against`);
-  }
+    ? resolveSlice(state, options.sliceId)
+    : correctableSlice(state, context);
+  if (!projected) throw new Error('this Pair Work has no Review Slice at all');
   return projected;
 }
 
@@ -2420,19 +2546,20 @@ function humanFindingDrafts(root, workId = null) {
       const stored = readJson(path.join(directory, name)) || {};
       const findings = stored.findings || [];
       const slice = state.slices.find(item => item.id === stored.review_slice_id);
-      const staleReason = !slice
-        ? 'the Review Slice is no longer in the manifest'
-        : slice.status === 'accepted'
-          ? `Review Slice ${slice.id} is already accepted, so no submission can reach it`
-          : slice.checkpoint_commit !== stored.checkpoint_commit
-            ? 'the Review Slice has moved to a newer checkpoint, so this anchor is not in it'
-            : null;
+      // No draft is stale any more. A finding stays true of the code it was written about, so a slice that has
+      // been accepted or moved to a newer checkpoint since is a routing question the submission answers by
+      // migrating — never a reason to tell a human their finding is dead and offer them a way to delete it.
+      const carrier = correctableSlice(state, workContext(root, state));
+      const migratesTo = carrier && carrier.id !== stored.review_slice_id ? carrier.id : null;
       return {
         review_slice_id: stored.review_slice_id || path.basename(name, '.json'),
         checkpoint_commit: stored.checkpoint_commit || null,
         findings: findings.map(withoutEchoedPassCondition),
-        stale: Boolean(staleReason),
-        stale_reason: staleReason,
+        migrates_to: migratesTo,
+        reopens: Boolean(carrier && carrier.status === 'accepted'),
+        slice_status: slice?.status || 'absent from the manifest',
+        stale: false,
+        stale_reason: null,
       };
     });
 }
@@ -2455,17 +2582,17 @@ function worktreeRelativePath(bases, file) {
 // the code around it, and the finding a human wants to raise is often about the caller the diff never
 // touched — so any file tracked at the checkpoint is a valid anchor. What is refused is a path the immutable
 // checkpoint does not contain, because there is no blob there for the claim to be about.
-function anchoredFindingPath(root, state, projected, file) {
+function anchoredFindingPath(root, state, commit, file) {
   const relative = worktreeRelativePath([state.worktree, root], file);
   try {
-    blobAtCommit(state.worktree, projected.checkpoint_commit, relative);
+    blobAtCommit(state.worktree, commit, relative);
     return relative;
   } catch {
     throw new Error([
-      `${relative} is not in checkpoint ${projected.checkpoint_commit.slice(0, 12)} of ${projected.id}.`,
-      'A finding anchors an immutable blob, so its path has to exist in the checkpoint tree — any tracked file',
-      'does, not only the ones this slice changed. If the file is new or untracked in the Pair worktree, anchor',
-      'the tracked code that should reach it instead.',
+      `${relative} is not in commit ${commit.slice(0, 12)}, which is what this finding would anchor.`,
+      'A finding anchors an immutable blob, so its path has to exist in that commit — any tracked file does,',
+      'not only the ones this slice changed. If the file is new or untracked in the Pair worktree, anchor the',
+      'tracked code that should reach it instead.',
     ].join('\n'));
   }
 }
@@ -2474,7 +2601,8 @@ function recordHumanFinding(root, options = {}) {
   const state = currentState(root, options.workId || null);
   const context = workContext(root, state);
   const projected = selectedSlice(state, context, options);
-  const repositoryPath = anchoredFindingPath(root, state, projected, options.file);
+  const commit = anchorCommit(state, projected);
+  const repositoryPath = anchoredFindingPath(root, state, commit, options.file);
   const lineStart = Number(options.lineStart ?? options.line);
   const lineEnd = Number(options.lineEnd ?? lineStart);
   // Validated here and not only in the CLI: a NaN anchor is stored silently and then makes every
@@ -2500,9 +2628,9 @@ function recordHumanFinding(root, options = {}) {
     impact: options.impact || claim,
     ...(passCondition && passCondition !== claim ? { pass_condition: passCondition } : {}),
     evidence: {
-      commit: projected.checkpoint_commit,
+      commit,
       path: repositoryPath,
-      blob: blobAtCommit(state.worktree, projected.checkpoint_commit, repositoryPath),
+      blob: blobAtCommit(state.worktree, commit, repositoryPath),
       line_start: lineStart,
       line_end: lineEnd,
     },
@@ -2532,7 +2660,7 @@ function recordHumanFinding(root, options = {}) {
     }
   }
   const findings = [...existing, finding];
-  writeJson(file, { schema: 1, review_slice_id: projected.id, checkpoint_commit: projected.checkpoint_commit, findings });
+  writeJson(file, { schema: 1, review_slice_id: projected.id, checkpoint_commit: commit, findings });
   return { drafted: finding, findings, file, sliceId: projected.id };
 }
 
@@ -2551,11 +2679,13 @@ function draftTarget(root, options, verb) {
   return { state, projected, findings, index };
 }
 
+// The commit the drafted findings actually anchor, which is not necessarily the slice's current checkpoint:
+// an edit to a draft must not silently re-stamp it onto a commit the human never read.
 function writeDraft(state, projected, findings) {
   writeJson(humanDraftFile(state.worktree, state.work_id, projected.id), {
     schema: 1,
     review_slice_id: projected.id,
-    checkpoint_commit: projected.checkpoint_commit,
+    checkpoint_commit: findings[0]?.evidence?.commit || anchorCommit(state, projected),
     findings,
   });
 }
@@ -2606,22 +2736,75 @@ function setHumanFindingPassCondition(root, options = {}) {
   return { sliceId: projected.id, index, findings };
 }
 
+// Reading code and finding something wrong is not an activity the loop schedules, so submitting one is never
+// refused for bookkeeping. Two things used to refuse it, and both were the loop's problem rather than the
+// human's: a draft whose slice had since been accepted was declared unsubmittable, and a draft anchored to a
+// checkpoint the slice had moved past was called stale. In both cases the finding is still true of the code
+// and still worth correcting — so the claim keeps the commit it was made against, and it MIGRATES to whatever
+// slice can carry a correction now. What is recorded is exactly what happened: this outcome reviews commit X,
+// and slice Y is where the correction lands.
+// Which draft is being submitted. A named slice wins; otherwise the one draft on disk, whichever slice it was
+// written against — because "submit what I wrote" must not require remembering which slice was in flight when
+// you wrote it. Several drafts and no name is the one case a human has to disambiguate.
+function draftedSliceId(root, state, options) {
+  if (options.sliceId) return resolveSlice(state, options.sliceId).id;
+  const drafts = fs.existsSync(workPaths(root, state.work_id).findingDrafts)
+    ? fs.readdirSync(workPaths(root, state.work_id).findingDrafts).filter(name => name.endsWith('.json'))
+    : [];
+  if (drafts.length === 1) return path.basename(drafts[0], '.json');
+  if (drafts.length > 1) {
+    throw new Error(`${drafts.length} drafts exist — name the one to submit with --slice: ${drafts.map(name => path.basename(name, '.json')).join(', ')}`);
+  }
+  const context = workContext(root, state);
+  return correctableSlice(state, context)?.id || state.slices[0]?.id;
+}
+
+// The slice that will carry the correction. When the Work has run out of slices to correct — every one
+// accepted, or the Work already complete — the last accepted slice is reopened rather than the submission
+// refused: a human who finds something in accepted work is withdrawing that acceptance, which is theirs to do,
+// and it is recorded as the override it is.
+function reopenedForCorrection(root, state, context, options) {
+  const target = correctableSlice(state, context);
+  if (!target) throw new Error('this Pair Work has no Review Slice at all');
+  if (target.status !== 'accepted') return target;
+  recordHumanOverride(root, state, target, 'reopen', options.reason
+    || `a human finding against accepted work reopens ${target.id} to carry its correction`);
+  target.status = 'awaiting-human-review';
+  state.lifecycle = 'ready';
+  state.next_action = `carry a human finding into ${target.id}`;
+  if (state.completion_review_outcome_id) state.completion_review_outcome_id = null;
+  return target;
+}
+
 function submitHumanFindings(root, options = {}) {
   const state = currentState(root, options.workId || null);
   const context = workContext(root, state);
-  const projected = selectedSlice(state, context, options);
-  const findings = listHumanFindingDraft(state.worktree, state.work_id, projected.id);
-  if (findings.length === 0) throw new Error(`Review Slice ${projected.id} has no drafted finding to submit`);
+  const drafted = draftedSliceId(root, state, options);
+  const findings = listHumanFindingDraft(state.worktree, state.work_id, drafted);
+  if (findings.length === 0) throw new Error(`Review Slice ${drafted} has no drafted finding to submit`);
+  const projected = reopenedForCorrection(root, state, context, options);
+  // The commit the human read, not the slice's current head: a claim about code is a claim about the code as
+  // it was, and re-stamping it onto a newer commit would record a review of lines nobody looked at.
+  const reviewed = findings[0].evidence.commit;
+  if (drafted !== projected.id) {
+    appendEvent(root, state.work_id, {
+      event: 'human-finding-migrated',
+      from_review_slice_id: drafted,
+      review_slice_id: projected.id,
+      reviewed_commit: reviewed,
+      finding_count: findings.length,
+    });
+  }
   const recorded = recordReviewOutcome(state.worktree, {
     workId: state.work_id,
     sliceId: projected.id,
     baseCommit: projected.base_commit,
-    checkpointCommit: projected.checkpoint_commit,
+    checkpointCommit: reviewed,
     review: { verdict: 'findings', findings },
     runtime: 'human',
     human: true,
   });
-  fs.rmSync(humanDraftFile(state.worktree, state.work_id, projected.id), { force: true });
+  fs.rmSync(humanDraftFile(state.worktree, state.work_id, drafted), { force: true });
   projected.review_outcome_id = recorded.outcome.review_outcome_id;
   // Adjudication asks "is this claim real?" — a question only a model finding has open. The human wrote
   // these, read them back in the draft, and chose to submit; asking them to answer it again, once per

@@ -40,7 +40,7 @@ const {
 } = require('./lib/pair-engine');
 const { humanLoopDefault, inHumanLoop } = require('./lib/human-loop');
 const { EVALUATION_RESULT_LIMIT_BYTES, evaluateBank } = require('./lib/review-evaluation');
-const { feedbackForFinding, listReviewOutcomes } = require('./lib/review-evidence');
+const { effectiveFeedbackForFinding, feedbackForFinding, listReviewOutcomes } = require('./lib/review-evidence');
 const { resolveRuntime } = require('./lib/runtime-selection');
 const {
   activeReviewGuidance,
@@ -107,6 +107,8 @@ function progressLine(event) {
       return `[${at}]${slice} ${event.kind} interrupted`;
     case 'verification-started':
       return `[${at}]${slice} verifying — ${event.command}`;
+    case 'gate-reverifying':
+      return `[${at}]${slice} red gate — re-verifying before treating it as a defect (spends no correction)`;
     case 'verification-finished':
       return `[${at}]${slice} verification ${event.status === 0 ? 'clean' : `FAILED (exit ${event.observed_status})`}`
         + ` — ${duration(event.duration_ms)}`;
@@ -285,6 +287,9 @@ function parseArgs(argv) {
     // Progress goes to stderr and is on by default, because a silent hour is the failure it exists to fix.
     // --quiet is for a caller that treats any stderr output as a failed command.
     else if (arg === '--quiet') options.quiet = true;
+    // For the gesture where you want the state changed and nothing started — reading the checkpoint yourself
+    // before the loop touches it again. Marking the slice hitl is the durable version of the same wish.
+    else if (arg === '--no-dispatch') options.noDispatch = true;
     else if (arg === '--follow' || arg === '-f') options.follow = true;
     else if (arg === '--json') options.json = true;
     else if (arg === '--status') options.command = 'status';
@@ -567,7 +572,7 @@ function resolveAdjudication(root, state, next) {
   if (!outcome || outcome.findings.length === 0) return null;
   return outcome.findings.map(finding => ({
     ...finding,
-    disposition: feedbackForFinding(root, state.work_id, finding.finding_id)[0]?.disposition || null,
+    disposition: effectiveFeedbackForFinding(root, state.work_id, finding.finding_id)?.disposition || null,
   }));
 }
 
@@ -588,17 +593,13 @@ function draftLines(drafts) {
       // headings and reported nothing the line above it had not already said.
       if (finding.pass_condition) lines.push(`     passes when: ${finding.pass_condition}`);
     }
-    // A refusal that names no way out is the dead end this loop has been bitten by repeatedly. A stale
-    // draft can never be submitted, so the only thing left to do with it is drop it — and until that was
-    // said here, the line reported an orphan every single time status ran and offered nothing.
-    if (draft.stale) {
-      lines.push(
-        `  This draft can no longer be submitted: ${draft.stale_reason}.`,
-        `  Drop it (this is the only copy, and dropping reaches nothing already recorded):`,
-        ...draft.findings.map((_finding, index) => `    pair-loop finding --slice ${draft.review_slice_id} --index ${index + 1} --drop`),
-      );
-    } else {
-      lines.push(`  Submit as one Review Outcome: pair-loop finding --slice ${draft.review_slice_id} --submit`);
+    // Never a blocker and never dead. A draft written against a slice that has since been accepted or moved
+    // on migrates when it is submitted, so the line says where the correction will land rather than offering
+    // to delete what the human wrote.
+    lines.push(`  Submit as one Review Outcome: pair-loop finding --slice ${draft.review_slice_id} --submit`);
+    if (draft.migrates_to) {
+      lines.push(`  ${draft.review_slice_id} is ${draft.slice_status}, so the correction lands on ${draft.migrates_to}`
+        + `${draft.reopens ? ', reopening it' : ''} — the claim keeps the commit you read.`);
     }
   }
   return lines;
@@ -1296,7 +1297,16 @@ function main(argv = process.argv.slice(2)) {
         return;
       }
       printVerification(report);
-      printStatus(state, false, root);
+      // A green re-verification that produced a checkpoint has unparked the Work, and the third gesture in a
+      // row to leave it sitting there would be the third bug of one kind. Only after a promotion: a verify
+      // that changed nothing is a question, not a decision.
+      const dispatched = report.checkpoint_created && !options.noDispatch
+        ? dispatchNextSlice(root, options, runDependencies(root, options))
+        : { state, dispatched: false };
+      if (dispatched.dispatched) {
+        console.log(`The gate is green, so the loop took ${dispatched.review_slice_id} from here.`);
+      }
+      printStatus(dispatched.state, false, root);
       return;
     }
     if (options.command === 'baseline') {
@@ -1337,7 +1347,9 @@ function main(argv = process.argv.slice(2)) {
       acceptHumanReview(root, options);
       // The acceptance IS the input. A Work that drives itself must not park on the next slice waiting to
       // be told to start it — that was the whole gesture this change exists to remove.
-      const dispatched = dispatchNextSlice(root, options, runDependencies(root, options));
+      const dispatched = options.noDispatch
+        ? { state: selectedState(root, options), dispatched: false }
+        : dispatchNextSlice(root, options, runDependencies(root, options));
       if (dispatched.dispatched && !options.json) {
         console.log(`The loop took ${dispatched.review_slice_id} on this acceptance. Mark a slice hitl to be asked first.`);
       }
@@ -1439,6 +1451,18 @@ function main(argv = process.argv.slice(2)) {
       printStatus(reconcileAdjudication(root, options), options.json, root);
       return;
     }
+    // "fix it for me" is what a human types into --reason, and then nothing happened: unblocking left the Work
+    // ready with the next action named and no one to take it. An unblock IS the decision to carry on, exactly
+    // as an acceptance is, so it dispatches for a slice the loop drives.
+    if (options.command === 'unblock' && !options.noDispatch) {
+      unblockWork(root, options);
+      const dispatched = dispatchNextSlice(root, options, runDependencies(root, options));
+      if (dispatched.dispatched && !options.json) {
+        console.log(`The loop took ${dispatched.review_slice_id} on this unblock. Mark it hitl first to inspect before it runs.`);
+      }
+      printStatus(dispatched.state, options.json, root);
+      return;
+    }
     if (options.command === 'unblock') {
       printStatus(unblockWork(root, options), options.json, root);
       return;
@@ -1487,8 +1511,18 @@ function main(argv = process.argv.slice(2)) {
       adjudicateFinding(root, options);
       // Closing the last finding on a valid verdict IS the instruction to fix it. Dispatched here, at the
       // gesture, rather than inside the reducer: recording a row must never spend a model session.
-      const dispatched = dispatchCorrectionOnSubmit(root, options, runDependencies(root, options));
-      if (dispatched.dispatched) console.log('That closed adjudication with a valid finding, so the correction ran on it.\n');
+      const corrected = options.noDispatch
+        ? { state: selectedState(root, options), dispatched: false }
+        : dispatchCorrectionOnSubmit(root, options, runDependencies(root, options));
+      if (corrected.dispatched) console.log('That closed adjudication with a valid finding, so the correction ran on it.\n');
+      // The other half: a disposition that clears the last valid finding accepts the slice and moves the Work
+      // on, and leaving THAT parked would be the same bug in its fifth costume.
+      const dispatched = corrected.dispatched || options.noDispatch
+        ? corrected
+        : dispatchNextSlice(root, options, runDependencies(root, options));
+      if (dispatched.dispatched && !corrected.dispatched) {
+        console.log(`Nothing valid is left on this checkpoint, so the loop took ${dispatched.review_slice_id} from here.\n`);
+      }
       printStatus(dispatched.state, options.json, root);
       return;
     }
