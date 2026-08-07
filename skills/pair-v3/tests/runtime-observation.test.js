@@ -13,7 +13,7 @@ const test = require('node:test');
 
 const childProcess = require('node:child_process');
 
-const { adjudicateFinding, advanceWork, setHumanLoop } = require('../scripts/lib/pair-engine');
+const { acceptHumanReview, adjudicateFinding, advanceWork, setHumanLoop } = require('../scripts/lib/pair-engine');
 const { blobAtCommit, readEvents, readJson, readState, workPaths } = require('../scripts/lib/pair-store');
 const { listReviewOutcomes } = require('../scripts/lib/review-evidence');
 const { completedSlice, greenVerification, openTestWork, providerResult } = require('./helpers/warm-work');
@@ -98,56 +98,86 @@ function ownerRecord(opened) {
   return workPaths(opened.worktree, opened.workId).runtimeOwner;
 }
 
-// A reviewer that always finds something, anchored to whatever checkpoint the slice is standing on when it
-// is asked — which is what carries a hitl slice round the find → correct → find road to the block.
-function reviewingProvider(opened, runtime) {
-  let round = 0;
+// A reviewer that finds one thing per entry in `findsOn` — listing a slice twice is a slice reviewed twice,
+// which is the road to the block — anchored to the checkpoint that slice is standing on, and approves
+// everything else. `completionVerifyFails` reddens only the cumulative run, whose sliceId is 'completion',
+// leaving every slice's own verification green.
+function reviewingProvider(opened, runtime, { findsOn = [], completionVerifyFails = false } = {}) {
+  const rounds = [...findsOn];
+  let built = 1;
   return {
     runProvider(input) {
       if (input.schema?.properties?.verdict) {
-        round += 1;
-        const projected = readState(opened.worktree, opened.workId).slices[0];
-        return providerResult({
-          verdict: 'findings',
-          findings: [{
-            severity: 'MAJOR',
-            claim: `The export is still a bare literal (round ${round}).`,
-            scenario: 'A second composition root cannot obtain its own value.',
-            impact: 'Callers share one module-global value.',
-            pass_condition: 'Two independent roots each observe their own value.',
-            evidence: {
-              commit: projected.checkpoint_commit,
-              path: 'value.js',
-              blob: blobAtCommit(opened.worktree, projected.checkpoint_commit, 'value.js'),
-              line_start: 1,
-              line_end: 1,
-            },
-          }],
-        }, { session_id: 'review-sess' });
+        const sliceId = activeSliceId(opened);
+        const round = rounds.indexOf(sliceId);
+        if (round === -1) return providerResult({ verdict: 'approve', findings: [] }, { session_id: 'review-sess' });
+        rounds.splice(round, 1);
+        return providerResult({ verdict: 'findings', findings: [modelFinding(opened, sliceId)] }, { session_id: 'review-sess' });
       }
-      fs.writeFileSync(path.join(input.root, 'value.js'), `module.exports = ${round + 2};\n`);
+      built += 1;
+      // One file per Review Slice: two slices editing the same file make the Work require a combined-diff
+      // review, which would put a dispatch between the acceptance and the completion under test.
+      fs.writeFileSync(path.join(input.root, `${activeSliceId(opened)}.js`), `module.exports = ${built};\n`);
       return providerResult(completedSlice(), { session_id: 'impl-sess' });
     },
-    verify: greenVerification,
+    verify(input) {
+      if (completionVerifyFails && input.sliceId === 'completion') return { status: 1, duration_ms: 3, log_digest: 'b'.repeat(64) };
+      return greenVerification();
+    },
     hydrate: () => ({ hydrated: false }),
     runtime,
   };
 }
 
-// Building, reviewing, correcting and reviewing again: the road to the gate, none of it the subject here.
-// One action per run, so each dispatch ends where the loop really ends one — short of finishing, handing
-// its program to the next run.
-function driveUntil(opened, dependencies, done) {
-  for (let action = 0; action < 8; action += 1) {
-    if (done(readState(opened.worktree, opened.workId).slices[0])) return;
+// The provider call carries no slice id, so the slice being reviewed is read from the state the dispatch
+// saved before asking: the one standing at review-ready, or failing that the first one not yet accepted.
+function activeSliceId(opened) {
+  const slices = readState(opened.worktree, opened.workId).slices;
+  return (slices.find(item => item.status === 'review-ready') || slices.find(item => item.status !== 'accepted') || slices[0]).id;
+}
+
+function modelFinding(opened, sliceId) {
+  const projected = readState(opened.worktree, opened.workId).slices.find(item => item.id === sliceId);
+  return {
+    severity: 'MAJOR',
+    claim: `The export is a bare literal with no lookup seam (${sliceId}).`,
+    scenario: 'A second composition root cannot obtain its own value.',
+    impact: 'Callers share one module-global value.',
+    pass_condition: 'Two independent roots each observe their own value.',
+    evidence: {
+      commit: projected.checkpoint_commit,
+      path: 'value.js',
+      blob: blobAtCommit(opened.worktree, projected.checkpoint_commit, 'value.js'),
+      line_start: 1,
+      line_end: 1,
+    },
+  };
+}
+
+// Building, reviewing, correcting: the road to the gate, none of it the subject here.
+function driveUntil(opened, dependencies, arrived) {
+  for (let action = 0; action < 12; action += 1) {
+    if (arrived(readState(opened.worktree, opened.workId))) return;
     advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
   }
-  assert.ok(done(readState(opened.worktree, opened.workId).slices[0]), 'the fixture never reached the state under test');
+  assert.ok(arrived(readState(opened.worktree, opened.workId)), 'the fixture never reached the state under test');
+}
+
+// The same road, with the human answering each finding on the way so the slice reaches the gate its
+// corrected checkpoint waits at.
+function driveToAcceptance(opened, dependencies, sliceId) {
+  for (let action = 0; action < 12; action += 1) {
+    const projected = readState(opened.worktree, opened.workId).slices.find(item => item.id === sliceId);
+    if (projected?.status === 'awaiting-human-review') return;
+    if (projected?.status === 'awaiting-feedback') adjudicateFinding(opened.worktree, adjudication(opened, sliceId), dependencies);
+    else advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+  }
+  assert.fail(`Review Slice ${sliceId} never reached human acceptance`);
 }
 
 // The human's gesture: the finding is real, and it is the only one open.
-function adjudication(opened) {
-  const projected = readState(opened.worktree, opened.workId).slices[0];
+function adjudication(opened, sliceId) {
+  const projected = readState(opened.worktree, opened.workId).slices.find(item => item.id === sliceId);
   const outcome = listReviewOutcomes(opened.worktree, opened.workId)
     .find(item => item.review_outcome_id === projected.review_outcome_id);
   return { findingId: outcome.findings[0].finding_id, disposition: 'valid', reason: 'The lookup seam is genuinely missing.' };
@@ -253,35 +283,91 @@ test('the program is stopped when the Work blocks', t => {
   assert.equal(fs.existsSync(ownerRecord(opened)), false);
 });
 
-// The other way a Work blocks, and the one no dispatch is watching. A human answers the finding that
-// exhausts the one correction with `pair-cli adjudicate` — a reducer call and nothing else — and the run
-// before it exited normally at a gate, so the claim it parked names no process and reclamation leaves it
-// alone by design. Nothing stops the program on this path unless the transition itself stops it.
-test('the program is stopped when a human adjudication blocks the Work', t => {
-  const opened = openProbedWork(t, {
-    prefix: 'downadjudicated',
-    workId: 'work-down-adjudicated',
+// A dispatch is not the only thing that ends a Work, and two reviews in a row each found a DIFFERENT road
+// into a terminal lifecycle with no `down` on it: a human `adjudicate` that spends the last correction, then
+// an `accept` whose cumulative verification finishes the Work. Both are reducer calls the loop is not
+// standing in, and the claim the previous run parked reads `null`, which reclamation leaves alone by design
+// as an instance handed on rather than abandoned. So the roads are enumerated rather than sampled — one
+// entry per gesture that can land a Work in `complete` or `blocked` — and they share their assertions,
+// because what is under test is that arriving is enough, whichever way the Work arrives.
+const TERMINAL_PATHS = [
+  {
+    label: 'a dispatch finishes the Work',
+    lifecycle: 'complete',
+    config: { human_in_the_loop_default: false },
+    approach: (opened, dependencies) => () => advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies),
+  },
+  {
+    label: 'the running program answers a slice wrong',
+    lifecycle: 'blocked',
+    config: { human_in_the_loop_default: false },
+    runtime: { probeStatus: 1 },
+    approach: (opened, dependencies) => () => advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies),
+  },
+  {
+    label: 'a human adjudication spends the last correction',
+    lifecycle: 'blocked',
+    parked: true,
+    // One action per run, so every dispatch ends the way a real one does: short of finishing, handing its
+    // program to the next run and leaving a claim that names no process.
     config: { human_in_the_loop_default: false, autonomous_actions_per_run: 1 },
+    provider: { findsOn: ['S1', 'S1'] },
+    approach(opened, dependencies) {
+      driveUntil(opened, dependencies, state => state.slices[0].correction_count >= 1);
+      // The human steps into the next round, which is what leaves the second finding for them to answer.
+      setHumanLoop(opened.worktree, { sliceId: 'S1', humanLoop: true });
+      driveUntil(opened, dependencies, state => state.slices[0].status === 'awaiting-feedback');
+      return () => adjudicateFinding(opened.worktree, adjudication(opened, 'S1'), dependencies);
+    },
+  },
+  {
+    label: 'a human accepts the corrected checkpoint of the last Review Slice',
+    lifecycle: 'complete',
+    parked: true,
+    config: { human_in_the_loop_default: true },
+    provider: { findsOn: ['S2'] },
+    approach(opened, dependencies) {
+      driveToAcceptance(opened, dependencies, 'S2');
+      return () => acceptHumanReview(opened.worktree, { sliceId: 'S2' }, dependencies);
+    },
+  },
+  {
+    label: 'the cumulative verification the acceptance triggers comes back red',
+    lifecycle: 'blocked',
+    parked: true,
+    config: { human_in_the_loop_default: true },
+    provider: { findsOn: ['S2'], completionVerifyFails: true },
+    approach(opened, dependencies) {
+      driveToAcceptance(opened, dependencies, 'S2');
+      return () => acceptHumanReview(opened.worktree, { sliceId: 'S2' }, dependencies);
+    },
+  },
+];
+
+for (const [index, terminal] of TERMINAL_PATHS.entries()) {
+  test(`the program is stopped when ${terminal.label}`, t => {
+    const opened = openProbedWork(t, {
+      prefix: `downpath${index}`,
+      workId: `work-down-path-${index}`,
+      config: terminal.config,
+    });
+    const runtime = fakeRuntime(terminal.runtime || {});
+    const dependencies = reviewingProvider(opened, runtime.runtime, terminal.provider || {});
+
+    const cross = terminal.approach(opened, dependencies);
+    if (terminal.parked) {
+      assert.equal(readJson(ownerRecord(opened)).pid, null, 'the run before the gesture ended at a gate, so its claim names no process');
+      assert.equal(runtime.isUp(), true, 'and the program it handed on is still running');
+    }
+    runtime.calls.length = 0;
+    const state = cross();
+
+    assert.equal(state.lifecycle, terminal.lifecycle);
+    assert.equal(phases(runtime.calls).at(-1), 'down', 'the Work stopped being driven, so its program stopped too');
+    assert.equal(runtime.isUp(), false);
+    assert.equal(fs.existsSync(ownerRecord(opened)), false, 'and no claim is left on the Work’s worktree');
   });
-  const runtime = fakeRuntime();
-  const dependencies = reviewingProvider(opened, runtime.runtime);
-
-  // The loop believes its own reviewer and spends the one correction the finding earns.
-  driveUntil(opened, dependencies, slice => slice.correction_count >= 1);
-  // Then the human steps into the next round, which is what leaves the second finding for them to answer.
-  setHumanLoop(opened.worktree, { sliceId: 'S1', humanLoop: true });
-  driveUntil(opened, dependencies, slice => slice.status === 'awaiting-feedback');
-
-  assert.equal(readJson(ownerRecord(opened)).pid, null, 'the run ended at a gate, so its claim names no process');
-  assert.equal(runtime.isUp(), true);
-  runtime.calls.length = 0;
-  const state = adjudicateFinding(opened.worktree, adjudication(opened), dependencies);
-
-  assert.equal(state.lifecycle, 'blocked', 'the second valid finding spends the last correction the slice had');
-  assert.deepEqual(phases(runtime.calls), ['down'], 'the block runs the teardown, without a dispatch to hang it on');
-  assert.equal(runtime.isUp(), false);
-  assert.equal(fs.existsSync(ownerRecord(opened)), false, 'and leaves no claim on the Work’s worktree');
-});
+}
 
 // The case no exit handler can cover: the loop was killed outright, so nothing ran on the way out and the
 // instance is still up. The claim it left names a pid that is gone — which is what the next run reads.

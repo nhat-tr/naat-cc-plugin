@@ -207,13 +207,25 @@ function invocationSummary(kind, sliceId, run, plan = null) {
 // projectAdjudication, and the reason it left behind was then read as current. Observed live: a run narrated
 // "→ ready, S-06 review-ready: exhausted its one correction" thirty minutes after a human finding had already
 // resolved that block. Enforced here so it holds for every transition rather than for the ones we remember.
-function saveState(root, state) {
+//
+// Teardown is enforced from here for the same reason. Eight places in this file write a terminal lifecycle
+// and each of them reaches it by a different road — a dispatch, a `down`-less human `adjudicate`, an
+// `accept` that runs the cumulative verification — so a teardown call per road is a teardown missing from
+// the road nobody thought of. Twice in a row a reviewer found the next one. What every road does share is
+// this write: a terminal lifecycle is not real until it is saved, so the save is the only place that can
+// say "the loop has stopped driving this Work" and be right every time. `down` runs after the state is
+// durable, and only for an instance this engine's own `up` claimed — nothing here can reach a program the
+// human already had running, because no claim was ever written for it.
+function saveState(root, state, dependencies = {}) {
   state.updated_at = now();
   if (state.lifecycle !== 'blocked') {
     state.blocked_reason = null;
     state.blocked_precondition = null;
   }
   writeState(root, state.work_id, state);
+  // Idempotent by way of the claim: a successful `down` deletes it, so the next save of the same terminal
+  // state costs one read and stops nothing. A failed one keeps it, which is what makes the stop retryable.
+  if (TERMINAL_LIFECYCLES.has(state.lifecycle)) stopRuntime(root, state, dependencies);
   return state;
 }
 
@@ -896,23 +908,13 @@ function reclaimAbandonedRuntime(root, state, dependencies = {}) {
   return stopRuntime(root, state, dependencies);
 }
 
-// Nothing may be left running against this Work's worktree once the loop stops driving it, and there are
-// three ways to stop: the Work finishes, the Work blocks, or this process is told to die. All three end
-// here rather than at each of their own call sites, because teardown that has to be remembered in n places
-// is teardown that is missing from the n+1th. A block tears down too: the next thing a blocked Work gets is
-// a human reading it, and until then a stale instance would answer for code nobody is building.
+// Nothing may be left running against this Work's worktree once the loop stops driving it: the Work
+// finishes, the Work blocks, or this process is told to die. The first two are a lifecycle, and saveState
+// is where a lifecycle becomes true — see the note there for why the teardown hangs off the write rather
+// than off the transitions that produce it. A block tears down too: the next thing a blocked Work gets is
+// a human reading it, and until then a stale instance would answer for code nobody is building. Only the
+// third, a signal, has no state write to hang off, and it is handled below.
 const TERMINAL_LIFECYCLES = new Set(['complete', 'blocked']);
-
-// The dispatch is not the only way a Work reaches one of them. A human answering the finding that exhausts
-// the one correction blocks the Work from a plain `adjudicate`, which runs the reducer and nothing else — no
-// dispatch, so no teardown — and the claim the previous run parked reads `null`, which reclamation
-// deliberately leaves alone as an instance handed on rather than abandoned. Between the two the program
-// survives every path: nobody stops it and nobody is allowed to. So the terminal lifecycles carry the
-// teardown themselves, and every route into one goes through here.
-function stopRuntimeAtTerminalLifecycle(root, state, dependencies = {}) {
-  if (TERMINAL_LIFECYCLES.has(state.lifecycle)) stopRuntime(root, state, dependencies);
-  return state;
-}
 
 // Armed once for the life of the process and never disarmed. Removing them around the dispatch looked tidier
 // and was the bug: the dispatch is synchronous end to end, so a Ctrl-C during it is queued and cannot be
@@ -945,8 +947,9 @@ function withRuntimeTeardown(root, state, dependencies, callback) {
   holdRuntime(root, state);
   try {
     const latest = callback();
-    if (TERMINAL_LIFECYCLES.has(latest?.lifecycle)) stopRuntime(root, latest, dependencies);
-    else parkRuntime(root, latest || state);
+    // A terminal lifecycle was already torn down by the save that made it terminal, so all that is left
+    // here is the other exit: a run that stops short of finishing and hands its program to the next one.
+    if (!TERMINAL_LIFECYCLES.has(latest?.lifecycle)) parkRuntime(root, latest || state);
     return latest;
   } catch (error) {
     try { stopRuntime(root, state, dependencies); } catch { /* teardown is best effort */ }
@@ -1508,7 +1511,7 @@ function cumulativeVerification(root, state, context, dependencies) {
       state.lifecycle = 'blocked';
       state.blocked_reason = 'cumulative deterministic verification failed';
       state.next_action = 'human diagnosis required';
-      return saveState(root, state);
+      return saveState(root, state, dependencies);
     }
   }
   if (state.composition_review_required) {
@@ -1520,7 +1523,7 @@ function cumulativeVerification(root, state, context, dependencies) {
     updatePairRef(state.worktree, state.work_id, 'completed', state.head_commit);
     appendEvent(root, state.work_id, { event: 'work-completed', head_commit: state.head_commit });
   }
-  return saveState(root, state);
+  return saveState(root, state, dependencies);
 }
 
 // The coordinator already holds the two commit ids, so it can hand the reviewer the diff itself instead
@@ -1635,7 +1638,7 @@ function handleCompletedImplementation(root, state, context, slice, projected, o
       state.lifecycle = 'ready';
       state.next_action = `run one deterministic-failure correction for ${slice.id}`;
     }
-    return saveState(root, state);
+    return saveState(root, state, dependencies);
   }
   if (correction) projected.correction_count += 1;
   return checkpointVerifiedSlice(root, state, context, slice, projected, options, dependencies, {
@@ -1707,7 +1710,7 @@ const LEGACY_DIRTY_WORKTREE_REASONS = ['Pair worktree is dirty before Review Sli
 // writer, the whole transition became unexplainable after the fact. The journal is what the reducer and
 // every audit read, so a state the loop enters has to be in it. The paths themselves stay out: they are
 // unreviewed working-tree content, not evidence, and the count is what makes the entry diagnosable.
-function blockOnDirtyWorktree(root, state, projected, reason) {
+function blockOnDirtyWorktree(root, state, projected, reason, dependencies = {}) {
   // Re-entry while already blocked must not overwrite the status the slice will resume into.
   if (projected.status !== 'blocked') projected.blocked_from = projected.status;
   projected.status = 'blocked';
@@ -1724,7 +1727,7 @@ function blockOnDirtyWorktree(root, state, projected, reason) {
     blocked_reason: reason,
     dirty_path_count: worktreeStatus(state.worktree).split(/\r?\n/u).filter(line => line.trim()).length,
   });
-  return saveState(root, state);
+  return saveState(root, state, dependencies);
 }
 
 function blockedOnDirtyWorktree(state) {
@@ -1766,7 +1769,7 @@ function runSliceImplementation(root, state, context, slice, projected, options,
   // answer is no: the changes are the interrupted attempt's own half-finished work, which continuing is
   // supposed to pick up. Blocking on them would make interrupt-then-continue impossible.
   if (!correction && !projected.interrupted_at && unwaivedDirtyWorktree(state)) {
-    return blockOnDirtyWorktree(root, state, projected, `Pair worktree is dirty before Review Slice ${slice.id}`);
+    return blockOnDirtyWorktree(root, state, projected, `Pair worktree is dirty before Review Slice ${slice.id}`, dependencies);
   }
   if (!projected.base_commit) projected.base_commit = git(state.worktree, ['rev-parse', 'HEAD']).stdout;
   const headBefore = git(state.worktree, ['rev-parse', 'HEAD']).stdout;
@@ -1788,18 +1791,18 @@ function runSliceImplementation(root, state, context, slice, projected, options,
     state.lifecycle = 'blocked';
     state.blocked_reason = `provider committed inside Review Slice ${slice.id}; Pair preserves it for human inspection`;
     state.next_action = 'human inspection required';
-    return saveState(root, state);
+    return saveState(root, state, dependencies);
   }
   if (output.status === 'blocked') {
     projected.status = 'blocked';
     state.lifecycle = 'blocked';
     state.blocked_reason = output.blocker;
     state.next_action = 'human decision required';
-    return saveState(root, state);
+    return saveState(root, state, dependencies);
   }
   if (output.status === 'design-required') {
     if (unwaivedDirtyWorktree(state)) {
-      return blockOnDirtyWorktree(root, state, projected, `provider edited code before Design Check for ${slice.id}`);
+      return blockOnDirtyWorktree(root, state, projected, `provider edited code before Design Check for ${slice.id}`, dependencies);
     }
     saveDesignCheck(root, state, slice, projected, output.design_check, output.architecture_risk);
     projected.route = 'architecture-sensitive';
@@ -1884,7 +1887,7 @@ function combinedReview(root, state, context, options, dependencies) {
     updatePairRef(state.worktree, state.work_id, 'completed', state.head_commit);
     appendEvent(root, state.work_id, { event: 'work-completed', head_commit: state.head_commit, combined_review: recorded.outcome.review_outcome_id });
   }
-  return saveState(root, state);
+  return saveState(root, state, dependencies);
 }
 
 // A Review Slice at awaiting-feedback whose every finding already carries Review Feedback is not waiting
@@ -2512,9 +2515,7 @@ function projectAdjudication(root, state, projected, context = null, dependencie
     // step the next dispatch takes.
     acceptSlice(root, state, context || workContext(root, state), projected);
   }
-  // Saved before the teardown, never after: `down` is the step that can fail, and a failure leaves the
-  // claim naming this process so a later run reads a dead pid and retries it.
-  return stopRuntimeAtTerminalLifecycle(root, saveState(root, state), dependencies);
+  return saveState(root, state, dependencies);
 }
 
 // The one correction is irreversible and the brief that steers it was invisible: correctionPrompt is
@@ -2612,7 +2613,7 @@ function adjudicateFinding(root, options = {}, dependencies = {}) {
     state.lifecycle = feedback.disposition === 'valid' ? 'blocked' : 'completion-review-ready';
     state.blocked_reason = feedback.disposition === 'valid' ? 'valid combined-diff finding requires human-scoped correction' : null;
     state.next_action = feedback.disposition === 'valid' ? 'human correction required' : 'resume combined-diff completion';
-    return stopRuntimeAtTerminalLifecycle(root, saveState(root, state), dependencies);
+    return saveState(root, state, dependencies);
   }
   return projectAdjudication(root, state, projected, null, dependencies);
 }
