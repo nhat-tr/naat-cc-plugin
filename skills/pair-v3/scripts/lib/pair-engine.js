@@ -996,7 +996,47 @@ function servesThisWorktree(state, declaration, call) {
   return String(answer.output || '').includes(path.basename(state.worktree));
 }
 
-function ensureRuntimeReady(root, state, declaration, execute) {
+// The first claim on disk that belongs to some other Work. There is at most one program on the fixed host
+// ports, so the first one found is the one to answer for — and a claim is the only durable record that the
+// loop, rather than the human, started what is answering there.
+function foreignRuntimeClaim(root, state) {
+  for (const workId of listWorkIds(root)) {
+    if (workId === state.work_id) continue;
+    const owner = runtimeOwner(root, workId);
+    if (owner) return { workId, owner };
+  }
+  return null;
+}
+
+// Green, and serving code that is not this Work's. Nothing may be asked of that program: every probe from
+// here on would answer this slice's question against somebody else's checkout, confidently and wrongly. It
+// also holds the fixed host ports, so this Work cannot have its own instance until it is gone — and who it
+// belongs to decides whether this run may make it gone.
+//
+// A claim from another Work is a program this loop started and still owes a `down`; stopping it is exactly
+// the teardown that Work is owed, so it happens here and this run then starts its own. Anything else is not
+// the loop's to stop — the human's own stack, or an instance another live run is driving right now — so the
+// run refuses and says whose it is. Refusing costs a run; guessing costs a wrong answer nobody can see is
+// wrong, and this Work exists to rule the second one out.
+function evictForeignRuntime(root, state, dependencies) {
+  const claim = foreignRuntimeClaim(root, state);
+  const refusal = reason => ({ ready: false, diagnostic: `the program answering the declared runtime is not serving ${path.basename(state.worktree)}: ${reason}` });
+  if (!claim) return refusal('no Pair Work claims it, so it is not this loop\'s to stop — stop it yourself and run again');
+  if (claim.owner.pid && processAlive(claim.owner.pid)) {
+    return refusal(`${claim.workId} is driving it from a live run (pid ${claim.owner.pid})`);
+  }
+  appendEvent(root, state.work_id, { event: 'runtime-foreign', held_by: claim.workId });
+  reportProgress(dependencies, { phase: 'runtime-foreign', held_by: claim.workId });
+  const worktree = claim.owner.worktree && fs.existsSync(claim.owner.worktree) ? claim.owner.worktree : root;
+  if (!stopRuntime(root, { work_id: claim.workId, worktree }, dependencies)) {
+    return refusal(`${claim.workId} claims it and its declared down did not stop it`);
+  }
+  return { ready: true };
+}
+
+// Ready or the reason it is not, so a runtime that cannot be trusted travels the same road to the human as a
+// runtime that never came up.
+function ensureRuntimeReady(root, state, declaration, execute, dependencies) {
   const call = (phase, command) => execute({
     phase,
     command,
@@ -1012,7 +1052,13 @@ function ensureRuntimeReady(root, state, declaration, execute) {
   // different Work's worktree — or the human's main checkout — answers exactly as green as ours would, and
   // adopting it means every probe from here on asks the wrong code. When the repository can ask which code
   // is being served, that answer decides, and only a match adopts.
-  if (call('ready', declaration.ready).status === 0 && servesThisWorktree(state, declaration, call)) return true;
+  if (call('ready', declaration.ready).status === 0) {
+    if (servesThisWorktree(state, declaration, call)) return { ready: true };
+    // A stranger was evicted, not adopted: the ports are free now, so this run goes on to start its own
+    // instance below. A refusal ends the run here rather than booting a second program onto held ports.
+    const evicted = evictForeignRuntime(root, state, dependencies);
+    if (!evicted.ready) return evicted;
+  }
   // Written before the command runs, not after. `up` is the window where the program comes into existence,
   // so a loop killed inside that window is precisely the case that strands an instance — a record written
   // afterwards would be the one record that is missing exactly when it is needed.
@@ -1028,7 +1074,7 @@ function ensureRuntimeReady(root, state, declaration, execute) {
   for (;;) {
     if (call('ready', declaration.ready).status === 0) {
       appendEvent(root, state.work_id, { event: 'runtime-ready', command_digest: digest(declaration.ready) });
-      return true;
+      return { ready: true };
     }
     if (Date.now() >= deadline) {
       appendEvent(root, state.work_id, {
@@ -1036,7 +1082,10 @@ function ensureRuntimeReady(root, state, declaration, execute) {
         command_digest: digest(declaration.ready),
         waited_ms: RUNTIME_READY_TIMEOUT_MS,
       });
-      return false;
+      return {
+        ready: false,
+        diagnostic: `the declared runtime was not ready within ${Math.round(RUNTIME_READY_TIMEOUT_MS / 1000)}s of running: ${declaration.up}`,
+      };
     }
     sleep(RUNTIME_READY_POLL_MS);
   }
@@ -1053,9 +1102,8 @@ function observeRuntime(root, state, slice, dependencies) {
   }
   const execute = dependencies.runtime || ((input) => runtimeCommand(input.command, input.cwd, input.env));
   reportProgress(dependencies, { phase: 'runtime-starting', review_slice_id: slice.id, command: declaration.ready });
-  if (!ensureRuntimeReady(root, state, declaration, execute)) {
-    return { status: null, diagnostic: `the declared runtime was not ready within ${Math.round(RUNTIME_READY_TIMEOUT_MS / 1000)}s of running: ${declaration.up}` };
-  }
+  const runtimeReady = ensureRuntimeReady(root, state, declaration, execute, dependencies);
+  if (!runtimeReady.ready) return { status: null, diagnostic: runtimeReady.diagnostic };
   reportProgress(dependencies, { phase: 'probe-started', review_slice_id: slice.id, command: slice.probe });
   const probe = execute({
     phase: 'probe',
