@@ -897,15 +897,31 @@ function stopRuntime(root, state, dependencies = {}) {
 }
 
 // The half no handler can cover. A loop killed outright — SIGKILL, a closed laptop, a crashed shell — runs
-// nothing on the way out, so the instance it started is still up and still pointing at this Work's worktree.
+// nothing on the way out, so the instance it started is still up and still pointing at that Work's worktree.
 // The claim it left names a pid that no longer exists. A claim parked at `null` is the opposite case and is
 // left alone: that program is up because the last run chose to leave it up.
-function reclaimAbandonedRuntime(root, state, dependencies = {}) {
-  const owner = runtimeOwner(root, state.work_id);
-  if (!owner || owner.pid === null || owner.pid === undefined || processAlive(owner.pid)) return false;
-  appendEvent(root, state.work_id, { event: 'runtime-reclaimed', abandoned_pid: owner.pid, since: owner.at || null });
-  reportProgress(dependencies, { phase: 'runtime-reclaimed', abandoned_pid: owner.pid });
-  return stopRuntime(root, state, dependencies);
+//
+// Reconciliation reads every Work's claim, not just the one being driven, because the Work that was killed
+// is usually not the Work that runs next. A per-Work read never sees the stranded claim — and the runtime
+// binds fixed host ports, so the next Work's readiness check finds that abandoned instance green, adopts it
+// rather than starting its own, and then observes the killed Work's worktree while reporting on its own.
+// That is the silent wrong-code answer this slice exists to prevent, arriving by the one route teardown did
+// not cover. The claim already records the work id and worktree `down` needs, so reconciling all of them
+// costs one directory listing and loads no state.
+function reclaimAbandonedRuntime(root, dependencies = {}) {
+  let reclaimed = false;
+  for (const workId of listWorkIds(root)) {
+    const owner = runtimeOwner(root, workId);
+    if (!owner || owner.pid === null || owner.pid === undefined || processAlive(owner.pid)) continue;
+    appendEvent(root, workId, { event: 'runtime-reclaimed', abandoned_pid: owner.pid, since: owner.at || null });
+    reportProgress(dependencies, { phase: 'runtime-reclaimed', abandoned_pid: owner.pid });
+    // A finished Work's worktree is removed while its claim can still be outstanding, and `down` cannot run
+    // in a directory that is gone. The repository root is the honest fallback: losing the worktree is not a
+    // reason to leave the instance up, which is the one outcome this function exists to rule out.
+    const worktree = owner.worktree && fs.existsSync(owner.worktree) ? owner.worktree : root;
+    if (stopRuntime(root, { work_id: workId, worktree }, dependencies)) reclaimed = true;
+  }
+  return reclaimed;
 }
 
 // Nothing may be left running against this Work's worktree once the loop stops driving it: the Work
@@ -1953,9 +1969,9 @@ function advanceWork(root, options = {}, dependencies = {}) {
   const cap = autonomousActionCap(state, dependencies.env || process.env);
   return withDispatchLease(root, state.work_id, { command: 'run' }, () => {
     // Under the lease, so the pid a claim names is either this run or one the lease already refused. Before
-    // any action, because an instance a killed run left behind is serving this worktree's old code, and the
-    // first probe of this run would ask its question of that.
-    reclaimAbandonedRuntime(root, state, dependencies);
+    // any action, because an instance a killed run left behind is serving some worktree's old code, and the
+    // first probe of this run would ask its question of that — whichever Work that instance belongs to.
+    reclaimAbandonedRuntime(root, dependencies);
     return withRuntimeTeardown(root, state, dependencies, () => {
       let latest = advanceHeldWork(root, options, dependencies);
       let actions = 1;

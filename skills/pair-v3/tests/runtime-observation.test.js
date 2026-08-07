@@ -390,6 +390,31 @@ test('a program left behind by a killed loop is stopped by the next run', t => {
   assert.equal(reclaimed.length, 1);
 });
 
+// The same abandonment, one Work over — and the likelier half of it, because a loop killed while driving one
+// Work is usually followed by a run on a different one. Reading only the driven Work's claim leaves the
+// stranded instance up, and since the runtime binds fixed host ports it then answers the new Work's
+// readiness check and is adopted: the new Work reports on the killed Work's worktree under its own name.
+test('a program stranded on another Work is stopped by a run on this one', t => {
+  const opened = openProbedWork(t, { prefix: 'downcross', workId: 'work-down-cross' });
+  const runtime = fakeRuntime();
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
+  const stranded = workPaths(opened.worktree, 'work-down-stranded').runtimeOwner;
+  fs.mkdirSync(path.dirname(stranded), { recursive: true });
+  fs.writeFileSync(stranded, JSON.stringify({
+    pid: deadPid(),
+    work_id: 'work-down-stranded',
+    worktree: opened.worktree,
+    at: new Date().toISOString(),
+  }));
+
+  advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(phases(runtime.calls)[0], 'down', 'the other Work’s abandoned instance is stopped before this run asks anything');
+  assert.equal(fs.existsSync(stranded), false, 'and its claim is gone, so no later run stops it a second time');
+  const reclaimed = readEvents(opened.worktree, 'work-down-stranded').filter(event => event.event === 'runtime-reclaimed');
+  assert.equal(reclaimed.length, 1, 'recorded against the Work that was abandoned, not the one that cleaned up after it');
+});
+
 // The safety half of the same record. `ready` answering before `up` means the instance was already there —
 // the human's own development stack — and stopping it would destroy something the loop never started.
 test('a program the loop did not start is never stopped', t => {
