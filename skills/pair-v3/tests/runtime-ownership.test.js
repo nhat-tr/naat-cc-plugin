@@ -14,6 +14,8 @@
 //       to run is one that could never have reached the program.
 // AC-8: a verification or probe child killed by SIGINT or SIGTERM is recorded as a human interrupt, spends no
 //       correction, and writes no terminal lifecycle.
+// AC-9: a second termination signal still terminates the loop — the teardown the first signal starts is not
+//       allowed to absorb the next one.
 
 const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
@@ -660,3 +662,48 @@ test('an interrupted re-verification leaves the Review Slice exactly where it st
     'the failure it is already correcting is unchanged: an interrupt neither arms nor disarms a correction');
   assert.equal(state.slices[0].correction_count || 0, 0, 'and the one bounded correction is still unspent');
 });
+
+// AC-9: the teardown is a synchronous child, so while `down` runs no second signal can reach a JavaScript
+// handler at all — a `down` that hangs would leave the person at the keyboard pressing Ctrl-C at a loop that
+// cannot answer. The only thing that can still kill this process mid-teardown is the default disposition, and
+// that comes back exactly when the last listener is gone. So the handler disarms on the way in, not on the way
+// out: one signal is spent cleaning up, and the next one lands on a process that dies from it.
+test('a second termination signal is not absorbed by the teardown the first one started', t => {
+  // One action, so the run stops short of finishing and parks its claim — a `down` is still owed when the
+  // signal arrives, which is the only case where the handler has anything to do.
+  const opened = openProbedWork(t, {
+    prefix: 'signaltwice',
+    workId: 'work-signal-twice',
+    config: { autonomous_actions_per_run: 1 },
+  });
+  const runtime = fakeRuntime({ serves: path.basename(opened.worktree) });
+  const listeningDuringTeardown = [];
+  const { dependencies } = scriptedProvider({
+    runtime(input) {
+      if (input.phase === 'down') listeningDuringTeardown.push(...armedSignals());
+      return runtime.runtime(input);
+    },
+  });
+  const killed = [];
+  const realKill = process.kill;
+  process.kill = (pid, signal) => { killed.push({ pid, signal }); };
+  t.after(() => { process.kill = realKill; });
+
+  advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+  const handler = process.listeners('SIGINT').find(listener => listener.name === 'stopRuntimeOnSignal');
+  assert.ok(handler, 'the handler under test is the one the dispatch armed');
+  handler();
+
+  assert.ok(phases(runtime.calls).includes('down'), 'the first signal still pays the debt it found: `down` ran');
+  assert.deepEqual(listeningDuringTeardown, [],
+    'and it ran with nothing of ours listening, so a second SIGINT or SIGTERM meets the default disposition and kills');
+  assert.deepEqual(killed, [{ pid: process.pid, signal: 'SIGINT' }],
+    'then the signal is re-raised rather than swallowed: the caller asked this process to die');
+  assert.deepEqual(armedSignals(), [], 'and nothing is left armed to catch a signal after the process was told to go');
+});
+
+// The loop's own handlers, told apart from whatever else in this test process listens for a signal.
+function armedSignals() {
+  return ['SIGINT', 'SIGTERM'].filter(signal =>
+    process.listeners(signal).some(listener => listener.name === 'stopRuntimeOnSignal'));
+}

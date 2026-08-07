@@ -994,12 +994,13 @@ function reclaimAbandonedRuntime(root, dependencies = {}) {
 // third, a signal, has no state write to hang off, and it is handled below.
 const TERMINAL_LIFECYCLES = new Set(['complete', 'blocked']);
 
-// Armed once for the life of the process and never disarmed. Removing them around the dispatch looked tidier
-// and was the bug: the dispatch is synchronous end to end, so a Ctrl-C during it is queued and cannot be
-// delivered until the call stack unwinds — and a `finally` that removes the listener first drops the queued
-// signal on the floor, taking the default termination with it. Left installed, the handler runs on the first
-// turn of the event loop after the synchronous work returns, which is still before the process exits. The
-// handlers read ownership from disk, so once nothing is claimed they cost one `readJson` and re-raise.
+// Armed once for the life of the process, and disarmed only by a signal arriving. Removing them around the
+// dispatch looked tidier and was the bug: the dispatch is synchronous end to end, so a Ctrl-C during it is
+// queued and cannot be delivered until the call stack unwinds — and a `finally` that removes the listener
+// first drops the queued signal on the floor, taking the default termination with it. Left installed, the
+// handler runs on the first turn of the event loop after the synchronous work returns, which is still before
+// the process exits. The handlers read ownership from disk, so once nothing is claimed they cost one
+// `readJson` and re-raise.
 // The Work the handlers act on is re-pointed per dispatch rather than captured once, so a second Work driven
 // from the same process is not torn down against the first one's worktree.
 let armedRuntime = null;
@@ -1008,15 +1009,24 @@ function armRuntimeSignals(root, state, dependencies) {
   const armed = armedRuntime !== null;
   armedRuntime = { root, state, dependencies };
   if (armed) return;
+  const installed = new Map();
   for (const signal of ['SIGINT', 'SIGTERM']) {
-    process.on(signal, function onSignal() {
+    const stopRuntimeOnSignal = () => {
+      // Disarmed on the way in, before the teardown, and for both signals rather than the one that arrived.
+      // `down` is a synchronous child, so while it runs no second signal can reach a handler here at all —
+      // the only thing that can still kill this process mid-teardown is the default disposition, and that
+      // comes back the moment the last listener is gone. Disarming afterwards instead would hold the loop
+      // hostage to its own cleanup for as long as `down` took, which is a program the person who started it
+      // cannot stop. One signal is spent cleaning up; the next one lands on a process that dies from it.
+      for (const [armedSignal, handler] of installed) process.removeListener(armedSignal, handler);
       const current = armedRuntime;
       try { if (current) stopRuntime(current.root, current.state, current.dependencies); } catch { /* teardown is best effort; dying is not optional */ }
       // Re-raised rather than swallowed: the caller asked this process to die, and a loop that absorbs its
       // own SIGINT is worse than one that leaks a container.
-      process.removeListener(signal, onSignal);
       process.kill(process.pid, signal);
-    });
+    };
+    installed.set(signal, stopRuntimeOnSignal);
+    process.on(signal, stopRuntimeOnSignal);
   }
 }
 
