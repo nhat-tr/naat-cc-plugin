@@ -2112,9 +2112,19 @@ function hunkOldRange(hunk) {
 // the finding is addressed. The window is reported alongside the result so the rule is never implicit.
 const CORRECTION_PROXIMITY_LINES = 10;
 
-function correctionAttribution(worktree, priorCheckpoint, checkpointCommit, findings) {
+// `round` is which correction produced this checkpoint, and it is carried onto every per-finding record
+// alongside the two commits the diff was taken between. All three were already in scope here and were
+// dropped one line before the record was stored, which left the reader of a finding with "some hunks moved
+// near your anchor" and no way to say WHICH correction moved them. Asked in these words: "in a list of
+// 'valid' findings, i have no idea which one is fixed and in which correction slice (hash)". Naming the
+// commit is not a claim about the fix — the proximity rule below is unchanged — it is what makes the claim
+// checkable, because a reader who disagrees can now go read the commit it names.
+function correctionAttribution(worktree, priorCheckpoint, checkpointCommit, findings, round = null) {
   const files = correctionHunks(worktree, priorCheckpoint, checkpointCommit);
   if (!files) return null;
+  // Recorded once and spread onto every finding: the diff is one range, so a per-finding copy that could
+  // disagree with its neighbours would be a lie waiting to happen.
+  const provenance = { correction_commit: checkpointCommit || null, base_commit: priorCheckpoint || null, round };
   const claimed = new Set();
   const perFinding = new Map();
   for (const finding of findings) {
@@ -2140,6 +2150,7 @@ function correctionAttribution(worktree, priorCheckpoint, checkpointCommit, find
       }
     }
     perFinding.set(finding.finding_id, {
+      ...provenance,
       file_changed: files.has(finding.evidence.path),
       overlapping_hunks: overlapping,
       near_hunks: near,
@@ -2204,7 +2215,8 @@ function sliceEvidence(root, options = {}) {
     && String(outcome.recorded_at) > String(checkpointCreatedAt));
   const attribution = raisedAfterCorrection
     ? null
-    : correctionAttribution(readRoot, priorCheckpoint, projected.checkpoint_commit, outcome?.findings || []);
+    : correctionAttribution(readRoot, priorCheckpoint, projected.checkpoint_commit, outcome?.findings || [],
+      projected.correction_count || null);
   const shape = correctionShape(correctionHunks(readRoot, priorCheckpoint, projected.checkpoint_commit));
   return {
     work_id: state.work_id,

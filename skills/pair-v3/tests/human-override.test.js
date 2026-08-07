@@ -734,6 +734,19 @@ test('a correction is attributed hunk by hunk to the finding that asked for it',
   assert.equal(finding.correction.overlapping_hunks[0].old_start, 1);
   const unrequested = evidence.correction_unattributed.map(item => item.path);
   assert.deepEqual(unrequested, ['extra.js'], 'a file no finding anchors to is named as scope nobody asked for');
+
+  // Which correction, by hash. Asked in these words: "in a list of 'valid' findings, i have no idea which
+  // one is fixed and in which correction slice (hash)". The attribution said what moved and never where it
+  // landed, so a reader holding several valid findings across two rounds could not tell which round had
+  // tried which finding, nor name a commit to go read. Both commits were in scope at the producer and were
+  // dropped one line before the record was stored.
+  assert.equal(finding.correction.correction_commit, evidence.checkpoint_commit,
+    'the finding names the checkpoint its correction landed in');
+  assert.equal(finding.correction.base_commit, evidence.prior_checkpoint_commit,
+    'and the checkpoint the diff was taken from, so the named range is readable');
+  assert.equal(finding.correction.round, evidence.correction_count,
+    'and which correction round it was, so two rounds on one finding are told apart');
+  assert.ok(finding.correction.correction_commit, 'the commit is a real one, not a null that renders as "correction"');
 });
 
 // A bounded fix for a finding anchored at one line usually lands beside it, not on it — a guard inserted
