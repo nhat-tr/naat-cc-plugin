@@ -141,6 +141,11 @@ function validateRuntimeAssets() {
       !filePath.includes(`${path.sep}.brainstorm${path.sep}`) &&
       // .pair is ignored, machine-local runtime evidence; it is not checked-in source.
       !filePath.includes(`${path.sep}.pair${path.sep}`) &&
+      // .pair-worktrees/ holds linked Git worktrees: this same repository checked out at other commits.
+      // Scanning them reports every file twice and, worse, reports commits that are already history as
+      // failures of the tree being validated — a leak fixed on main still fails while any worktree
+      // predating the fix exists. The source of truth for checked-in content is this checkout.
+      !filePath.includes(`${path.sep}.pair-worktrees${path.sep}`) &&
       !filePath.endsWith('.png') &&
       !filePath.endsWith('.jpg') &&
       !filePath.endsWith('.jpeg') &&

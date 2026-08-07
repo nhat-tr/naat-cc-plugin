@@ -1,7 +1,7 @@
 {
   "csharp": {
     "command": "node",
-    "args": ["/Users/nhat.tran/.claude/skills/csharp-lsp-proxy/proxy.ts"],
+    "args": ["${CLAUDE_PLUGIN_ROOT}/proxy.ts"],
     "extensionToLanguage": {
       ".cs": "csharp"
     },

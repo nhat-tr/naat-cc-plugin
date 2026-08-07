@@ -414,6 +414,13 @@
       "supported_runtimes": [
         "claude"
       ]
+    },
+    "skill.az-pr-fix": {
+      "type": "skill",
+      "canonical_file": "skills/az-pr-fix/SKILL.md",
+      "supported_runtimes": [
+        "claude"
+      ]
     }
   }
 }
