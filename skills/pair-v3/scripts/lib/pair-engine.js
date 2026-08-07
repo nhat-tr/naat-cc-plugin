@@ -1025,7 +1025,17 @@ function armRuntimeSignals(root, state, dependencies) {
       // cannot stop. One signal is spent cleaning up; the next one lands on a process that dies from it.
       for (const [armedSignal, handler] of installed) process.removeListener(armedSignal, handler);
       const current = armedRuntime;
-      try { if (current) stopRuntime(current.root, current.state, current.dependencies); } catch { /* teardown is best effort; dying is not optional */ }
+      // The same exception saveState makes, and for the same reason: a run that refused because nothing could
+      // prove what the program serves must not stop it on the way out either, or the signal becomes the one
+      // door left open to the blind `down` every other path was closed against. Read from disk rather than
+      // from the captured state — the refusal is written by the dispatch after these handlers were armed, so
+      // the in-memory copy this closure holds predates the block it needs to see.
+      try {
+        if (current) {
+          const persisted = readState(current.root, current.state.work_id) || current.state;
+          if (!blockedOnRuntimeOwnership(persisted)) stopRuntime(current.root, current.state, current.dependencies);
+        }
+      } catch { /* teardown is best effort; dying is not optional */ }
       // Re-raised rather than swallowed: the caller asked this process to die, and a loop that absorbs its
       // own SIGINT is worse than one that leaks a container.
       process.kill(process.pid, signal);
@@ -1966,7 +1976,14 @@ function handleCompletedImplementation(root, state, context, slice, projected, o
   snapshotAttempt(root, state, slice, projected, correction ? 'correction' : 'implementation');
   const verification = verify(root, state, slice, dependencies);
   projected.failure_proof = output.failure_proof;
-  projected.verification = verificationRecord(slice, verification);
+  // An interrupt is written unless doing so would destroy a better record. Both halves are load-bearing and
+  // they pull opposite ways. A first attempt a person stops has no earlier verification to lose, and writing
+  // the record is the whole reason the null status reads as a person rather than as a command that could not
+  // run. A correction attempt on a slice already holding a green does have one to lose: that green is what
+  // its checkpoint rests on, and a run that never finished must not replace it — the same reasoning
+  // verifyActiveSlice states, which simply never faces the first case.
+  const wouldEraseGreen = verification.human_interrupt && projected.verification?.status === 0;
+  if (!wouldEraseGreen) projected.verification = verificationRecord(slice, verification);
   if (verification.status !== 0) {
     // A check somebody killed says nothing about the code, so it takes the road the provider's own interrupt
     // takes: no correction, no block, the attempt's edits left where they are. Any other road makes reaching
@@ -2578,6 +2595,11 @@ function verifyActiveSlice(root, options = {}, dependencies = {}) {
   if (!projected) throw new Error('no Review Slice selected for verification');
   if (projected.status === 'accepted') throw new Error(`Review Slice ${projected.id} is already accepted`);
   const slice = manifestSlice(context, projected.id);
+  // The same reclamation a run does before its first action, and for a sharper reason: re-verification is the
+  // gesture an ownership refusal tells the human to reach for, and it is free. Without this, a claim left by a
+  // killed run names a dead pid that no identity check can answer for, so the sole-claim rule keeps refusing
+  // and the one escape the refusal message offers can never clear it.
+  reclaimAbandonedRuntime(root, dependencies);
   const verification = verify(root, state, slice, dependencies);
   // Not written on an interrupt: replacing the slice's recorded verification with the null a signal leaves
   // would erase the green a checkpoint still rests on, on the strength of a run that never finished.
