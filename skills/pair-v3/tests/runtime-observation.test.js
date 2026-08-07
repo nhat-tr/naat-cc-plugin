@@ -14,7 +14,7 @@ const test = require('node:test');
 const childProcess = require('node:child_process');
 
 const { advanceWork } = require('../scripts/lib/pair-engine');
-const { readEvents, readState, workPaths } = require('../scripts/lib/pair-store');
+const { readEvents, readJson, readState, workPaths } = require('../scripts/lib/pair-store');
 const { completedSlice, greenVerification, openTestWork, providerResult } = require('./helpers/warm-work');
 
 const PROBE = 'curl -fsS http://localhost:5080/health';
@@ -38,7 +38,7 @@ function twoSlicesWithProbes() {
 
 // A program that is down until something starts it, and stays up once started — which is what makes "run
 // `up` once" observable: a second slice that asked `ready` first would find it already answering.
-function fakeRuntime({ probeStatus = 0 } = {}) {
+function fakeRuntime({ probeStatus = 0, downStatus = 0 } = {}) {
   const calls = [];
   let up = false;
   function runtime(input) {
@@ -49,8 +49,9 @@ function fakeRuntime({ probeStatus = 0 } = {}) {
     }
     if (input.phase === 'ready') return { status: up ? 0 : 1, duration_ms: 1, log_digest: 'r'.repeat(64) };
     if (input.phase === 'down') {
-      up = false;
-      return { status: 0, duration_ms: 1, log_digest: 'd'.repeat(64) };
+      // A `down` that fails stops nothing, which is the point of the failed-teardown case.
+      if (downStatus === 0) up = false;
+      return { status: downStatus, duration_ms: 1, log_digest: 'd'.repeat(64) };
     }
     return { status: probeStatus, duration_ms: 1, log_digest: 'p'.repeat(64) };
   }
@@ -75,7 +76,7 @@ function scriptedProvider(extra) {
   };
 }
 
-function openProbedWork(t, { prefix, workId, slices = twoSlicesWithProbes() }) {
+function openProbedWork(t, { prefix, workId, slices = twoSlicesWithProbes(), config = {} }) {
   return openTestWork(t, {
     prefix,
     workId,
@@ -84,7 +85,7 @@ function openProbedWork(t, { prefix, workId, slices = twoSlicesWithProbes() }) {
     // Committed, so the declaration is present in the Pair worktree the engine runs from — a runtime
     // declaration is repository content, not Pair state.
     files: { '.pair/runtime.json': RUNTIME_DECLARATION },
-    config: { human_in_the_loop_default: false },
+    config: { human_in_the_loop_default: false, ...config },
   });
 }
 
@@ -231,6 +232,67 @@ test('a program the loop did not start is never stopped', t => {
   assert.deepEqual(phases(runtime.calls).filter(phase => phase === 'up' || phase === 'down'), [],
     'neither started nor stopped: the instance belongs to whoever brought it up');
   assert.equal(runtime.isUp(), true);
+});
+
+// A run that stops at the action cap exits normally at a non-terminal lifecycle, so it keeps its instance —
+// and the claim it leaves must not read as a death. Tearing down here would restart the human's stack at
+// every capped and hitl boundary, and would break S-01's "up runs once per Work".
+test('a run that stops short of finishing hands the program to the next run', t => {
+  const opened = openProbedWork(t, {
+    prefix: 'downcapped',
+    workId: 'work-down-capped',
+    config: { autonomous_actions_per_run: 2 },
+  });
+  const runtime = fakeRuntime();
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
+
+  const first = advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.notEqual(first.lifecycle, 'complete', 'the cap is what ends this run, not the Work finishing');
+  assert.deepEqual(phases(runtime.calls).filter(phase => phase === 'down'), [], 'a capped run keeps its program');
+  assert.equal(runtime.isUp(), true);
+  assert.equal(readJson(ownerRecord(opened)).pid, null, 'the claim stops naming a process without being deleted');
+
+  runtime.calls.length = 0;
+  advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.deepEqual(phases(runtime.calls).filter(phase => phase === 'up' || phase === 'down'), [],
+    'the next run adopts the instance it was handed instead of stopping it and booting a second');
+});
+
+// The claim is the only durable evidence that this Work owes a teardown, so it cannot be spent before the
+// step that can fail. A `down` that exits non-zero has stopped nothing.
+test('a failed teardown keeps the claim so a later run retries it', t => {
+  const opened = openProbedWork(t, { prefix: 'downfails', workId: 'work-down-fails' });
+  const runtime = fakeRuntime({ downStatus: 1 });
+  const progress = [];
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime, onProgress: event => progress.push(event) });
+
+  advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(runtime.isUp(), true, 'the program a failing `down` did not stop is still running');
+  assert.equal(readJson(ownerRecord(opened)).pid, process.pid, 'the claim survives to name a pid a later run finds dead');
+  assert.ok(progress.some(event => event.phase === 'runtime-stop-failed' && event.status === 1),
+    'a program still running against the worktree is said out loud, not left as a field in the journal');
+});
+
+// The defect this replaced: the handlers were removed in a `finally` that ran before the event loop could
+// ever dispatch a queued signal, so Ctrl-C during a fully synchronous dispatch tore down nothing.
+test('the signal handlers outlive the dispatch that armed them', t => {
+  const opened = openProbedWork(t, { prefix: 'downsignal', workId: 'work-down-signal' });
+  const runtime = fakeRuntime();
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
+
+  advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+  const armed = process.listenerCount('SIGINT');
+
+  assert.ok(armed > 0,
+    'a signal queued during the synchronous dispatch is only deliverable if the listener is still installed when the stack unwinds');
+  assert.ok(process.listenerCount('SIGTERM') > 0);
+
+  advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(process.listenerCount('SIGINT'), armed, 'arming is idempotent: a run per Work must not stack a handler per run');
 });
 
 // A Work whose repository never said how to start a program runs exactly as it did before this existed.

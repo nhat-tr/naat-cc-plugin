@@ -806,33 +806,55 @@ function sleep(ms) {
 }
 
 // A program the loop started outlives the process that started it — `pair-loop run` returns to the shell
-// between actions — so ownership cannot live in memory. It lives on disk next to the Work's leases, holding
-// the pid that claimed it so a later run can tell "still running" from "abandoned by a killed loop".
+// between actions — so ownership cannot live in memory. It lives on disk next to the Work's leases.
+//
+// The claim's `pid` is the whole vocabulary, and it says one of exactly three things:
+//   a live pid  — a run is holding the program right now.
+//   a dead pid  — the run holding it died without finishing. Nobody is coming back; stop the program.
+//   null        — no run holds it, and the last one exited on purpose. The program is up and still owed to
+//                 this Work, so the next run adopts it rather than restarting it.
+// Without that third word a capped or hitl run — which exits normally at a non-terminal lifecycle — would be
+// indistinguishable from a killed one, and the next run would tear down a healthy instance and boot a second.
 function runtimeOwner(root, workId) {
   return readJson(workPaths(root, workId).runtimeOwner);
 }
 
-function claimRuntime(root, state) {
+function writeRuntimeOwner(root, state, pid) {
   writeJson(workPaths(root, state.work_id).runtimeOwner, {
-    pid: process.pid,
+    pid,
     work_id: state.work_id,
     worktree: state.worktree,
     at: now(),
   });
 }
 
-function releaseRuntime(root, workId) {
-  fs.rmSync(workPaths(root, workId).runtimeOwner, { force: true });
+function claimRuntime(root, state) {
+  writeRuntimeOwner(root, state, process.pid);
 }
 
-// The one place `down` is spoken. Returns whether it ran, so callers can stay ignorant of whether this Work
-// ever owned an instance. The record is cleared first: a `down` that throws or exits non-zero must not leave
-// a claim behind that makes every later run try to stop a program that is already gone.
+// This run takes over a program an earlier run left up. Nothing is started and nothing is stopped — only the
+// pid changes, so that if this run is the one that dies, the claim it leaves is detectably abandoned.
+function holdRuntime(root, state) {
+  if (runtimeOwner(root, state.work_id)) writeRuntimeOwner(root, state, process.pid);
+}
+
+// Handed back deliberately, not dropped. The program stays up for the next run of this Work; the claim stops
+// naming a process, so no later run mistakes this exit for a death.
+function parkRuntime(root, state) {
+  if (runtimeOwner(root, state.work_id)) writeRuntimeOwner(root, state, null);
+}
+
+// The one place `down` is spoken. The claim is cleared only after `down` reports success: it is the sole
+// durable evidence that this Work owes an instance a teardown, so erasing it before the step that can fail
+// is erasing the only thing a retry could read. A `down` that fails therefore leaves the claim naming this
+// process — which becomes a dead pid the moment this process exits, and so is reclaimed and retried.
 function stopRuntime(root, state, dependencies = {}) {
   if (!runtimeOwner(root, state.work_id)) return false;
   const declaration = loadRuntimeDeclaration(root);
-  releaseRuntime(root, state.work_id);
-  if (!declaration) return false;
+  if (!declaration) {
+    fs.rmSync(workPaths(root, state.work_id).runtimeOwner, { force: true });
+    return false;
+  }
   const execute = dependencies.runtime || ((input) => runtimeCommand(input.command, input.cwd, input.env));
   const stopped = execute({
     phase: 'down',
@@ -847,16 +869,28 @@ function stopRuntime(root, state, dependencies = {}) {
     status: stopped.status,
     duration_ms: stopped.duration_ms || 0,
   });
-  return true;
+  if (stopped.status === 0) {
+    fs.rmSync(workPaths(root, state.work_id).runtimeOwner, { force: true });
+    return true;
+  }
+  // Said out loud, not left as a status field in the journal: a program still running against this worktree
+  // is the exact thing this slice exists to prevent, and the human watching the run is the one who can act.
+  writeRuntimeOwner(root, state, process.pid);
+  reportProgress(dependencies, {
+    phase: 'runtime-stop-failed',
+    status: stopped.status,
+    command: declaration.down,
+  });
+  return false;
 }
 
 // The half no handler can cover. A loop killed outright — SIGKILL, a closed laptop, a crashed shell — runs
 // nothing on the way out, so the instance it started is still up and still pointing at this Work's worktree.
-// The claim it left behind names a pid that no longer exists, and that is what the next run reads: a live
-// pid means a run is legitimately holding the program, a dead one means nobody is coming back for it.
+// The claim it left names a pid that no longer exists. A claim parked at `null` is the opposite case and is
+// left alone: that program is up because the last run chose to leave it up.
 function reclaimAbandonedRuntime(root, state, dependencies = {}) {
   const owner = runtimeOwner(root, state.work_id);
-  if (!owner || processAlive(owner.pid)) return false;
+  if (!owner || owner.pid === null || owner.pid === undefined || processAlive(owner.pid)) return false;
   appendEvent(root, state.work_id, { event: 'runtime-reclaimed', abandoned_pid: owner.pid, since: owner.at || null });
   reportProgress(dependencies, { phase: 'runtime-reclaimed', abandoned_pid: owner.pid });
   return stopRuntime(root, state, dependencies);
@@ -869,28 +903,43 @@ function reclaimAbandonedRuntime(root, state, dependencies = {}) {
 // a human reading it, and until then a stale instance would answer for code nobody is building.
 const TERMINAL_LIFECYCLES = new Set(['complete', 'blocked']);
 
+// Armed once for the life of the process and never disarmed. Removing them around the dispatch looked tidier
+// and was the bug: the dispatch is synchronous end to end, so a Ctrl-C during it is queued and cannot be
+// delivered until the call stack unwinds — and a `finally` that removes the listener first drops the queued
+// signal on the floor, taking the default termination with it. Left installed, the handler runs on the first
+// turn of the event loop after the synchronous work returns, which is still before the process exits. The
+// handlers read ownership from disk, so once nothing is claimed they cost one `readJson` and re-raise.
+// The Work the handlers act on is re-pointed per dispatch rather than captured once, so a second Work driven
+// from the same process is not torn down against the first one's worktree.
+let armedRuntime = null;
+
+function armRuntimeSignals(root, state, dependencies) {
+  const armed = armedRuntime !== null;
+  armedRuntime = { root, state, dependencies };
+  if (armed) return;
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, function onSignal() {
+      const current = armedRuntime;
+      try { if (current) stopRuntime(current.root, current.state, current.dependencies); } catch { /* teardown is best effort; dying is not optional */ }
+      // Re-raised rather than swallowed: the caller asked this process to die, and a loop that absorbs its
+      // own SIGINT is worse than one that leaks a container.
+      process.removeListener(signal, onSignal);
+      process.kill(process.pid, signal);
+    });
+  }
+}
+
 function withRuntimeTeardown(root, state, dependencies, callback) {
-  const stop = () => { try { stopRuntime(root, state, dependencies); } catch { /* teardown is best effort */ } };
-  // Re-raised rather than swallowed: the caller asked this process to die, and a loop that absorbs its own
-  // SIGINT is worse than one that leaks a container.
-  const onSignal = (signal) => { stop(); process.kill(process.pid, signal); };
-  const handlers = ['SIGINT', 'SIGTERM'].map(signal => {
-    const handler = () => {
-      process.removeListener(signal, handler);
-      onSignal(signal);
-    };
-    process.on(signal, handler);
-    return { signal, handler };
-  });
+  armRuntimeSignals(root, state, dependencies);
+  holdRuntime(root, state);
   try {
     const latest = callback();
     if (TERMINAL_LIFECYCLES.has(latest?.lifecycle)) stopRuntime(root, latest, dependencies);
+    else parkRuntime(root, latest || state);
     return latest;
   } catch (error) {
-    stop();
+    try { stopRuntime(root, state, dependencies); } catch { /* teardown is best effort */ }
     throw error;
-  } finally {
-    for (const { signal, handler } of handlers) process.removeListener(signal, handler);
   }
 }
 
