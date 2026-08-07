@@ -806,6 +806,9 @@ function runtimeCommand(command, cwd, env) {
     status: result.error ? null : result.status,
     duration_ms: Date.now() - started,
     log_digest: digest(`${result.stdout || ''}\n${result.stderr || ''}`),
+    // Read by exactly one caller — the identity check — and never by anything that writes. It is returned
+    // rather than compared here so the comparison stays with the ownership rule it serves.
+    output: `${result.stdout || ''}\n${result.stderr || ''}`,
   };
 }
 
@@ -978,6 +981,21 @@ function withRuntimeTeardown(root, state, dependencies, callback) {
 // no handle to hold and no PID worth recording while this slice has no `down` to release one with. `ready`
 // answers the only question that matters, for a runtime this run started, one an earlier run started, or one
 // the human already had up, and asking it before `up` is what makes `up` run exactly once per Work.
+// Whether the program already answering is serving this Work's code. A repository that declares no
+// `identity` cannot say, and answers the way it did before this question existed: green is taken at its word.
+//
+// The proof is the worktree's own directory name. It is unique per Work by construction, and it survives
+// whichever form the program reports — a full project path under the worktree, or the worktree name alone —
+// where matching the absolute path would only survive the first. Nothing the program says is kept: the
+// answer is compared here and discarded, because a program asked what it is serving can name a path, a
+// branch, or a build that a persisted event has no business carrying.
+function servesThisWorktree(state, declaration, call) {
+  if (!declaration.identity) return true;
+  const answer = call('identity', declaration.identity);
+  if (answer.status !== 0) return false;
+  return String(answer.output || '').includes(path.basename(state.worktree));
+}
+
 function ensureRuntimeReady(root, state, declaration, execute) {
   const call = (phase, command) => execute({
     phase,
@@ -989,7 +1007,12 @@ function ensureRuntimeReady(root, state, declaration, execute) {
   // Answering green before `up` means the instance was already there — the human's own stack, or one an
   // earlier run left. The loop did not start it, so it records no ownership and will never stop it. That
   // asymmetry is the whole safety property: `down` can only ever reach a program this loop launched.
-  if (call('ready', declaration.ready).status === 0) return true;
+  //
+  // But green only says something is listening. The runtime binds fixed host ports, so a program serving a
+  // different Work's worktree — or the human's main checkout — answers exactly as green as ours would, and
+  // adopting it means every probe from here on asks the wrong code. When the repository can ask which code
+  // is being served, that answer decides, and only a match adopts.
+  if (call('ready', declaration.ready).status === 0 && servesThisWorktree(state, declaration, call)) return true;
   // Written before the command runs, not after. `up` is the window where the program comes into existence,
   // so a loop killed inside that window is precisely the case that strands an instance — a record written
   // afterwards would be the one record that is missing exactly when it is needed.

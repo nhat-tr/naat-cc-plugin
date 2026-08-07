@@ -7,10 +7,14 @@
 // process handle. That is deliberate: `pair-loop run` returns to the shell between slices, so a handle
 // held in memory could not survive to the next slice anyway, and a recorded PID would make the engine the
 // owner of a process it has no teardown for yet. `ready` is the whole truth about whether the program is up.
+//
+// `ready` is not the whole truth about *whose* program is up: the runtime binds fixed host ports, so anything
+// answering there answers green. `identity` is the optional second question — which code is it serving —
+// and only its answer can turn "something is up" into "our program is up".
 const fs = require('node:fs');
 const path = require('node:path');
 
-const RUNTIME_DECLARATION_KEYS = new Set(['up', 'ready', 'down', 'env']);
+const RUNTIME_DECLARATION_KEYS = new Set(['up', 'ready', 'down', 'env', 'identity']);
 const RUNTIME_COMMAND_FIELDS = ['up', 'ready', 'down'];
 const MAX_COMMAND_LENGTH = 1000;
 
@@ -42,6 +46,9 @@ function validateRuntimeDeclaration(value) {
     if (typeof entry !== 'string') throw new Error(`runtime declaration field env.${name} must be a string`);
   }
   declaration.env = { ...value.env };
+  // Optional, and absent by default: a repository that cannot ask its program which code it is serving
+  // still declares a runtime, it just cannot prove a program it finds already up is its own.
+  if (value.identity !== undefined) declaration.identity = validateCommand(value.identity, 'identity');
   return declaration;
 }
 

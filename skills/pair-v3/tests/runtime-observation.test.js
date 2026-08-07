@@ -30,6 +30,15 @@ const RUNTIME_DECLARATION = JSON.stringify({
 
 const TWO_SLICE_SPEC = '# Spec\n\n## Acceptance Criteria\n\n- [ ] AC-1: value becomes two\n- [ ] AC-2: value becomes three\n';
 
+// The same repository, able to answer which code its program is serving.
+const IDENTIFIED_DECLARATION = JSON.stringify({
+  up: 'start-the-program',
+  ready: 'ask-whether-it-is-up',
+  down: 'stop-the-program',
+  identity: 'ask-which-code-it-serves',
+  env: { PAIR_TEST_RUNTIME: 'declared' },
+});
+
 function twoSlicesWithProbes() {
   return [
     { id: 'S1', acceptance_criteria: ['AC-1'], outcome: 'Existing value returns two.', depends_on: [], verify: 'node verify.js', probe: PROBE },
@@ -39,11 +48,13 @@ function twoSlicesWithProbes() {
 
 // A program that is down until something starts it, and stays up once started — which is what makes "run
 // `up` once" observable: a second slice that asked `ready` first would find it already answering.
-function fakeRuntime({ probeStatus = 0, downStatus = 0 } = {}) {
+function fakeRuntime({ probeStatus = 0, downStatus = 0, serves = null } = {}) {
   const calls = [];
   let up = false;
   function runtime(input) {
     calls.push({ phase: input.phase, command: input.command, env: input.env });
+    // What the program says it is serving. Only a repository that declared an `identity` command ever asks.
+    if (input.phase === 'identity') return { status: 0, duration_ms: 1, log_digest: 'i'.repeat(64), output: `serving ${serves}\n` };
     if (input.phase === 'up') {
       up = true;
       return { status: 0, duration_ms: 1, log_digest: 'u'.repeat(64) };
@@ -77,7 +88,7 @@ function scriptedProvider(extra) {
   };
 }
 
-function openProbedWork(t, { prefix, workId, slices = twoSlicesWithProbes(), config = {} }) {
+function openProbedWork(t, { prefix, workId, slices = twoSlicesWithProbes(), config = {}, declaration = RUNTIME_DECLARATION }) {
   return openTestWork(t, {
     prefix,
     workId,
@@ -85,7 +96,7 @@ function openProbedWork(t, { prefix, workId, slices = twoSlicesWithProbes(), con
     specMarkdown: TWO_SLICE_SPEC,
     // Committed, so the declaration is present in the Pair worktree the engine runs from — a runtime
     // declaration is repository content, not Pair state.
-    files: { '.pair/runtime.json': RUNTIME_DECLARATION },
+    files: { '.pair/runtime.json': declaration },
     config: { human_in_the_loop_default: false, ...config },
   });
 }
@@ -429,6 +440,29 @@ test('a program the loop did not start is never stopped', t => {
   assert.deepEqual(phases(runtime.calls).filter(phase => phase === 'up' || phase === 'down'), [],
     'neither started nor stopped: the instance belongs to whoever brought it up');
   assert.equal(runtime.isUp(), true);
+});
+
+// AC-2: green only says something is listening on a fixed host port. When the repository can ask which code
+// is being served and the answer names this Work's worktree, that program is used as it stands: restarting a
+// program that is already serving the right code buys nothing and costs the human their running stack.
+test('a program already serving this Work is used without being restarted', t => {
+  const opened = openProbedWork(t, {
+    prefix: 'probeidentity',
+    workId: 'work-probe-identity',
+    declaration: IDENTIFIED_DECLARATION,
+  });
+  const runtime = fakeRuntime({ serves: path.basename(opened.worktree) });
+  runtime.runtime({ phase: 'up', command: 'already-running-against-this-worktree', env: {} });
+  runtime.calls.length = 0;
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
+
+  const state = advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(state.lifecycle, 'complete');
+  assert.deepEqual(phases(runtime.calls).filter(phase => phase === 'up'), [],
+    'the program was proven to be ours, so there was nothing to start');
+  assert.deepEqual(phases(runtime.calls).slice(0, 3), ['ready', 'identity', 'probe'],
+    'identity is asked after green and before the slice question it makes trustworthy');
 });
 
 // A run that stops at the action cap exits normally at a non-terminal lifecycle, so it keeps its instance —

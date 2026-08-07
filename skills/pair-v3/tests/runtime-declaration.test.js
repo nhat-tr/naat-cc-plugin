@@ -53,6 +53,27 @@ for (const [label, invalid, field] of [
   });
 }
 
+// AC-1: a repository that can ask its program which code it is serving says so here, and one that cannot
+// declares exactly what it declared before this question existed.
+test('a runtime declaration may state how to ask the program which code it serves', () => {
+  const declaration = validateRuntimeDeclaration({ ...VALID, identity: 'curl -fsS http://localhost:5080/identity' });
+
+  assert.equal(declaration.identity, 'curl -fsS http://localhost:5080/identity');
+});
+
+test('a declaration written without an identity command validates unchanged', () => {
+  assert.deepEqual(validateRuntimeDeclaration(VALID), {
+    up: VALID.up,
+    ready: VALID.ready,
+    down: VALID.down,
+    env: VALID.env,
+  });
+});
+
+test('a non-string identity is rejected by name', () => {
+  assert.throws(() => validateRuntimeDeclaration({ ...VALID, identity: 7 }), /identity/u);
+});
+
 test('an unsupported field is rejected rather than silently ignored', () => {
   assert.throws(() => validateRuntimeDeclaration({ ...VALID, restart: 'docker compose restart' }), /restart/u);
 });
