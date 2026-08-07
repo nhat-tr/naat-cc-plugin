@@ -8,6 +8,8 @@
 //       outstanding claim.
 // AC-5: a refusal says what it found, names both ways forward, and spends no correction — refusing to guess
 //       is not a failure to implement, and the budget belongs to defects.
+// AC-6: a claim another Work parked is torn down before anything is asked of the ports, so a green this Work
+//       adopts is never a program left up for somebody else.
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -26,9 +28,10 @@ const {
   scriptedProvider,
 } = require('./helpers/runtime-work');
 
-// AC-3: green, serving another Work's worktree, and claimed by that Work — so the loop started it and still
-// owes it a `down`. Stopping it is that teardown, and it frees the fixed host ports this Work's own instance
-// needs. Nothing is asked of the stranger on the way past.
+// AC-3 and AC-6: green, serving another Work's worktree, and parked by that Work — so the loop started it and
+// still owes it a `down`. Stopping it is that teardown, and it frees the fixed host ports this Work's own
+// instance needs. The claim is enough to know that on its own, so the teardown happens before the first
+// `ready` and the stranger is never asked anything at all — not the slice's question, not even whose it is.
 test('a program serving another Work is stopped before this Work starts its own', t => {
   const opened = openProbedWork(t, {
     prefix: 'probestranger',
@@ -43,8 +46,8 @@ test('a program serving another Work is stopped before this Work starts its own'
     startsServing: path.basename(opened.worktree),
   });
   const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
-  // Parked, not abandoned: reclamation leaves a `null` pid alone by design, so this is the claim only the
-  // identity answer can expose.
+  // Parked, not abandoned: reclamation leaves a `null` pid alone by design, because it is a program left up
+  // on purpose — for the Work that left it, and for no other.
   const stranger = workPaths(opened.worktree, 'work-probe-elsewhere').runtimeOwner;
   fs.mkdirSync(path.dirname(stranger), { recursive: true });
   fs.writeFileSync(stranger, JSON.stringify({
@@ -57,8 +60,11 @@ test('a program serving another Work is stopped before this Work starts its own'
   const state = advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
 
   assert.equal(state.lifecycle, 'complete');
-  assert.deepEqual(phases(runtime.calls).slice(0, 4), ['ready', 'identity', 'down', 'up'],
-    'the stranger is torn down before this Work’s own program is started, and is never probed');
+  assert.deepEqual(phases(runtime.calls).slice(0, 3), ['down', 'ready', 'up'],
+    'the stranger is torn down before anything is asked of the ports, and this Work then starts its own');
+  const beforeOwnProgram = phases(runtime.calls).slice(0, phases(runtime.calls).indexOf('up'));
+  assert.deepEqual(beforeOwnProgram, ['down', 'ready'],
+    'a parked claim already says whose the program is, so the stranger was neither asked what it serves nor probed');
   assert.equal(fs.existsSync(stranger), false, 'the other Work’s claim is settled by the teardown that honoured it');
   assert.equal(
     readEvents(opened.worktree, opened.workId).filter(event => event.event === 'runtime-foreign').length,
@@ -66,10 +72,10 @@ test('a program serving another Work is stopped before this Work starts its own'
 });
 
 // AC-4: no `identity` to ask, so nothing can tell this program apart from another Work's — and another Work
-// is claiming exactly these fixed host ports. Adopting it would answer every question of this slice against
-// that Work's checkout; evicting it would tear down a program on a guess. Neither is available, so the run
-// stops and names the claim that made green ambiguous.
-test('a claim from another Work stops a run that cannot ask what is answering', t => {
+// is driving exactly these fixed host ports from a run that is alive right now. Adopting it would answer every
+// question of this slice against that Work's checkout; stopping it would break a run that did nothing wrong.
+// Neither is available, so this run stops and names the claim that made green ambiguous.
+test('a claim another live run is driving stops a run that cannot ask what is answering', t => {
   const opened = openProbedWork(t, {
     prefix: 'probesilent',
     workId: 'work-probe-silent',
@@ -77,8 +83,75 @@ test('a claim from another Work stops a run that cannot ask what is answering', 
   });
   const runtime = fakeRuntime({ alreadyUp: true });
   const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
-  // Parked rather than abandoned, so reclamation leaves it alone and it is still outstanding when this run
-  // asks whether it is the only claimant.
+  // A pid that is alive — this test process — so the claim is neither abandoned nor parked: it is held, and
+  // held is the one state that is still outstanding when this run asks whether it is the only claimant.
+  const stranger = workPaths(opened.worktree, 'work-probe-elsewhere').runtimeOwner;
+  fs.mkdirSync(path.dirname(stranger), { recursive: true });
+  fs.writeFileSync(stranger, JSON.stringify({
+    pid: process.pid,
+    work_id: 'work-probe-elsewhere',
+    worktree: opened.worktree,
+    at: new Date().toISOString(),
+  }));
+
+  const state = advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(state.lifecycle, 'blocked');
+  assert.equal(state.blocked_precondition, RUNTIME_OWNERSHIP_PRECONDITION);
+  assert.deepEqual(phases(runtime.calls).filter(phase => phase !== 'ready'), [],
+    'a program that cannot be identified is neither started over, nor stopped, nor asked anything');
+  assert.equal(runtime.isUp(), true);
+  assert.equal(fs.existsSync(stranger), true, 'the live run’s claim is left where it is, for the run that is holding it');
+  const reason = state.blocked_reason || '';
+  assert.match(reason, /no identity command/, 'the finding is that there was no way to ask');
+  assert.match(reason, /work-probe-elsewhere/, 'and whose outstanding claim made green ambiguous');
+  assert.match(reason, /is a correction/, 'refusing to guess spends nothing from the correction budget');
+});
+
+// AC-6: the repository cannot ask what is answering, and it does not need to. A parked claim is already a
+// statement that the loop started that program and that its Work left it up on purpose — for its own next
+// run. This Work is not that run, so the program goes away before the first `ready`, and this Work starts its
+// own on the freed ports. That is the restart the outcome buys knowing whose code answered with.
+test('a program another Work parked is stopped before this Work asks anything of the ports', t => {
+  const opened = openProbedWork(t, {
+    prefix: 'probeparked',
+    workId: 'work-probe-parked',
+    declaration: RUNTIME_DECLARATION,
+  });
+  const runtime = fakeRuntime({ alreadyUp: true });
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
+  const stranger = workPaths(opened.worktree, 'work-probe-elsewhere').runtimeOwner;
+  fs.mkdirSync(path.dirname(stranger), { recursive: true });
+  fs.writeFileSync(stranger, JSON.stringify({
+    pid: null,
+    work_id: 'work-probe-elsewhere',
+    worktree: opened.worktree,
+    at: new Date().toISOString(),
+  }));
+
+  const state = advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(state.lifecycle, 'complete');
+  assert.deepEqual(phases(runtime.calls).slice(0, 3), ['down', 'ready', 'up'],
+    'the parked program is stopped first, found gone, and replaced by this Work’s own');
+  assert.equal(fs.existsSync(stranger), false, 'the teardown settled the claim it honoured rather than moving it');
+  assert.equal(
+    readEvents(opened.worktree, opened.workId).filter(event => event.event === 'runtime-foreign').length,
+    1,
+    'and the run says out loud whose program it stopped on the way in');
+});
+
+// AC-6: the teardown is the whole point, so a `down` that does not stop it may not be walked past. The ports
+// still hold another Work's program; asking this slice's question of it is exactly the silent wrong answer
+// this Work exists to rule out. The claim stays where it is, because it is still the only record of the debt.
+test('a parked program the declared down cannot stop refuses the run', t => {
+  const opened = openProbedWork(t, {
+    prefix: 'probeparkedstuck',
+    workId: 'work-probe-parked-stuck',
+    declaration: RUNTIME_DECLARATION,
+  });
+  const runtime = fakeRuntime({ alreadyUp: true, downStatus: 1 });
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
   const stranger = workPaths(opened.worktree, 'work-probe-elsewhere').runtimeOwner;
   fs.mkdirSync(path.dirname(stranger), { recursive: true });
   fs.writeFileSync(stranger, JSON.stringify({
@@ -92,14 +165,13 @@ test('a claim from another Work stops a run that cannot ask what is answering', 
 
   assert.equal(state.lifecycle, 'blocked');
   assert.equal(state.blocked_precondition, RUNTIME_OWNERSHIP_PRECONDITION);
-  assert.deepEqual(phases(runtime.calls).filter(phase => phase !== 'ready'), [],
-    'a program that cannot be identified is neither started over, nor stopped, nor asked anything');
+  assert.deepEqual(phases(runtime.calls).filter(phase => phase === 'probe'), [],
+    'nothing was asked of a program that is still somebody else’s');
   assert.equal(runtime.isUp(), true);
-  assert.equal(fs.existsSync(stranger), true, 'the other Work’s claim is left for a run that can say what it would be settling');
+  assert.equal(fs.existsSync(stranger), true, 'the debt stays recorded, so the next run retries the teardown');
   const reason = state.blocked_reason || '';
-  assert.match(reason, /no identity command/, 'the finding is that there was no way to ask');
-  assert.match(reason, /work-probe-elsewhere/, 'and whose outstanding claim made green ambiguous');
-  assert.match(reason, /is a correction/, 'refusing to guess spends nothing from the correction budget');
+  assert.match(reason, /work-probe-elsewhere/, 'the refusal names whose program is in the way');
+  assert.match(reason, /down/, 'and that what failed was the declared teardown, not the identity question');
 });
 
 // AC-4, the other half: this Work's own outstanding claim is the ordinary case — an earlier run started the

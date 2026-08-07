@@ -1042,10 +1042,10 @@ function runtimeRefusal(state, found, whose, remedy) {
 // was before this question could be asked at all — but it rules out the one case this loop can see itself
 // walking into, which is another Work's program left answering on the ports this run is about to trust.
 //
-// One outstanding claim is enough, live or parked, and it stops the run rather than being evicted. Eviction
-// is a thing the identity answer earns: it says the program is somebody else's. Here nothing distinguishes
-// that program from this Work's own, and tearing one down on a guess is the same wrong answer as probing one,
-// just louder.
+// One outstanding claim is enough, and by the time this runs it can only be a claim a live run is holding —
+// anything parked was already torn down above. Stopping it is not on offer: another run is driving that
+// program, and nothing here distinguishes what it is serving from what this Work's own program would serve.
+// So the run stops and names the claimant.
 function soleClaimOnRuntime(root, state) {
   const claim = foreignRuntimeClaim(root, state);
   if (!claim) return { ready: true };
@@ -1088,6 +1088,42 @@ function evictForeignRuntime(root, state, dependencies, found) {
   return { ready: true };
 }
 
+// A program another Work parked belongs to that Work and to no other. The claim says so exactly: the loop
+// started it, no run holds it now, and the run that let go chose to leave it up — a message to the next run
+// of that Work, which will adopt it, and an invitation to nobody else. On the fixed host ports it is
+// nevertheless the thing this Work is about to find green, so it is stopped here, before the first `ready`
+// rather than after an identity answer this repository may have no way to ask for. Stopping it is the very
+// teardown its owner is owed, so the debt is settled rather than moved.
+//
+// The price is one restart whenever two Works alternate, and what it buys is that every green from here on
+// belongs either to this Work or to the human — never to another Work, and never silently.
+//
+// A claim held by a live pid is left exactly where it is: another run is driving that program right now, and
+// stopping it would break a run that did nothing wrong. That case is a refusal, downstream.
+function releaseParkedForeignRuntimes(root, state, dependencies) {
+  for (const workId of listWorkIds(root)) {
+    if (workId === state.work_id) continue;
+    const owner = runtimeOwner(root, workId);
+    // Parked is a claim that names no process at all — the same reading reclamation gives it, so the two
+    // never disagree about which claims are dead pids and which were handed back on purpose.
+    if (!owner || (owner.pid !== null && owner.pid !== undefined)) continue;
+    appendEvent(root, state.work_id, { event: 'runtime-foreign', held_by: workId });
+    reportProgress(dependencies, { phase: 'runtime-foreign', held_by: workId });
+    // A parked claim outlives its Work's worktree — the Work can have finished and been cleaned up — and
+    // `down` cannot run in a directory that is gone, so the repository root stands in for it.
+    const worktree = owner.worktree && fs.existsSync(owner.worktree) ? owner.worktree : root;
+    if (!stopRuntime(root, { work_id: workId, worktree }, dependencies)) {
+      return runtimeRefusal(
+        state,
+        `${workId} parked a program on these ports and the declared down did not stop it`,
+        'that Work still holds the claim',
+        'repair the declared down command so the loop can settle the claims it owns',
+      );
+    }
+  }
+  return { ready: true };
+}
+
 // Ready or the reason it is not, so a runtime that cannot be trusted travels the same road to the human as a
 // runtime that never came up.
 function ensureRuntimeReady(root, state, declaration, execute, dependencies) {
@@ -1098,6 +1134,10 @@ function ensureRuntimeReady(root, state, declaration, execute, dependencies) {
     env: declaration.env,
     workId: state.work_id,
   });
+  // First, before `ready` is even asked: nothing another Work parked may still be answering when this Work
+  // starts trusting what answers.
+  const released = releaseParkedForeignRuntimes(root, state, dependencies);
+  if (!released.ready) return released;
   // Answering green before `up` means the instance was already there — the human's own stack, or one an
   // earlier run left. The loop did not start it, so it records no ownership and will never stop it. That
   // asymmetry is the whole safety property: `down` can only ever reach a program this loop launched.
