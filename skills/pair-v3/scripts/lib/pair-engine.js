@@ -989,8 +989,8 @@ function withRuntimeTeardown(root, state, dependencies, callback) {
 // no handle to hold and no PID worth recording while this slice has no `down` to release one with. `ready`
 // answers the only question that matters, for a runtime this run started, one an earlier run started, or one
 // the human already had up, and asking it before `up` is what makes `up` run exactly once per Work.
-// Whether the program already answering is serving this Work's code. A repository that declares no
-// `identity` cannot say, and answers the way it did before this question existed: green is taken at its word.
+// Whether the program already answering is serving this Work's code, for a repository that declared how to
+// ask. One that declared nothing takes the other road, below.
 //
 // The proof is the worktree's own directory name. It is unique per Work by construction, and it survives
 // whichever form the program reports — a full project path under the worktree, or the worktree name alone —
@@ -1003,7 +1003,6 @@ function withRuntimeTeardown(root, state, dependencies, callback) {
 // could not answer says nothing about the program at all — it is the declaration that needs repairing. A
 // human handed only "not ours" cannot tell which one they are looking at.
 function servesThisWorktree(state, declaration, call) {
-  if (!declaration.identity) return { proven: true };
   const answer = call('identity', declaration.identity);
   if (answer.status !== 0) {
     return { proven: false, found: `the declared identity command exited ${answer.status === null ? 'abnormally' : answer.status}` };
@@ -1024,6 +1023,40 @@ function foreignRuntimeClaim(root, state) {
   return null;
 }
 
+// What a refusal says is what a human needs to act on, so every one of them carries the same three things:
+// which way the proof failed, whose the program turned out to be, and both ways forward — because neither is
+// guessable from a status and each resolves a different one of the two findings. Saying that neither costs a
+// correction is part of the report: the correction budget is one deep, and a human who assumes a block has
+// spent it reads the whole state wrongly.
+function runtimeRefusal(state, found, whose, remedy) {
+  return {
+    ready: false,
+    runtime_refusal: true,
+    diagnostic: `the program answering the declared runtime cannot be shown to serve ${path.basename(state.worktree)}: ${found}, and ${whose}. Neither way forward is a correction: stop the instance answering there and re-verify this Review Slice, or ${remedy}.`,
+  };
+}
+
+// Green, with no way to ask what it is serving. A repository that declares no `identity` has no positive
+// proof to offer, so the only evidence left is negative: no other Work is claiming the fixed host ports. That
+// is weaker than an answer — the human's own stack still answers green and is still adopted, exactly as it
+// was before this question could be asked at all — but it rules out the one case this loop can see itself
+// walking into, which is another Work's program left answering on the ports this run is about to trust.
+//
+// One outstanding claim is enough, live or parked, and it stops the run rather than being evicted. Eviction
+// is a thing the identity answer earns: it says the program is somebody else's. Here nothing distinguishes
+// that program from this Work's own, and tearing one down on a guess is the same wrong answer as probing one,
+// just louder.
+function soleClaimOnRuntime(root, state) {
+  const claim = foreignRuntimeClaim(root, state);
+  if (!claim) return { ready: true };
+  return runtimeRefusal(
+    state,
+    'the repository declares no identity command',
+    `${claim.workId} holds an outstanding claim on it`,
+    'declare an identity command that reports which code the program is serving',
+  );
+}
+
 // Green, and serving code that is not this Work's. Nothing may be asked of that program: every probe from
 // here on would answer this slice's question against somebody else's checkout, confidently and wrongly. It
 // also holds the fixed host ports, so this Work cannot have its own instance until it is gone — and who it
@@ -1034,20 +1067,14 @@ function foreignRuntimeClaim(root, state) {
 // the loop's to stop — the human's own stack, or an instance another live run is driving right now — so the
 // run refuses and says whose it is. Refusing costs a run; guessing costs a wrong answer nobody can see is
 // wrong, and this Work exists to rule the second one out.
-//
-// What the refusal says is what a human needs to act on, so it carries the finding — which way the proof
-// failed, and whose the program turned out to be — and then both ways forward, because neither is guessable
-// from a status and each resolves a different one of the two findings: the instance goes away, or the
-// repository learns to prove that a green answer is this Work's. Saying that neither costs a correction is
-// part of the report: the correction budget is one deep, and a human who assumes a block has spent it reads
-// the whole state wrongly.
 function evictForeignRuntime(root, state, dependencies, found) {
   const claim = foreignRuntimeClaim(root, state);
-  const refusal = whose => ({
-    ready: false,
-    runtime_refusal: true,
-    diagnostic: `the program answering the declared runtime cannot be shown to serve ${path.basename(state.worktree)}: ${found}, and ${whose}. Neither way forward is a correction: stop the instance answering there and re-verify this Review Slice, or make the declared identity command report which code the program is serving.`,
-  });
+  const refusal = whose => runtimeRefusal(
+    state,
+    found,
+    whose,
+    'make the declared identity command report which code the program is serving',
+  );
   if (!claim) return refusal('no Pair Work claims it, so it is not this loop\'s to stop');
   if (claim.owner.pid && processAlive(claim.owner.pid)) {
     return refusal(`${claim.workId} is driving it from a live run (pid ${claim.owner.pid})`);
@@ -1078,8 +1105,10 @@ function ensureRuntimeReady(root, state, declaration, execute, dependencies) {
   // But green only says something is listening. The runtime binds fixed host ports, so a program serving a
   // different Work's worktree — or the human's main checkout — answers exactly as green as ours would, and
   // adopting it means every probe from here on asks the wrong code. When the repository can ask which code
-  // is being served, that answer decides, and only a match adopts.
+  // is being served, that answer decides, and only a match adopts. When it cannot, exclusivity stands in for
+  // the answer: green is taken at its word only while no other Work has a claim outstanding.
   if (call('ready', declaration.ready).status === 0) {
+    if (!declaration.identity) return soleClaimOnRuntime(root, state);
     const identity = servesThisWorktree(state, declaration, call);
     if (identity.proven) return { ready: true };
     // A stranger was evicted, not adopted: the ports are free now, so this run goes on to start its own

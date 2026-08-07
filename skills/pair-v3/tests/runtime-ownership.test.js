@@ -4,6 +4,8 @@
 //
 // AC-3: when `identity` is declared and its output does not match, the runtime is not probed; a claim held
 //       by another Work is torn down first, and with no such claim the run refuses.
+// AC-4: when no `identity` is declared, a green runtime is observed only if no other Work holds an
+//       outstanding claim.
 // AC-5: a refusal says what it found, names both ways forward, and spends no correction — refusing to guess
 //       is not a failure to implement, and the budget belongs to defects.
 
@@ -16,6 +18,7 @@ const { RUNTIME_OWNERSHIP_PRECONDITION, advanceWork, unblockWork, verifyActiveSl
 const { readEvents, readState, workPaths } = require('../scripts/lib/pair-store');
 const {
   IDENTIFIED_DECLARATION,
+  RUNTIME_DECLARATION,
   fakeRuntime,
   openProbedWork,
   ownerRecord,
@@ -60,6 +63,72 @@ test('a program serving another Work is stopped before this Work starts its own'
   assert.equal(
     readEvents(opened.worktree, opened.workId).filter(event => event.event === 'runtime-foreign').length,
     1);
+});
+
+// AC-4: no `identity` to ask, so nothing can tell this program apart from another Work's — and another Work
+// is claiming exactly these fixed host ports. Adopting it would answer every question of this slice against
+// that Work's checkout; evicting it would tear down a program on a guess. Neither is available, so the run
+// stops and names the claim that made green ambiguous.
+test('a claim from another Work stops a run that cannot ask what is answering', t => {
+  const opened = openProbedWork(t, {
+    prefix: 'probesilent',
+    workId: 'work-probe-silent',
+    declaration: RUNTIME_DECLARATION,
+  });
+  const runtime = fakeRuntime({ alreadyUp: true });
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
+  // Parked rather than abandoned, so reclamation leaves it alone and it is still outstanding when this run
+  // asks whether it is the only claimant.
+  const stranger = workPaths(opened.worktree, 'work-probe-elsewhere').runtimeOwner;
+  fs.mkdirSync(path.dirname(stranger), { recursive: true });
+  fs.writeFileSync(stranger, JSON.stringify({
+    pid: null,
+    work_id: 'work-probe-elsewhere',
+    worktree: opened.worktree,
+    at: new Date().toISOString(),
+  }));
+
+  const state = advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(state.lifecycle, 'blocked');
+  assert.equal(state.blocked_precondition, RUNTIME_OWNERSHIP_PRECONDITION);
+  assert.deepEqual(phases(runtime.calls).filter(phase => phase !== 'ready'), [],
+    'a program that cannot be identified is neither started over, nor stopped, nor asked anything');
+  assert.equal(runtime.isUp(), true);
+  assert.equal(fs.existsSync(stranger), true, 'the other Work’s claim is left for a run that can say what it would be settling');
+  const reason = state.blocked_reason || '';
+  assert.match(reason, /no identity command/, 'the finding is that there was no way to ask');
+  assert.match(reason, /work-probe-elsewhere/, 'and whose outstanding claim made green ambiguous');
+  assert.match(reason, /is a correction/, 'refusing to guess spends nothing from the correction budget');
+});
+
+// AC-4, the other half: this Work's own outstanding claim is the ordinary case — an earlier run started the
+// program and handed it on — and it is the one claim that makes green unambiguous rather than ambiguous. A
+// rule that counted it would restart the program at every run boundary of every repository that declares no
+// `identity`, which is every repository that worked before the question existed.
+test('this Work’s own outstanding claim leaves a green program adopted', t => {
+  const opened = openProbedWork(t, {
+    prefix: 'probesole',
+    workId: 'work-probe-sole',
+    declaration: RUNTIME_DECLARATION,
+  });
+  const runtime = fakeRuntime({ alreadyUp: true });
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
+  fs.mkdirSync(path.dirname(ownerRecord(opened)), { recursive: true });
+  fs.writeFileSync(ownerRecord(opened), JSON.stringify({
+    pid: null,
+    work_id: opened.workId,
+    worktree: opened.worktree,
+    at: new Date().toISOString(),
+  }));
+
+  const state = advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(state.lifecycle, 'complete');
+  assert.deepEqual(phases(runtime.calls).filter(phase => phase === 'up'), [],
+    'the program answering was the one this Work handed to itself, so there was nothing to start');
+  assert.deepEqual(phases(runtime.calls).slice(0, 2), ['ready', 'probe'],
+    'and with no identity to ask, green goes straight to the slice question');
 });
 
 // AC-3, the other half: nobody claims what is answering, so this loop never started it — the human's own
