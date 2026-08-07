@@ -12,6 +12,8 @@
 //       adopts is never a program left up for somebody else.
 // AC-7: a claim whose recorded worktree is gone is kept and reported unresolved, because the only `down` left
 //       to run is one that could never have reached the program.
+// AC-8: a verification or probe child killed by SIGINT or SIGTERM is recorded as a human interrupt, spends no
+//       correction, and writes no terminal lifecycle.
 
 const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
@@ -25,6 +27,7 @@ const {
   openWork,
   unblockWork,
   unresolvedRuntimeClaims,
+  verificationCommand,
   verifyActiveSlice,
 } = require('../scripts/lib/pair-engine');
 const { readEvents, readJson, readState, workPaths } = require('../scripts/lib/pair-store');
@@ -540,4 +543,120 @@ test('a refusal park stops blocking once nothing answers on the ports', t => {
     'nothing is torn down on the way in — the ports were empty, so no blind down is spoken at the park');
   assert.equal(readJson(workPaths(first.worktree, first.workId).runtimeOwner).pid, null,
     'and the first Work\'s park is still its own to settle — moot here is not cleared from under it');
+});
+
+// AC-8: the loop kills a child for exactly one reason of its own — the verification timeout — and Node reports
+// that as an error, not as a bare signal. So a bare SIGINT or SIGTERM has no source inside this process: a
+// person sent it. Told apart here, at the only place that can see both fields, because everything downstream
+// sees the same null status either way.
+test('a check killed by a signal is read as a person and a check killed by its own timeout is not', () => {
+  const killed = verificationCommand('kill -INT $$', process.cwd());
+
+  assert.equal(killed.status, null, 'a signalled child leaves no exit status to judge the code by');
+  assert.equal(killed.interrupted, true, 'and the signal nobody in this process sent is somebody reaching for the keyboard');
+
+  const previous = process.env.PAIR_VERIFY_COMMAND_TIMEOUT_MS;
+  process.env.PAIR_VERIFY_COMMAND_TIMEOUT_MS = '200';
+  try {
+    const expired = verificationCommand('sleep 5', process.cwd());
+    assert.equal(expired.status, null, 'a timeout also kills with SIGTERM and also leaves no status');
+    assert.equal(expired.interrupted, undefined,
+      'but the loop set that deadline itself, so a suite that ran too long stays the environment failure it is');
+  } finally {
+    if (previous === undefined) delete process.env.PAIR_VERIFY_COMMAND_TIMEOUT_MS;
+    else process.env.PAIR_VERIFY_COMMAND_TIMEOUT_MS = previous;
+  }
+});
+
+// AC-8: the tests never finished, so they said nothing about the code. Read as a red gate, the first Ctrl-C
+// arms the one bounded correction and dispatches a model at code no evidence accuses, and the second blocks
+// the slice for good — the human's own two keystrokes spending a budget that belongs to defects.
+test('a verification a person kills spends no correction and blocks nothing', t => {
+  const opened = openProbedWork(t, { prefix: 'verifyinterrupt', workId: 'work-verify-interrupt' });
+  const runtime = fakeRuntime({ serves: path.basename(opened.worktree) });
+  const { calls, dependencies } = scriptedProvider({
+    runtime: runtime.runtime,
+    verify: () => ({ status: null, interrupted: true, duration_ms: 4, log_digest: 'k'.repeat(64) }),
+  });
+
+  const state = advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(state.lifecycle, 'ready', 'stopping a check is not a block and not a completion');
+  assert.equal(state.blocked_reason, null);
+  assert.match(state.next_action, /steer or re-run S1/u, 'and the surface says the run can simply be run again');
+  assert.equal(calls.length, 1, 'the implementation ran and nothing else did: no correction was dispatched');
+  const projected = state.slices[0];
+  assert.equal(projected.correction_count || 0, 0, 'the one bounded correction is still there to spend on a defect');
+  assert.equal(projected.verification_failure, undefined,
+    'nothing deterministic failed, so the next run is not armed to dispatch a correction');
+  assert.equal(projected.verification.interrupted_by_human, true,
+    'and the null status is on the record as a person, not as a command that could not run');
+  assert.equal(
+    readEvents(opened.worktree, opened.workId).filter(event => event.event === 'attempt-interrupted').length,
+    1,
+    'the journal says a human ended it, which is what makes the nothing-spent readable after the fact',
+  );
+  assert.deepEqual(phases(runtime.calls), [], 'and no program was started to answer a question the tests never reached');
+});
+
+// AC-8: the same event, one layer further in. A probe travels the road a verification travels by design, so
+// without this it inherits the road a red gate takes — and a program that was never asked anything would have
+// cost the slice its correction.
+test('a probe a person kills is not the program answering wrong', t => {
+  const opened = openProbedWork(t, { prefix: 'probeinterrupt', workId: 'work-probe-interrupt' });
+  const runtime = fakeRuntime({ serves: path.basename(opened.worktree) });
+  const { calls, dependencies } = scriptedProvider({
+    runtime(input) {
+      const result = runtime.runtime(input);
+      return input.phase === 'probe' ? { ...result, status: null, interrupted: true } : result;
+    },
+  });
+
+  const state = advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(state.lifecycle, 'ready', 'a killed question is not a refusal and not a failure');
+  assert.equal(state.blocked_precondition, null, 'so it is not parked on an ownership question either');
+  assert.equal(calls.length, 1, 'no correction was dispatched at code the probe never got to accuse');
+  assert.equal(state.slices[0].correction_count || 0, 0);
+  assert.equal(state.slices[0].verification_failure, undefined);
+  const events = readEvents(opened.worktree, opened.workId);
+  assert.equal(events.filter(event => event.event === 'attempt-interrupted').length, 1);
+  assert.equal(events.find(event => event.event === 'probe-finished').interrupted, true,
+    'and the probe that was cut short says so where the run is read back');
+});
+
+// AC-8: re-verification is the free gesture a parked slice uses to get out, so it is the one most likely to be
+// killed impatiently — and it runs against a slice that may already hold a green. Recording the null a signal
+// leaves would overwrite that green and arm a correction, turning the escape hatch into a trap.
+test('an interrupted re-verification leaves the Review Slice exactly where it stood', t => {
+  // One action, so the slice is left standing at the deterministic failure re-verification exists to clear —
+  // the state this command is actually run from, and the state with something on it to lose.
+  const opened = openProbedWork(t, {
+    prefix: 'reverifyinterrupt',
+    workId: 'work-reverify-interrupt',
+    config: { autonomous_actions_per_run: 1 },
+  });
+  const runtime = fakeRuntime({ serves: path.basename(opened.worktree) });
+  const { dependencies } = scriptedProvider({
+    runtime: runtime.runtime,
+    verify: () => ({ status: 1, duration_ms: 5, log_digest: 'f'.repeat(64), diagnostic: 'value.js returned 1', failing_tests: [], warnings: [] }),
+  });
+  advanceWork(opened.worktree, { runtime: 'claude' }, dependencies);
+  const before = readState(opened.worktree, opened.workId);
+  assert.equal(before.slices[0].status, 'correction-ready', 'the slice is on the road re-verification can clear');
+
+  const { report, state } = verifyActiveSlice(opened.worktree, { workId: opened.workId, sliceId: 'S1' }, {
+    ...dependencies,
+    verify: () => ({ status: null, interrupted: true, duration_ms: 4, log_digest: 'k'.repeat(64) }),
+  });
+
+  assert.equal(report.human_interrupt, true, 'the report says who ended it rather than reporting a failure');
+  assert.equal(report.clears_deterministic_failure, false, 'and clears nothing, because it proved nothing');
+  assert.equal(report.checkpoint_created, false);
+  assert.equal(state.slices[0].status, before.slices[0].status, 'the slice keeps the status it had');
+  assert.deepEqual(state.slices[0].verification, before.slices[0].verification,
+    'and keeps the verification it had, rather than having the run it already did replaced by a signal');
+  assert.equal(state.slices[0].verification_failure, before.slices[0].verification_failure,
+    'the failure it is already correcting is unchanged: an interrupt neither arms nor disarms a correction');
+  assert.equal(state.slices[0].correction_count || 0, 0, 'and the one bounded correction is still unspent');
 });

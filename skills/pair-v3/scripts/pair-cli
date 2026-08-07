@@ -878,6 +878,15 @@ function baselineInvitationLines(report) {
 }
 
 function verificationLines(report) {
+  // FAILED is what every other red renders as, and it is the one word that must not appear here: the command
+  // did not fail, it was ended, and the human who ended it is the reader.
+  if (report.human_interrupt) {
+    return [
+      `Verification: interrupted by a human — nothing spent, ${report.review_slice_id} stands where it did`,
+      `Command: ${report.command}`,
+      ...(report.diagnostic ? [`Diagnostic: ${report.diagnostic}`] : []),
+    ];
+  }
   const exempted = report.status === 0 && report.baselined_failing_tests.length > 0;
   const lines = [
     `Verification: ${report.status === 0 ? 'clean' : 'FAILED'}`

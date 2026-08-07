@@ -775,6 +775,15 @@ function commitCheckpoint(state, slice, projected) {
   return { checkpoint, paths };
 }
 
+// A child that died on SIGINT or SIGTERM was reached by a person — `pair-loop interrupt`, a Ctrl-C in the
+// shell, a kill by hand. Nothing else in this process sends those signals at a check. The loop's own deadline
+// kills with SIGTERM too, and `result.error` is what tells the two apart: spawnSync reports a timeout as
+// ETIMEDOUT, so an expired verification stays the environment failure it is, and only the signal nobody in
+// here sent is read as somebody's decision.
+function killedByAPerson(result) {
+  return !result.error && (result.signal === 'SIGINT' || result.signal === 'SIGTERM');
+}
+
 function verificationCommand(command, cwd) {
   const started = Date.now();
   const result = childProcess.spawnSync('/bin/sh', ['-lc', command], {
@@ -794,6 +803,7 @@ function verificationCommand(command, cwd) {
     diagnostic: result.error ? String(result.error.message).slice(0, 500) : verificationDiagnostic(result),
     failing_tests: failingTestIdentitiesFromLines(lines),
     warnings: warningIdentitiesFromLines(lines),
+    ...(killedByAPerson(result) ? { interrupted: true } : {}),
   };
 }
 
@@ -817,6 +827,7 @@ function runtimeCommand(command, cwd, env) {
     // Read by exactly one caller — the identity check — and never by anything that writes. It is returned
     // rather than compared here so the comparison stays with the ownership rule it serves.
     output: `${result.stdout || ''}\n${result.stderr || ''}`,
+    ...(killedByAPerson(result) ? { interrupted: true } : {}),
   };
 }
 
@@ -1310,7 +1321,13 @@ function observeRuntime(root, state, slice, dependencies) {
     status: probe.status,
     duration_ms: probe.duration_ms || 0,
     log_digest: probe.log_digest || null,
+    ...(probe.interrupted ? { interrupted: true } : {}),
   });
+  // A probe somebody killed asked the program nothing. Travelling on as an exit status would make a person's
+  // keystroke read as the live runtime answering wrong, which is the one reading that must never happen.
+  if (probe.interrupted) {
+    return { ...probe, human_interrupt: true, diagnostic: `the probe for ${slice.id} was ended by a person, not by the program: ${slice.probe}` };
+  }
   // The command, not its output: the probe is human-authored manifest text that carries no secret, and it
   // is also the one thing a correction can act on — re-run this and watch it fail.
   return probe.status === 0
@@ -1567,7 +1584,12 @@ function verify(root, state, slice, dependencies) {
     { review_slice_id: slice.id, command_digest: digest(slice.verify) },
     () => execute({ command: slice.verify, cwd: state.worktree, workId: state.work_id, sliceId: slice.id }),
   );
-  const result = applyWarningBaseline(root, state.work_id, applyKnownFailureBaseline(root, state.work_id, raw));
+  // An interrupted run is not compared against anything and captures nothing: applyWarningBaseline writes the
+  // Work's first warning capture from whatever the command printed, and a command a person killed mid-output
+  // would become the baseline every later verification is judged against.
+  const result = raw.interrupted
+    ? raw
+    : applyWarningBaseline(root, state.work_id, applyKnownFailureBaseline(root, state.work_id, raw));
   reportProgress(dependencies, {
     phase: 'verification-finished',
     review_slice_id: slice.id,
@@ -1584,7 +1606,13 @@ function verify(root, state, slice, dependencies) {
     baselined_test_count: result.baselined_failing_tests?.length || 0,
     duration_ms: result.duration_ms || 0,
     log_digest: result.log_digest || null,
+    ...(result.interrupted ? { interrupted: true } : {}),
   });
+  // Before the red road and before the probe: a verification a person killed is not a red gate, and the
+  // program must not be booted to answer a question whose tests never finished asking theirs.
+  if (result.interrupted) {
+    return { ...result, human_interrupt: true, diagnostic: `the verification for ${slice.id} was ended by a person, not by the code: ${slice.verify}` };
+  }
   // Inside verify, not beside it. A probe that failed has to reach every road a failed verification reaches
   // — the one bounded correction, the block after it, the re-verification that can clear an environmental
   // failure — and the only way to get that for free is to be the same result. Runs only on green: asking a
@@ -1592,7 +1620,13 @@ function verify(root, state, slice, dependencies) {
   if (result.status !== 0) return result;
   const observed = observeRuntime(root, state, slice, dependencies);
   if (!observed || observed.status === 0) return result;
-  return { ...result, status: observed.status, diagnostic: observed.diagnostic, runtime_refusal: observed.runtime_refusal };
+  return {
+    ...result,
+    status: observed.status,
+    diagnostic: observed.diagnostic,
+    runtime_refusal: observed.runtime_refusal,
+    human_interrupt: observed.human_interrupt,
+  };
 }
 
 // Enough to diagnose from, not enough to blow the state budget: the identities are what `baseline add`
@@ -1607,6 +1641,10 @@ function verificationRecord(slice, verification) {
     log_digest: verification.log_digest || null,
     // Kept out of the status field so a baselined pass never reads as an unconditional green.
     ...(verification.baselined_failing_tests ? { baselined_test_count: verification.baselined_failing_tests.length } : {}),
+    // The null status a signal leaves is indistinguishable from a command that could not run at all, and the
+    // difference is the whole point: one is the environment, the other is a person. Said on the record the
+    // slice carries, so every surface reading the projection reads who ended it.
+    ...(verification.human_interrupt ? { interrupted_by_human: true } : {}),
     // Unconditional, unlike the field above: a warning never flips verification status, so there is no
     // "unconditional green" for this count to be mistaken for.
     introduced_warning_count: (verification.introduced_warnings || []).length,
@@ -1777,7 +1815,19 @@ function cumulativeVerification(root, state, context, dependencies) {
       status: result.status,
       duration_ms: result.duration_ms || 0,
       log_digest: result.log_digest || null,
+      ...(result.interrupted ? { interrupted: true } : {}),
     });
+    // The composed branch is unproven, not broken. Blocking here would turn one keystroke into a Work that
+    // needs human diagnosis to leave, and the whole cumulative gate is re-runnable, so the honest position is
+    // the one the Work already had: run it again.
+    if (result.interrupted) {
+      appendEvent(root, state.work_id, { event: 'attempt-interrupted', review_slice_id: 'completion' });
+      state.lifecycle = 'completion-verification-ready';
+      state.next_action = 'run cumulative deterministic verification';
+      // Labelled for the same reason the slice road is: this lifecycle chains, and the next link would re-run
+      // the suite the person just stopped.
+      return { ...saveState(root, state, dependencies), pair_transition: 'interrupted' };
+    }
     if (result.status !== 0) {
       state.lifecycle = 'blocked';
       state.blocked_reason = 'cumulative deterministic verification failed';
@@ -1898,6 +1948,10 @@ function handleCompletedImplementation(root, state, context, slice, projected, o
   projected.failure_proof = output.failure_proof;
   projected.verification = verificationRecord(slice, verification);
   if (verification.status !== 0) {
+    // A check somebody killed says nothing about the code, so it takes the road the provider's own interrupt
+    // takes: no correction, no block, the attempt's edits left where they are. Any other road makes reaching
+    // for the keyboard cost the slice the one correction it was saving for a real defect.
+    if (verification.human_interrupt) return markAttemptInterrupted(root, state, projected);
     // Refusing to guess is not a failure to implement, so it takes neither road a red gate takes: not the
     // correction, and not the exhausted-budget block after it.
     if (verification.runtime_refusal) return blockOnRuntimeOwnership(root, state, projected, verification.diagnostic, dependencies);
@@ -2293,7 +2347,17 @@ function advanceWork(root, options = {}, dependencies = {}) {
 function recordInterruptedAttempt(root, options) {
   const state = currentState(root, options.workId || null);
   const context = workContext(root, state);
-  const projected = activeSlice(state, context)?.projected;
+  return markAttemptInterrupted(root, state, activeSlice(state, context)?.projected);
+}
+
+// Where the slice stands after somebody stopped it, shared by the two ways a person can reach a run: the
+// provider session they interrupt, and the check they kill while it runs. Both leave the same position —
+// ready, nothing spent, the edits still in the worktree — because both are the same event.
+//
+// Labelled on the way out, on the returned object only, exactly as a repaired projection is: ready is a
+// chainable lifecycle, so without the label an autonomous run reads the interrupt as an invitation and
+// dispatches the very attempt the person just stopped, forty times over until the cap.
+function markAttemptInterrupted(root, state, projected) {
   if (projected) {
     projected.interrupted_at = now();
     appendEvent(root, state.work_id, {
@@ -2307,7 +2371,7 @@ function recordInterruptedAttempt(root, options) {
   state.next_action = projected
     ? `steer or re-run ${projected.id}: pair-loop steer --text "<direction>" then pair-loop run`
     : 'run again';
-  return saveState(root, state);
+  return { ...saveState(root, state), pair_transition: 'interrupted' };
 }
 
 function advanceHeldWork(root, options = {}, dependencies = {}) {
@@ -2315,9 +2379,7 @@ function advanceHeldWork(root, options = {}, dependencies = {}) {
     return dispatchHeldWork(root, options, dependencies);
   } catch (error) {
     if (!error.pair_interrupted) throw error;
-    // Labelled on the way out, on the returned object only, exactly as a repaired projection is: an interrupt
-    // is a human stopping this run, so a chained run must not immediately dispatch the attempt again.
-    return { ...recordInterruptedAttempt(root, options), pair_transition: 'interrupted' };
+    return recordInterruptedAttempt(root, options);
   }
 }
 
@@ -2497,7 +2559,9 @@ function verifyActiveSlice(root, options = {}, dependencies = {}) {
   if (projected.status === 'accepted') throw new Error(`Review Slice ${projected.id} is already accepted`);
   const slice = manifestSlice(context, projected.id);
   const verification = verify(root, state, slice, dependencies);
-  projected.verification = verificationRecord(slice, verification);
+  // Not written on an interrupt: replacing the slice's recorded verification with the null a signal leaves
+  // would erase the green a checkpoint still rests on, on the strength of a run that never finished.
+  if (!verification.human_interrupt) projected.verification = verificationRecord(slice, verification);
   const report = {
     review_slice_id: projected.id,
     command: slice.verify,
@@ -2510,6 +2574,15 @@ function verifyActiveSlice(root, options = {}, dependencies = {}) {
     diagnostic: verification.status === 0 ? null : verification.diagnostic || null,
     checkpoint_created: false,
   };
+  // Before every road below, because none of them apply: the slice stays exactly where it stood, keeps its
+  // status, and arms no correction. Recording a deterministic failure here would hand the next run a
+  // correction to spend on a person's decision to stop watching.
+  if (verification.human_interrupt) {
+    appendEvent(root, state.work_id, { event: 'attempt-interrupted', review_slice_id: projected.id, status: projected.status });
+    report.human_interrupt = true;
+    report.clears_deterministic_failure = false;
+    return { report, state };
+  }
   // Only the deterministic-failure road can be cleared by re-verification. A slice sitting at
   // correction-ready because a human called a review finding valid already has a green checkpoint:
   // its verification was never the problem, and promoting again would try to commit an unchanged
