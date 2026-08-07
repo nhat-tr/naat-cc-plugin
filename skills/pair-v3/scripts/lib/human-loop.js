@@ -10,6 +10,13 @@ const HUMAN_LOOP_DEFAULTS = {
   // A bound on what one gesture may spend, not on how far the loop may get: hitting it stops the run with
   // the next action still named, so `run` continues from there. A Work of forty slices is forty of these.
   autonomous_actions_per_run: 40,
+  // How many times a red gate may be corrected before a human is needed. This is NOT the one-correction bound
+  // on findings, and it is deliberately larger: a fresh reviewer can always find something, so find → correct
+  // → find never terminates on its own and one is the right number. A failing test is the opposite — it is
+  // falsifiable, the same suite decides every round, and the loop is the only thing touching this code, so
+  // "make the tests pass" is work it can be trusted to keep at. What bounds it is progress, not permission:
+  // an attempt that leaves the identical set of tests failing has stopped making progress and stops here.
+  deterministic_correction_attempts: 3,
 };
 
 function configuredBoolean(value, fallback) {
@@ -51,6 +58,13 @@ function inHumanLoop(state, projected = null) {
   return humanLoopDefault(state);
 }
 
+// Read live rather than pinned at open, unlike the two policies above: this one answers "how hard should the
+// loop try before it needs me", and a human who changes their mind about that means it for the Work they are
+// standing in, not only for the next one.
+function deterministicAttemptBudget(env = process.env) {
+  return configuredCount(userConfig(env).deterministic_correction_attempts, HUMAN_LOOP_DEFAULTS.deterministic_correction_attempts);
+}
+
 function autonomousActionCap(state, env = process.env) {
   const pinned = state?.human_loop_policy?.actions_per_run;
   return configuredCount(pinned, humanLoopSettings(env).actionsPerRun);
@@ -59,6 +73,7 @@ function autonomousActionCap(state, env = process.env) {
 module.exports = {
   HUMAN_LOOP_DEFAULTS,
   autonomousActionCap,
+  deterministicAttemptBudget,
   humanLoopDefault,
   humanLoopPolicy,
   humanLoopSettings,

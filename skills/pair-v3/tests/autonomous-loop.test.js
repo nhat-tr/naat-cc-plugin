@@ -23,6 +23,7 @@ const {
   humanLoopReport,
   setHumanLoop,
   unblockWork,
+  verifyActiveSlice,
 } = require('../scripts/lib/pair-engine');
 const { blobAtCommit, readState } = require('../scripts/lib/pair-store');
 const { humanLoopSettings } = require('../scripts/lib/human-loop');
@@ -208,6 +209,74 @@ test('a reason for a block does not outlive the block', t => {
 
   assert.equal(unblocked.lifecycle, 'ready');
   assert.equal(readState(opened.worktree, opened.workId).blocked_reason, null, 'nothing later can read it as current');
+});
+
+// Asked live: "pair-loop is the only agent touching the code — if verification fails, it must fix it, right?"
+// It must, and it must first find out whether there is anything to fix: Pair's own instruction is to re-run
+// verification before treating a red gate as a defect, and only a human ever followed it. A flake that clears
+// on the second run costs a suite, not a correction — and not a block.
+test('a red gate is re-verified before it is treated as a defect', t => {
+  const opened = openTestWork(t, { prefix: 'gateflake', workId: 'work-gate-flake', config: { human_in_the_loop_default: false } });
+  const verifications = [];
+  const { calls, dependencies } = scriptedProvider(opened, { reviews: [APPROVE] });
+  // Red once, then clean: the shape of a flake, a busy port, or a container that was not up yet.
+  dependencies.verify = () => {
+    verifications.push('run');
+    return verifications.length === 1
+      ? { status: 1, duration_ms: 3, log_digest: 'b'.repeat(64), failing_tests: ['Suite.OneTest'], introduced_failing_tests: ['Suite.OneTest'] }
+      : greenVerification();
+  };
+
+  const state = advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(verifications.length, 3, 'the red run, its free re-run, and the cumulative gate');
+  assert.deepEqual(kinds(calls), ['implementation', 'review'], 'no correction was spent on a failure that was not real');
+  assert.equal(state.lifecycle, 'complete');
+});
+
+// The bound is progress, not permission. While each attempt changes which tests fail the loop keeps working the
+// problem; an attempt that leaves the identical set failing has stopped moving, and that is the honest moment
+// to stop rather than after a fixed count.
+test('a red gate that stops making progress blocks, and one that keeps moving does not', t => {
+  const opened = openTestWork(t, { prefix: 'gatestall', workId: 'work-gate-stall', config: { human_in_the_loop_default: false } });
+  const { calls, dependencies } = scriptedProvider(opened, { reviews: [APPROVE] });
+  // Always the same failing test: the second attempt has changed nothing the suite can see.
+  dependencies.verify = () => ({
+    status: 1,
+    duration_ms: 3,
+    log_digest: 'c'.repeat(64),
+    failing_tests: ['Suite.StubbornTest'],
+    introduced_failing_tests: ['Suite.StubbornTest'],
+  });
+
+  const state = advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.deepEqual(kinds(calls), ['implementation', 'implementation'],
+    'one correction was spent on the real failure, and the second attempt earned no third');
+  assert.equal(state.lifecycle, 'blocked');
+  assert.match(state.blocked_reason, /stopped making progress/u);
+});
+
+// Observed live, forty minutes of it: the loop blocked a slice on a red gate, the human re-verified by hand,
+// the suite came back clean after 3m19s — and the block outlived the evidence that refuted it. A block made of
+// a failing gate is unmade by a passing one; that is the same evidence read again, not an override.
+test('a clean re-verification clears a block its own red gate created', t => {
+  const opened = openTestWork(t, { prefix: 'gateclear', workId: 'work-gate-clear', config: { human_in_the_loop_default: false } });
+  const { dependencies } = scriptedProvider(opened, { reviews: [APPROVE] });
+  let red = true;
+  dependencies.verify = () => (red
+    ? { status: 1, duration_ms: 3, log_digest: 'd'.repeat(64), failing_tests: ['Suite.Stubborn'], introduced_failing_tests: ['Suite.Stubborn'] }
+    : greenVerification());
+  advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+  assert.equal(readState(opened.worktree, opened.workId).lifecycle, 'blocked');
+
+  // What a human does next, and what the loop already believes is the right first move.
+  red = false;
+  const { report, state } = verifyActiveSlice(opened.worktree, { workId: opened.workId, sliceId: 'S1' }, dependencies);
+
+  assert.equal(report.status, 0);
+  assert.equal(report.checkpoint_created, true, 'the work in the tree became a checkpoint, as it would have on a green gate');
+  assert.notEqual(state.lifecycle, 'blocked', 'and the block is gone with the failure that made it');
 });
 
 test('a Review Slice marked hitl keeps its human gate', t => {

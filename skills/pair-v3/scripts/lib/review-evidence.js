@@ -202,7 +202,16 @@ function recordReviewFeedback(root, input) {
   };
   const prior = feedbackRows(root, workId).find(item => item.finding_id === findingId);
   if (prior?.review_feedback_id === feedbackId) return prior;
-  if (prior) throw new Error(`Review Outcome finding ${findingId} already has Review Feedback`);
+  // Immutable ROWS, not a single write. "Append-only" was implemented as write-once, so the first verdict a
+  // finding received was the last one it could ever have: a human who read it again after two failed
+  // corrections could not call it a false positive, and — once the loop adjudicated for itself — the machine's
+  // guess was the thing they could not overrule. Nothing here is edited or deleted, so the audit trail is
+  // strictly better than it was: every verdict stays on the record with its reason and its time, and the
+  // LATEST one is what counts. The one direction refused is a machine overruling a person.
+  if (prior && input.adjudicator === 'autonomous' && prior.adjudicator !== 'autonomous') {
+    throw new Error(`Review Outcome finding ${findingId} carries a human verdict; the loop does not overrule one`);
+  }
+  if (prior) feedback.supersedes = prior.review_feedback_id;
   const stored = storeJsonBlob(root, workId, `feedback/${feedbackId}`, feedback);
   const line = JSON.stringify(feedback);
   if (Buffer.byteLength(line, 'utf8') > 2048) throw new Error('Review Feedback exceeds 2048 UTF-8 bytes');
@@ -225,9 +234,25 @@ function feedbackForFinding(root, workId, findingId) {
   return feedbackRows(root, workId).filter(item => item.finding_id === findingId);
 }
 
+// The verdict that counts, out of every verdict a finding has received. Rows are append-only and none is ever
+// rewritten, so "what does this finding stand at now" is a question about the newest one — with a human's
+// always outranking the loop's, whatever order they were written in. Every reducer and every gate reads
+// through here, so a superseded row can never decide anything again.
+function effectiveFeedback(rows) {
+  const ordered = [...rows].sort((left, right) => String(left.recorded_at).localeCompare(String(right.recorded_at)));
+  const human = ordered.filter(item => item.adjudicator !== 'autonomous');
+  return (human.length > 0 ? human : ordered).at(-1) || null;
+}
+
+function effectiveFeedbackForFinding(root, workId, findingId) {
+  return effectiveFeedback(feedbackForFinding(root, workId, findingId));
+}
+
 module.exports = {
   HUMAN_TEXT_BOUNDS,
   REVIEW_DISPOSITIONS,
+  effectiveFeedback,
+  effectiveFeedbackForFinding,
   feedbackForFinding,
   feedbackRows,
   findFinding,

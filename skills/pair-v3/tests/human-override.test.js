@@ -734,6 +734,19 @@ test('a correction is attributed hunk by hunk to the finding that asked for it',
   assert.equal(finding.correction.overlapping_hunks[0].old_start, 1);
   const unrequested = evidence.correction_unattributed.map(item => item.path);
   assert.deepEqual(unrequested, ['extra.js'], 'a file no finding anchors to is named as scope nobody asked for');
+
+  // Which correction, by hash. Asked in these words: "in a list of 'valid' findings, i have no idea which
+  // one is fixed and in which correction slice (hash)". The attribution said what moved and never where it
+  // landed, so a reader holding several valid findings across two rounds could not tell which round had
+  // tried which finding, nor name a commit to go read. Both commits were in scope at the producer and were
+  // dropped one line before the record was stored.
+  assert.equal(finding.correction.correction_commit, evidence.checkpoint_commit,
+    'the finding names the checkpoint its correction landed in');
+  assert.equal(finding.correction.base_commit, evidence.prior_checkpoint_commit,
+    'and the checkpoint the diff was taken from, so the named range is readable');
+  assert.equal(finding.correction.round, evidence.correction_count,
+    'and which correction round it was, so two rounds on one finding are told apart');
+  assert.ok(finding.correction.correction_commit, 'the commit is a real one, not a null that renders as "correction"');
 });
 
 // A bounded fix for a finding anchored at one line usually lands beside it, not on it — a guard inserted
@@ -1108,18 +1121,30 @@ test('an unsubmitted draft is listed so it is read back before a submission is s
   assert.equal(drafts[0].stale, false, 'the slice still carries the checkpoint the draft anchors to');
 });
 
-// A draft is deleted when it is submitted and never otherwise, so a slice accepted by any other route
-// leaves its draft on disk forever. Observed live: a question drafted against an accepted slice was still
-// sitting there a day later, unsubmittable and unmentioned, and the slice had been accepted without it.
-test('a draft whose Review Slice is already accepted is reported stale rather than pending', t => {
+// A human reviews when they read, not when the loop offers a gate, and they routinely submit later — by which
+// time the slice they drafted against may be accepted. Reporting that draft as dead and offering to delete it
+// was the loop telling a human their own finding no longer counted. Said live: "the findings is still there, I
+// need to be able to submit and trigger correction anytime I want … if the findings is in a done slice, then
+// migrate to the current slice, never block me." So the claim keeps the commit it was made against, and the
+// correction lands wherever one can land now — reopening the accepted slice when nothing else is left.
+test('a draft on an accepted Review Slice migrates on submission instead of dying', t => {
   const { worktree } = reviewReadyFixture(t);
-  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'What is this for?' });
-
+  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'A tool can reference the same service many times.' });
   acceptHumanReview(worktree, { sliceId: 'S1', override: true, reason: 'Read the whole diff; the seam matches the Design Check.' });
 
   const [draft] = humanFindingDrafts(worktree, 'work-override');
-  assert.equal(draft.stale, true, 'an accepted slice can no longer carry a submission, so the draft is not pending work');
-  assert.match(draft.stale_reason, /accepted/u, 'the reason names why it can never be submitted');
+  assert.equal(draft.stale, false, 'nothing about a written finding is stale');
+  assert.equal(draft.slice_status, 'accepted');
+
+  const recorded = submitHumanFindings(worktree, { sliceId: 'S1' });
+  const state = readState(worktree, 'work-override');
+  const slice = state.slices.find(item => item.id === 'S1');
+
+  assert.equal(recorded.outcome.findings.length, 1, 'the submission went through');
+  assert.equal(slice.status, 'correction-ready', 'and it earned the correction it always would have');
+  assert.equal(state.lifecycle, 'ready');
+  assert.match(readEvents(worktree, 'work-override').map(item => item.action || '').join(' '), /reopen/u,
+    'reopening accepted work is recorded as the human decision it is');
 });
 
 // The submission gate refuses a MISSING pass condition, and that is the hole a typed placeholder walks
