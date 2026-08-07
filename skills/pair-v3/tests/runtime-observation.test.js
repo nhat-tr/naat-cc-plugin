@@ -13,8 +13,9 @@ const test = require('node:test');
 
 const childProcess = require('node:child_process');
 
-const { advanceWork } = require('../scripts/lib/pair-engine');
-const { readEvents, readJson, readState, workPaths } = require('../scripts/lib/pair-store');
+const { adjudicateFinding, advanceWork, setHumanLoop } = require('../scripts/lib/pair-engine');
+const { blobAtCommit, readEvents, readJson, readState, workPaths } = require('../scripts/lib/pair-store');
+const { listReviewOutcomes } = require('../scripts/lib/review-evidence');
 const { completedSlice, greenVerification, openTestWork, providerResult } = require('./helpers/warm-work');
 
 const PROBE = 'curl -fsS http://localhost:5080/health';
@@ -95,6 +96,61 @@ function phases(calls) {
 
 function ownerRecord(opened) {
   return workPaths(opened.worktree, opened.workId).runtimeOwner;
+}
+
+// A reviewer that always finds something, anchored to whatever checkpoint the slice is standing on when it
+// is asked — which is what carries a hitl slice round the find → correct → find road to the block.
+function reviewingProvider(opened, runtime) {
+  let round = 0;
+  return {
+    runProvider(input) {
+      if (input.schema?.properties?.verdict) {
+        round += 1;
+        const projected = readState(opened.worktree, opened.workId).slices[0];
+        return providerResult({
+          verdict: 'findings',
+          findings: [{
+            severity: 'MAJOR',
+            claim: `The export is still a bare literal (round ${round}).`,
+            scenario: 'A second composition root cannot obtain its own value.',
+            impact: 'Callers share one module-global value.',
+            pass_condition: 'Two independent roots each observe their own value.',
+            evidence: {
+              commit: projected.checkpoint_commit,
+              path: 'value.js',
+              blob: blobAtCommit(opened.worktree, projected.checkpoint_commit, 'value.js'),
+              line_start: 1,
+              line_end: 1,
+            },
+          }],
+        }, { session_id: 'review-sess' });
+      }
+      fs.writeFileSync(path.join(input.root, 'value.js'), `module.exports = ${round + 2};\n`);
+      return providerResult(completedSlice(), { session_id: 'impl-sess' });
+    },
+    verify: greenVerification,
+    hydrate: () => ({ hydrated: false }),
+    runtime,
+  };
+}
+
+// Building, reviewing, correcting and reviewing again: the road to the gate, none of it the subject here.
+// One action per run, so each dispatch ends where the loop really ends one — short of finishing, handing
+// its program to the next run.
+function driveUntil(opened, dependencies, done) {
+  for (let action = 0; action < 8; action += 1) {
+    if (done(readState(opened.worktree, opened.workId).slices[0])) return;
+    advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+  }
+  assert.ok(done(readState(opened.worktree, opened.workId).slices[0]), 'the fixture never reached the state under test');
+}
+
+// The human's gesture: the finding is real, and it is the only one open.
+function adjudication(opened) {
+  const projected = readState(opened.worktree, opened.workId).slices[0];
+  const outcome = listReviewOutcomes(opened.worktree, opened.workId)
+    .find(item => item.review_outcome_id === projected.review_outcome_id);
+  return { findingId: outcome.findings[0].finding_id, disposition: 'valid', reason: 'The lookup seam is genuinely missing.' };
 }
 
 // A pid that certainly existed and certainly does not now, rather than a large number guessed to be free:
@@ -195,6 +251,36 @@ test('the program is stopped when the Work blocks', t => {
   assert.equal(phases(runtime.calls).at(-1), 'down');
   assert.equal(runtime.isUp(), false);
   assert.equal(fs.existsSync(ownerRecord(opened)), false);
+});
+
+// The other way a Work blocks, and the one no dispatch is watching. A human answers the finding that
+// exhausts the one correction with `pair-cli adjudicate` — a reducer call and nothing else — and the run
+// before it exited normally at a gate, so the claim it parked names no process and reclamation leaves it
+// alone by design. Nothing stops the program on this path unless the transition itself stops it.
+test('the program is stopped when a human adjudication blocks the Work', t => {
+  const opened = openProbedWork(t, {
+    prefix: 'downadjudicated',
+    workId: 'work-down-adjudicated',
+    config: { human_in_the_loop_default: false, autonomous_actions_per_run: 1 },
+  });
+  const runtime = fakeRuntime();
+  const dependencies = reviewingProvider(opened, runtime.runtime);
+
+  // The loop believes its own reviewer and spends the one correction the finding earns.
+  driveUntil(opened, dependencies, slice => slice.correction_count >= 1);
+  // Then the human steps into the next round, which is what leaves the second finding for them to answer.
+  setHumanLoop(opened.worktree, { sliceId: 'S1', humanLoop: true });
+  driveUntil(opened, dependencies, slice => slice.status === 'awaiting-feedback');
+
+  assert.equal(readJson(ownerRecord(opened)).pid, null, 'the run ended at a gate, so its claim names no process');
+  assert.equal(runtime.isUp(), true);
+  runtime.calls.length = 0;
+  const state = adjudicateFinding(opened.worktree, adjudication(opened), dependencies);
+
+  assert.equal(state.lifecycle, 'blocked', 'the second valid finding spends the last correction the slice had');
+  assert.deepEqual(phases(runtime.calls), ['down'], 'the block runs the teardown, without a dispatch to hang it on');
+  assert.equal(runtime.isUp(), false);
+  assert.equal(fs.existsSync(ownerRecord(opened)), false, 'and leaves no claim on the Work’s worktree');
 });
 
 // The case no exit handler can cover: the loop was killed outright, so nothing ran on the way out and the

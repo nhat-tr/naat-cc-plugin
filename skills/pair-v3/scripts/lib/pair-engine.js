@@ -903,6 +903,17 @@ function reclaimAbandonedRuntime(root, state, dependencies = {}) {
 // a human reading it, and until then a stale instance would answer for code nobody is building.
 const TERMINAL_LIFECYCLES = new Set(['complete', 'blocked']);
 
+// The dispatch is not the only way a Work reaches one of them. A human answering the finding that exhausts
+// the one correction blocks the Work from a plain `adjudicate`, which runs the reducer and nothing else — no
+// dispatch, so no teardown — and the claim the previous run parked reads `null`, which reclamation
+// deliberately leaves alone as an instance handed on rather than abandoned. Between the two the program
+// survives every path: nobody stops it and nobody is allowed to. So the terminal lifecycles carry the
+// teardown themselves, and every route into one goes through here.
+function stopRuntimeAtTerminalLifecycle(root, state, dependencies = {}) {
+  if (TERMINAL_LIFECYCLES.has(state.lifecycle)) stopRuntime(root, state, dependencies);
+  return state;
+}
+
 // Armed once for the life of the process and never disarmed. Removing them around the dispatch looked tidier
 // and was the bug: the dispatch is synchronous end to end, so a Ctrl-C during it is queued and cannot be
 // delivered until the call stack unwinds — and a `finally` that removes the listener first drops the queued
@@ -1530,7 +1541,7 @@ const AUTONOMOUS_ADJUDICATION_REASON = 'adjudicated by the loop: no human is sta
 // watching, the claim is believed and corrected. That is bounded, not trusting: the correction is counted,
 // so a second round of valid findings blocks for a human exactly as it always did, and every row is stamped
 // autonomous so nothing downstream mistakes it for judgement.
-function autonomousAdjudication(root, state, context, projected, outcome) {
+function autonomousAdjudication(root, state, context, projected, outcome, dependencies = {}) {
   for (const finding of outcome.findings) {
     recordReviewFeedback(root, {
       workId: state.work_id,
@@ -1546,7 +1557,7 @@ function autonomousAdjudication(root, state, context, projected, outcome) {
     review_outcome_id: outcome.review_outcome_id,
     finding_count: outcome.findings.length,
   });
-  return projectAdjudication(root, state, projected, context);
+  return projectAdjudication(root, state, projected, context, dependencies);
 }
 
 function checkpointReviewPrompt(root, state, context, slice, projected, guidance, dependencies) {
@@ -1586,7 +1597,7 @@ function runCheckpointReview(root, state, context, slice, projected, options, de
   });
   projected.review_outcome_id = recorded.outcome.review_outcome_id;
   if (recorded.outcome.findings.length > 0) {
-    if (!inHumanLoop(state, projected)) return autonomousAdjudication(root, state, context, projected, recorded.outcome);
+    if (!inHumanLoop(state, projected)) return autonomousAdjudication(root, state, context, projected, recorded.outcome, dependencies);
     projected.status = 'awaiting-feedback';
     state.lifecycle = 'awaiting-human';
     state.next_action = `adjudicate ${recorded.outcome.findings.length} finding(s) for ${slice.id}`;
@@ -2005,7 +2016,7 @@ function dispatchHeldWork(root, options = {}, dependencies = {}) {
   // on the way out — and only on the returned object, after the save, so it never becomes durable state —
   // because a run that dispatched no coding session must not look like one that dispatched a useless one.
   const stale = staleAdjudication(root, state);
-  if (stale) return { ...projectAdjudication(root, state, stale), pair_transition: 'projection-repaired' };
+  if (stale) return { ...projectAdjudication(root, state, stale, null, dependencies), pair_transition: 'projection-repaired' };
   if (state.lifecycle === 'complete' || state.lifecycle === 'blocked' || state.lifecycle === 'awaiting-human') return state;
   if (state.lifecycle === 'completion-verification-ready') return cumulativeVerification(root, state, context, dependencies);
   if (state.lifecycle === 'completion-review-ready') return combinedReview(root, state, context, options, dependencies);
@@ -2462,7 +2473,7 @@ function acceptHumanReview(root, options = {}, dependencies = {}) {
 // re-run at any time and always lands on the same answer. Recording and projecting were fused, which
 // meant a caller that recorded feedback without the reducer left a Review Slice permanently behind its
 // own evidence: the feedback exists, so a second one is refused, and no command could catch the state up.
-function projectAdjudication(root, state, projected, context = null) {
+function projectAdjudication(root, state, projected, context = null, dependencies = {}) {
   const outcome = listReviewOutcomes(root, state.work_id).find(item => item.review_outcome_id === projected.review_outcome_id);
   const unadjudicated = outcome.findings.filter(finding => feedbackForFinding(root, state.work_id, finding.finding_id).length === 0);
   if (unadjudicated.length > 0) {
@@ -2501,7 +2512,9 @@ function projectAdjudication(root, state, projected, context = null) {
     // step the next dispatch takes.
     acceptSlice(root, state, context || workContext(root, state), projected);
   }
-  return saveState(root, state);
+  // Saved before the teardown, never after: `down` is the step that can fail, and a failure leaves the
+  // claim naming this process so a later run reads a dead pid and retries it.
+  return stopRuntimeAtTerminalLifecycle(root, saveState(root, state), dependencies);
 }
 
 // The one correction is irreversible and the brief that steers it was invisible: correctionPrompt is
@@ -2586,7 +2599,7 @@ function dispatchNextSlice(root, options = {}, dependencies = {}) {
   return { state: advanceWork(root, options, dependencies), dispatched: true, review_slice_id: projected.id };
 }
 
-function adjudicateFinding(root, options = {}) {
+function adjudicateFinding(root, options = {}, dependencies = {}) {
   const state = currentState(root, options.workId || null);
   const feedback = recordReviewFeedback(root, {
     workId: state.work_id,
@@ -2599,9 +2612,9 @@ function adjudicateFinding(root, options = {}) {
     state.lifecycle = feedback.disposition === 'valid' ? 'blocked' : 'completion-review-ready';
     state.blocked_reason = feedback.disposition === 'valid' ? 'valid combined-diff finding requires human-scoped correction' : null;
     state.next_action = feedback.disposition === 'valid' ? 'human correction required' : 'resume combined-diff completion';
-    return saveState(root, state);
+    return stopRuntimeAtTerminalLifecycle(root, saveState(root, state), dependencies);
   }
-  return projectAdjudication(root, state, projected);
+  return projectAdjudication(root, state, projected, null, dependencies);
 }
 
 // The missing half of review: Pair assumed the model finds and the human adjudicates, so a human who
