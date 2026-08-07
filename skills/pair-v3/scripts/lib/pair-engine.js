@@ -18,6 +18,7 @@ const {
   inHumanLoop,
 } = require('./human-loop');
 const { runProviderSession } = require('./provider-runtime');
+const { loadRuntimeDeclaration } = require('./runtime-declaration');
 const {
   correctionPrompt,
   implementationPrompt,
@@ -243,7 +244,12 @@ function initialSliceState(slice) {
 
 function openWork(root, options) {
   const workId = safeSegment(options.workId, 'Work ID');
-  const loaded = loadManifest(options.manifestPath, options.specPath, workId);
+  // Read before the worktree exists, from the repository the human is working in: whether this Work owes a
+  // probe per slice is a property of the repository, and answering it at open is what lets the manifest be
+  // rejected before a Work is created around it.
+  const loaded = loadManifest(options.manifestPath, options.specPath, workId, {
+    runtimeDeclared: Boolean(loadRuntimeDeclaration(root)),
+  });
   const worktree = createPairWorktree(root, {
     workId,
     base: options.base || 'HEAD',
@@ -770,6 +776,117 @@ function verificationCommand(command, cwd) {
   };
 }
 
+// The declared runtime's commands. Deliberately narrower than verificationCommand: it answers with a
+// status, a duration and a digest, and never with output. `up` carries the declaration's env map, which
+// names where credentials come from, and a probe talks to a live service — so nothing either of them says
+// is allowed back into state, an event, or a prompt, where it would be persisted verbatim.
+function runtimeCommand(command, cwd, env) {
+  const started = Date.now();
+  const result = childProcess.spawnSync('/bin/sh', ['-lc', command], {
+    cwd,
+    encoding: 'utf8',
+    env: { ...process.env, ...env },
+    timeout: Number(process.env.PAIR_RUNTIME_COMMAND_TIMEOUT_MS || 10 * 60 * 1000),
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  return {
+    status: result.error ? null : result.status,
+    duration_ms: Date.now() - started,
+    log_digest: digest(`${result.stdout || ''}\n${result.stderr || ''}`),
+  };
+}
+
+const RUNTIME_READY_TIMEOUT_MS = Number(process.env.PAIR_RUNTIME_READY_TIMEOUT_MS || 3 * 60 * 1000);
+const RUNTIME_READY_POLL_MS = Number(process.env.PAIR_RUNTIME_READY_POLL_MS || 2000);
+
+// The engine is synchronous end to end and the poll interval is the one place it must wait on wall clock.
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Asking `ready` first is the whole ownership model. A Work outlives the process that starts its program —
+// `pair-loop run` returns to the shell at the action cap, a block, a hitl gate or an interrupt — so there is
+// no handle to hold and no PID worth recording while this slice has no `down` to release one with. `ready`
+// answers the only question that matters, for a runtime this run started, one an earlier run started, or one
+// the human already had up, and asking it before `up` is what makes `up` run exactly once per Work.
+function ensureRuntimeReady(root, state, declaration, execute) {
+  const call = (phase, command) => execute({
+    phase,
+    command,
+    cwd: state.worktree,
+    env: declaration.env,
+    workId: state.work_id,
+  });
+  if (call('ready', declaration.ready).status === 0) return true;
+  const started = call('up', declaration.up);
+  appendEvent(root, state.work_id, {
+    event: 'runtime-started',
+    command_digest: digest(declaration.up),
+    status: started.status,
+    duration_ms: started.duration_ms || 0,
+  });
+  const deadline = Date.now() + RUNTIME_READY_TIMEOUT_MS;
+  for (;;) {
+    if (call('ready', declaration.ready).status === 0) {
+      appendEvent(root, state.work_id, { event: 'runtime-ready', command_digest: digest(declaration.ready) });
+      return true;
+    }
+    if (Date.now() >= deadline) {
+      appendEvent(root, state.work_id, {
+        event: 'runtime-ready-timeout',
+        command_digest: digest(declaration.ready),
+        waited_ms: RUNTIME_READY_TIMEOUT_MS,
+      });
+      return false;
+    }
+    sleep(RUNTIME_READY_POLL_MS);
+  }
+}
+
+// One question asked of the running program, after the slice's own tests have already answered theirs.
+// Returns null when this slice has nothing to ask, and otherwise a result shaped like a verification's, so
+// a failing probe travels the road a failing verify travels rather than a road of its own.
+function observeRuntime(root, state, slice, dependencies) {
+  if (!slice.probe) return null;
+  const declaration = loadRuntimeDeclaration(root);
+  if (!declaration) {
+    return { status: null, diagnostic: `Review Slice ${slice.id} declares a probe but the repository has no .pair/runtime.json` };
+  }
+  const execute = dependencies.runtime || ((input) => runtimeCommand(input.command, input.cwd, input.env));
+  reportProgress(dependencies, { phase: 'runtime-starting', review_slice_id: slice.id, command: declaration.ready });
+  if (!ensureRuntimeReady(root, state, declaration, execute)) {
+    return { status: null, diagnostic: `the declared runtime was not ready within ${Math.round(RUNTIME_READY_TIMEOUT_MS / 1000)}s of running: ${declaration.up}` };
+  }
+  reportProgress(dependencies, { phase: 'probe-started', review_slice_id: slice.id, command: slice.probe });
+  const probe = execute({
+    phase: 'probe',
+    command: slice.probe,
+    cwd: state.worktree,
+    env: declaration.env,
+    workId: state.work_id,
+    sliceId: slice.id,
+  });
+  reportProgress(dependencies, {
+    phase: 'probe-finished',
+    review_slice_id: slice.id,
+    status: probe.status,
+    duration_ms: probe.duration_ms || 0,
+  });
+  appendEvent(root, state.work_id, {
+    event: 'probe-finished',
+    review_slice_id: slice.id,
+    command_digest: digest(slice.probe),
+    status: probe.status,
+    duration_ms: probe.duration_ms || 0,
+    log_digest: probe.log_digest || null,
+  });
+  // The command, not its output: the probe is human-authored manifest text that carries no secret, and it
+  // is also the one thing a correction can act on — re-run this and watch it fail.
+  return probe.status === 0
+    ? probe
+    : { ...probe, diagnostic: `probe exited ${probe.status === null ? 'abnormally' : probe.status} against the live runtime: ${slice.probe}` };
+}
+
 // An exit status cannot tell "this Review Slice broke something" apart from "this repository already
 // had a failing test". Without that distinction one pre-existing failure inside the slice's verify
 // scope makes every checkpoint unreachable, the one bounded correction is spent on a failure the
@@ -1037,7 +1154,14 @@ function verify(root, state, slice, dependencies) {
     duration_ms: result.duration_ms || 0,
     log_digest: result.log_digest || null,
   });
-  return result;
+  // Inside verify, not beside it. A probe that failed has to reach every road a failed verification reaches
+  // — the one bounded correction, the block after it, the re-verification that can clear an environmental
+  // failure — and the only way to get that for free is to be the same result. Runs only on green: asking a
+  // program a question when its own tests just failed spends a runtime boot to learn nothing.
+  if (result.status !== 0) return result;
+  const observed = observeRuntime(root, state, slice, dependencies);
+  if (!observed || observed.status === 0) return result;
+  return { ...result, status: observed.status, diagnostic: observed.diagnostic };
 }
 
 // Enough to diagnose from, not enough to blow the state budget: the identities are what `baseline add`

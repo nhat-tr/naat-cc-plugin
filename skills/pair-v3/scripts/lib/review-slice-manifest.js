@@ -5,7 +5,8 @@ const MANIFEST_SCHEMA = 1;
 const MAX_MANIFEST_BYTES = 16 * 1024;
 const MAX_SLICE_BYTES = 1400;
 const MANIFEST_KEYS = new Set(['schema', 'work_id', 'slices']);
-const SLICE_KEYS = new Set(['id', 'acceptance_criteria', 'outcome', 'depends_on', 'verify', 'hitl']);
+const SLICE_KEYS = new Set(['id', 'acceptance_criteria', 'outcome', 'depends_on', 'verify', 'hitl', 'probe', 'probe_waived']);
+const MAX_PROBE_WAIVER_LENGTH = 400;
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -55,7 +56,10 @@ function validateIdentifier(value, label) {
   return String(value);
 }
 
-function validateManifest(manifest, spec, expectedWorkId = null) {
+// `runtimeDeclared` is what makes a probe obligatory. A repository that has not said how to start its
+// program cannot be asked to observe it, and demanding a waiver there would invalidate every manifest
+// written before runtime observation existed — so the obligation arrives with the declaration.
+function validateManifest(manifest, spec, expectedWorkId = null, { runtimeDeclared = false } = {}) {
   if (!plainObject(manifest)) throw new Error('Review Slice Manifest must be one JSON object');
   assertOnlyKeys(manifest, MANIFEST_KEYS, 'Review Slice Manifest');
   if (manifest.schema !== MANIFEST_SCHEMA) throw new Error(`Review Slice Manifest schema must be ${MANIFEST_SCHEMA}`);
@@ -100,12 +104,30 @@ function validateManifest(manifest, spec, expectedWorkId = null) {
     if (slice.hitl !== undefined && typeof slice.hitl !== 'boolean') {
       throw new Error(`Review Slice ${id} hitl must be true or false`);
     }
+    // What to ask the running program once this slice's own tests pass. Optional in shape and obligatory in
+    // practice: where a runtime is declared, a slice either asks it something or says in words why it has
+    // nothing to ask. Both fields are omitted when absent, so every manifest written before they existed
+    // keeps a byte-identical digest.
+    const probe = slice.probe === undefined ? null : String(slice.probe).trim();
+    if (slice.probe !== undefined && (!probe || probe.length > 1000 || /[\r\n\0]/u.test(probe))) {
+      throw new Error(`Review Slice ${id} probe must be one command using 1-1000 characters`);
+    }
+    const probeWaived = slice.probe_waived === undefined ? null : String(slice.probe_waived).trim();
+    if (slice.probe_waived !== undefined && (!probeWaived || probeWaived.length > MAX_PROBE_WAIVER_LENGTH)) {
+      throw new Error(`Review Slice ${id} probe_waived must state a reason using 1-${MAX_PROBE_WAIVER_LENGTH} characters`);
+    }
+    if (probe && probeWaived) throw new Error(`Review Slice ${id} declares both probe and probe_waived`);
+    if (runtimeDeclared && !probe && !probeWaived) {
+      throw new Error(`Review Slice ${id} requires a probe, or a probe_waived reason for having none`);
+    }
     const normalized = {
       id,
       acceptance_criteria: mappedCriteria,
       outcome,
       depends_on: dependencies,
       verify,
+      ...(probe ? { probe } : {}),
+      ...(probeWaived ? { probe_waived: probeWaived } : {}),
       ...(slice.hitl === true ? { hitl: true } : {}),
     };
     if (Buffer.byteLength(JSON.stringify(normalized), 'utf8') > MAX_SLICE_BYTES) {
@@ -130,12 +152,12 @@ function validateManifest(manifest, spec, expectedWorkId = null) {
   };
 }
 
-function loadManifest(manifestPath, specPath, expectedWorkId = null) {
+function loadManifest(manifestPath, specPath, expectedWorkId = null, options = {}) {
   const spec = fs.readFileSync(specPath, 'utf8');
   const raw = fs.readFileSync(manifestPath, 'utf8');
   let manifest;
   try { manifest = JSON.parse(raw); } catch { throw new Error('Review Slice Manifest is not valid JSON'); }
-  return { spec, ...validateManifest(manifest, spec, expectedWorkId) };
+  return { spec, ...validateManifest(manifest, spec, expectedWorkId, options) };
 }
 
 function relevantAcceptanceCriteria(criteria, slice) {

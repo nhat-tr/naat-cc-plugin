@@ -110,6 +110,13 @@ function progressLine(event) {
     case 'verification-finished':
       return `[${at}]${slice} verification ${event.status === 0 ? 'clean' : `FAILED (exit ${event.observed_status})`}`
         + ` — ${duration(event.duration_ms)}`;
+    case 'runtime-starting':
+      return `[${at}]${slice} runtime — ${event.command}`;
+    case 'probe-started':
+      return `[${at}]${slice} probing the running program — ${event.command}`;
+    case 'probe-finished':
+      return `[${at}]${slice} probe ${event.status === 0 ? 'answered' : `FAILED (exit ${event.status})`}`
+        + ` — ${duration(event.duration_ms)}`;
     case 'transition':
       return `[${at}] action ${event.actions}/${event.action_cap} → ${event.lifecycle}`
         + (event.review_slice_id ? `, ${event.review_slice_id} ${event.status}${event.human_in_the_loop ? ' (hitl — the loop stops here)' : ''}` : '')
