@@ -775,6 +775,29 @@ function commitCheckpoint(state, slice, projected) {
   return { checkpoint, paths };
 }
 
+// The checkpoint a Review Slice cannot make. A combined-diff review judges the whole Work, so a valid finding
+// from it belongs to no slice and gets no correcting session; the state says "human correction required" and
+// means it. This is the commit that lets that correction be seen — by the next combined review, which reads
+// commits, and by anyone reading the branch afterwards. Nothing is invented when the worktree is clean: the
+// caller says so on the surface instead, because an unblock that changed nothing is a human decision to look
+// again, not a correction.
+function commitCompletionCorrection(root, state) {
+  const paths = changedPaths(state.worktree);
+  if (paths.length === 0) return null;
+  git(state.worktree, ['add', '-A', '--', ...paths]);
+  git(state.worktree, ['-c', 'user.name=Pair', '-c', 'user.email=pair@local', 'commit', '-m',
+    `pair(${state.work_id}): combined-diff correction`]);
+  const checkpoint = git(state.worktree, ['rev-parse', 'HEAD']).stdout;
+  state.head_commit = checkpoint;
+  updatePairRef(state.worktree, state.work_id, 'head', checkpoint);
+  appendEvent(root, state.work_id, {
+    event: 'completion-correction-committed',
+    checkpoint_commit: checkpoint,
+    path_count: paths.length,
+  });
+  return { checkpoint, paths };
+}
+
 // A child that died on SIGINT or SIGTERM was reached by a person — `pair-loop interrupt`, a Ctrl-C in the
 // shell, a kill by hand. Nothing else in this process sends those signals at a check. The loop's own deadline
 // kills with SIGTERM too, and `result.error` is what tells the two apart: spawnSync reports a timeout as
@@ -3404,7 +3427,21 @@ function unblockWork(root, options = {}) {
     delete blocked.blocked_from;
   }
   const next = activeSlice(state, context)?.projected || nextQueuedSlice(state, context.manifest);
-  state.next_action = next ? `run Review Slice ${next.id}` : 'run cumulative deterministic verification';
+  // A combined-diff finding is the one block with no Review Slice to resume into: it was raised against the
+  // whole Work, so the correction it names is a person's edit in the worktree rather than a slice's bounded
+  // retry. Committing that edit here is what makes the correction real. Cumulative verification reads the
+  // worktree and would pass on an uncommitted fix, but the combined review diffs commits — so without this
+  // the two disagree about what code exists, head_commit never moves, and the identical findings come back
+  // from every later review no matter how many times the human fixes them.
+  if (!next) {
+    const corrected = commitCompletionCorrection(root, state);
+    state.next_action = corrected
+      ? 'run cumulative deterministic verification'
+      : 'run cumulative deterministic verification (the worktree is unchanged, so the combined review will '
+        + 'see the same code and raise the same findings)';
+  } else {
+    state.next_action = `run Review Slice ${next.id}`;
+  }
   return saveState(root, state);
 }
 

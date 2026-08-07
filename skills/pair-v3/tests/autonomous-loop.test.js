@@ -76,6 +76,30 @@ function findingAgainstCurrentCheckpoint(worktree, workId) {
   };
 }
 
+// The same anchoring rule one step out. A combined-diff review judges the whole Work, so its evidence must
+// name the Work's head rather than any one slice's checkpoint — the two differ the moment a second slice
+// commits, which is exactly when a combined review is earned.
+function combinedFindingAgainstHead(worktree, workId) {
+  const head = readState(worktree, workId).head_commit;
+  return {
+    verdict: 'findings',
+    findings: [{
+      severity: 'MAJOR',
+      claim: 'The combined diff leaves the exported value unproven.',
+      scenario: 'Both slices land, and no declared verification observes the composed export.',
+      impact: 'The Work can complete with the composed behavior untested.',
+      pass_condition: 'A verification observes the export produced by both slices together.',
+      evidence: {
+        commit: head,
+        path: 'value.js',
+        blob: blobAtCommit(worktree, head, 'value.js'),
+        line_start: 1,
+        line_end: 1,
+      },
+    }],
+  };
+}
+
 // `reviews` is consumed one entry per review call; a function entry is evaluated at call time, and the queue
 // falls back to approval once it runs dry.
 function scriptedProvider(opened, { reviews = [], interruptAt = null } = {}) {
@@ -280,6 +304,82 @@ test('accepting a checkpoint hands the Work to the next Review Slice', t => {
   assert.deepEqual(kinds(calls), ['implementation', 'review', 'implementation', 'review', 'review'],
     'the acceptance started S2 and carried it to acceptance without a further gesture');
   assert.equal(dispatched.state.lifecycle, 'complete');
+});
+
+// The one block no Review Slice can clear. A combined-diff finding is raised against the whole Work, so it
+// matches no slice, no correcting session is dispatched, and the state says "human correction required" and
+// means it. Observed live: nothing committed that human's correction, so head_commit never moved, the next
+// combined review re-read the identical commit and raised the identical finding, and the Work could not be
+// finished at all — the only escape was calling a valid finding false.
+test('a human correction after a combined-diff finding is committed so the next review can see it', t => {
+  const opened = openTestWork(t, {
+    prefix: 'combinedfix',
+    workId: 'work-combined-fix',
+    slices: twoSlices(),
+    specMarkdown: TWO_SLICE_SPEC,
+    config: { human_in_the_loop_default: false },
+  });
+  const { dependencies } = scriptedProvider(opened, {
+    reviews: [APPROVE, APPROVE, () => combinedFindingAgainstHead(opened.worktree, opened.workId)],
+  });
+
+  advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+  assert.equal(readState(opened.worktree, opened.workId).lifecycle, 'awaiting-human',
+    'both slices are accepted and the combined review found something');
+
+  const combined = listReviewOutcomes(opened.worktree, opened.workId)
+    .find(item => item.review_slice_id === 'work-completion');
+  adjudicateFinding(opened.worktree, {
+    findingId: combined.findings[0].finding_id,
+    disposition: 'valid',
+    reason: 'the combined diff does leave the exported value unproven',
+  });
+  const blockedState = readState(opened.worktree, opened.workId);
+  assert.equal(blockedState.lifecycle, 'blocked');
+
+  // The correction a combined-diff finding asks for: a person edits the worktree, because no slice owns it.
+  fs.writeFileSync(path.join(opened.worktree, 'value.js'), 'module.exports = 99;\n');
+
+  const state = unblockWork(opened.worktree, { reason: 'corrected the export by hand' });
+
+  assert.notEqual(state.head_commit, blockedState.head_commit,
+    'the human correction is a commit, so the review that reads commits can see it');
+  assert.equal(blobAtCommit(opened.worktree, state.head_commit, 'value.js'),
+    blobAtCommit(opened.worktree, 'HEAD', 'value.js'),
+    'and head_commit names the commit the worktree actually produced');
+  assert.match(state.next_action, /cumulative deterministic verification/u);
+});
+
+// The other half: unblocking without touching anything must not invent a commit, and must say plainly that
+// the review will raise the same finding again — silence there is what made the loop above look like a bug
+// in the review rather than a missing gesture.
+test('unblocking a combined-diff finding without a correction commits nothing and says so', t => {
+  const opened = openTestWork(t, {
+    prefix: 'combinednofix',
+    workId: 'work-combined-nofix',
+    slices: twoSlices(),
+    specMarkdown: TWO_SLICE_SPEC,
+    config: { human_in_the_loop_default: false },
+  });
+  const { dependencies } = scriptedProvider(opened, {
+    reviews: [APPROVE, APPROVE, () => combinedFindingAgainstHead(opened.worktree, opened.workId)],
+  });
+
+  advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+  const combined = listReviewOutcomes(opened.worktree, opened.workId)
+    .find(item => item.review_slice_id === 'work-completion');
+  adjudicateFinding(opened.worktree, {
+    findingId: combined.findings[0].finding_id,
+    disposition: 'valid',
+    reason: 'the combined diff does leave the exported value unproven',
+  });
+  const blockedState = readState(opened.worktree, opened.workId);
+
+  const state = unblockWork(opened.worktree, { reason: 'looking again before correcting' });
+
+  assert.equal(state.head_commit, blockedState.head_commit, 'nothing changed, so nothing is committed');
+  assert.match(state.next_action, /the worktree is unchanged/u,
+    'and the surface says why the same finding is about to come back');
 });
 
 test('accepting stops at the next Review Slice when a human marked it', t => {

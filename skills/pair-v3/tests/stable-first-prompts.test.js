@@ -111,3 +111,28 @@ test('no prompt opens with call-unique content', () => {
     assert.doesNotMatch(head, /S1|deadbeef|cafe/u, `call-unique bytes in the first 120: ${head}`);
   }
 });
+
+// Observed live across one Work: the same defect class came back four times — a guard missing at call sites,
+// then at a state transition, then in cross-Work reclamation, then in a signal handler. Each review found its
+// own instance and none swept for the siblings, so every round paid for a finding the previous correction
+// could have closed for free. The instruction belongs in the correction boilerplate rather than in a per-call
+// tail: it is true of every correction, which is exactly what makes it byte-stable and cacheable.
+test('a correction is told to sweep for the same defect elsewhere', () => {
+  assert.match(KIND_BOILERPLATE.correction, /sweep for the same defect elsewhere/u);
+  assert.match(KIND_BOILERPLATE.correction, /other callers of the function you guarded/u,
+    'the sweep is named concretely, because "check for similar issues" is advice a session can satisfy by thinking');
+  assert.match(KIND_BOILERPLATE.correction, /Name in your report every sibling you found/u,
+    'a sweep nobody reports is indistinguishable from one that never happened');
+  assert.match(KIND_BOILERPLATE.correction, /new design is not/u,
+    'and it stays inside the bound, or it becomes licence to broaden the correction');
+});
+
+// The sweep must not cost the prefix cache: it is fixed text in the boilerplate, so two corrections about
+// different slices still share every byte of it.
+test('the sweep instruction stays inside the cacheable prefix', () => {
+  const left = correctionPrompt({ slice: SLICE, criteria: CRITERIA, evidence: [{ claim: 'a' }], direction: null });
+  const right = correctionPrompt({ slice: OTHER_SLICE, criteria: OTHER_CRITERIA, evidence: [{ claim: 'b' }], direction: null });
+
+  assert.ok(sharedPrefix(left, right).includes('sweep for the same defect elsewhere'),
+    'two corrections about different slices share the instruction, so it is paid for once');
+});
