@@ -14,6 +14,7 @@ const {
   failedRunLines,
   nextCommand,
   orientationLines,
+  unresolvedRuntimeLines,
   verificationLines,
 } = require('../scripts/pair-cli');
 
@@ -287,6 +288,32 @@ test('a refused runtime names both ways forward and says the correction is untou
   assert.doesNotMatch(text, /pair-loop unblock/u, 'only ways out that work are named');
   assert.match(text, /Unblocking is not a way out/u, 'and the one that does not is ruled out rather than left to be tried');
   assert.doesNotMatch(text, /git stash/u, 'worktree advice would be noise here');
+});
+
+// AC-7: the record of an unpayable debt is a JSON file three directories deep in the Git common directory, so
+// a status that does not say it exists is a status that hides a program still serving removed code. Both
+// gestures out of it are the human's own — no run can settle this claim — so both are spelled out, and the
+// record's path travels with them because it is not guessable from the Work id.
+test('an unresolved runtime claim is reported with the record and both gestures that clear it', () => {
+  const lines = unresolvedRuntimeLines([{
+    work_id: 'work-gone',
+    worktree: '/repo/.pair-worktrees/work-gone',
+    pid: null,
+    at: '2026-08-07T10:00:00.000Z',
+    claim: '/repo/.git/pair/works/work-gone/runtime-owner.json',
+  }]);
+  const text = lines.join('\n');
+
+  assert.match(text, /work-gone/u, 'whose program it is');
+  assert.match(text, /no longer exists/u, 'and why no run can stop it');
+  assert.match(text, /runtime-owner\.json/u, 'the record to delete, in full');
+  assert.match(text, /Stop the program yourself/u, 'the first gesture is the human\'s hands on the program');
+  assert.match(text, /restore the worktree/u, 'and the second gives the declared down somewhere to run');
+  assert.match(text, /refuses/u, 'what it costs until then, which is why it is not merely informational');
+});
+
+test('status stays silent when every runtime claim can still be settled', () => {
+  assert.deepEqual(unresolvedRuntimeLines([]), []);
 });
 
 test('a block with no recognised shape still names the recorded way to clear it', () => {

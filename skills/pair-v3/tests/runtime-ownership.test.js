@@ -10,22 +10,34 @@
 //       is not a failure to implement, and the budget belongs to defects.
 // AC-6: a claim another Work parked is torn down before anything is asked of the ports, so a green this Work
 //       adopts is never a program left up for somebody else.
+// AC-7: a claim whose recorded worktree is gone is kept and reported unresolved, because the only `down` left
+//       to run is one that could never have reached the program.
 
 const assert = require('node:assert/strict');
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const { RUNTIME_OWNERSHIP_PRECONDITION, advanceWork, unblockWork, verifyActiveSlice } = require('../scripts/lib/pair-engine');
-const { readEvents, readState, workPaths } = require('../scripts/lib/pair-store');
+const {
+  RUNTIME_OWNERSHIP_PRECONDITION,
+  advanceWork,
+  openWork,
+  unblockWork,
+  unresolvedRuntimeClaims,
+  verifyActiveSlice,
+} = require('../scripts/lib/pair-engine');
+const { readEvents, readJson, readState, workPaths } = require('../scripts/lib/pair-store');
 const {
   IDENTIFIED_DECLARATION,
   RUNTIME_DECLARATION,
+  TWO_SLICE_SPEC,
   fakeRuntime,
   openProbedWork,
   ownerRecord,
   phases,
   scriptedProvider,
+  twoSlicesWithProbes,
 } = require('./helpers/runtime-work');
 
 // AC-3 and AC-6: green, serving another Work's worktree, and parked by that Work — so the loop started it and
@@ -365,4 +377,129 @@ test('re-verification after the instance is stopped checkpoints the refused Revi
   assert.equal(state.blocked_precondition, null);
   assert.equal(state.slices[0].blocked_from, undefined);
   assert.deepEqual(phases(runtime.calls).slice(0, 2), ['ready', 'up'], 'this Work started its own program on the freed ports');
+});
+
+// A pid that has certainly exited: spawned and reaped, so nothing can be holding it.
+function deadPid() {
+  return childProcess.spawnSync('true').pid;
+}
+
+function strangerClaim(opened, workId, owner) {
+  const record = workPaths(opened.worktree, workId).runtimeOwner;
+  fs.mkdirSync(path.dirname(record), { recursive: true });
+  fs.writeFileSync(record, JSON.stringify({ work_id: workId, at: new Date().toISOString(), ...owner }));
+  return record;
+}
+
+// AC-7: the place the program was started from is gone. Every earlier version of this substituted the
+// repository root and ran the other Work's `down` there — a directory that never hosted that program — and
+// then read exit 0 as proof it stopped, deleting the only record of the debt. The program is still on the
+// ports; this run must not trust them and must not pretend the debt is paid.
+test('a parked claim whose worktree is gone is kept rather than cleared by a down run elsewhere', t => {
+  const opened = openProbedWork(t, {
+    prefix: 'probegoneworktree',
+    workId: 'work-probe-gone-worktree',
+    declaration: RUNTIME_DECLARATION,
+  });
+  const runtime = fakeRuntime({ alreadyUp: true });
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
+  const stranger = strangerClaim(opened, 'work-probe-elsewhere', {
+    pid: null,
+    worktree: path.join(path.dirname(opened.worktree), 'work-probe-elsewhere-removed'),
+  });
+
+  const state = advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(state.lifecycle, 'blocked');
+  assert.equal(state.blocked_precondition, RUNTIME_OWNERSHIP_PRECONDITION);
+  assert.deepEqual(phases(runtime.calls).filter(phase => phase === 'down'), [],
+    'no down is run for a program it could not have reached, so no exit 0 can be mistaken for a teardown');
+  assert.equal(runtime.isUp(), true, 'the program is still answering, which is exactly what the kept claim says');
+  assert.equal(fs.existsSync(stranger), true, 'the debt survives the run that could not pay it');
+  const reason = state.blocked_reason || '';
+  assert.match(reason, /work-probe-elsewhere/u, 'the refusal names whose program is in the way');
+  assert.match(reason, /no longer exists/u, 'and that what makes it unsettleable is the missing worktree');
+});
+
+// The same claim on the other road in: a dead pid rather than a parked one, which reclamation reads before any
+// `ready` is asked. Reclamation is where the root substitution did the most damage — it ran on every dispatch,
+// against every Work's claim, and cleared them silently.
+test('an abandoned claim whose worktree is gone is reported unresolved instead of reclaimed', t => {
+  const opened = openProbedWork(t, {
+    prefix: 'probegoneabandoned',
+    workId: 'work-probe-gone-abandoned',
+    declaration: RUNTIME_DECLARATION,
+  });
+  const runtime = fakeRuntime();
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
+  const removed = path.join(path.dirname(opened.worktree), 'work-probe-stranded-removed');
+  const stranded = strangerClaim(opened, 'work-probe-stranded', { pid: deadPid(), worktree: removed });
+
+  advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(fs.existsSync(stranded), true, 'reclamation keeps a claim it cannot settle');
+  const events = readEvents(opened.worktree, 'work-probe-stranded');
+  assert.deepEqual(events.filter(event => event.event === 'runtime-reclaimed'), [],
+    'nothing was reclaimed, because nothing was stopped');
+  assert.equal(events.filter(event => event.event === 'runtime-unresolved').length, 1,
+    'and the run says so against the Work that stranded it');
+  assert.deepEqual(unresolvedRuntimeClaims(opened.worktree).map(claim => claim.work_id), ['work-probe-stranded'],
+    'so status has something to report, which the record alone is not');
+  assert.equal(unresolvedRuntimeClaims(opened.worktree)[0].worktree, removed);
+});
+
+// A second Work in the same repository, so both read the one Pair store the way two live Works actually do.
+function openSecondWork(t, opened, workId) {
+  const parent = path.dirname(opened.spec);
+  const spec = path.join(parent, `${workId}-spec.md`);
+  const manifest = path.join(parent, `${workId}-slices.json`);
+  fs.writeFileSync(spec, TWO_SLICE_SPEC);
+  fs.writeFileSync(manifest, JSON.stringify({ schema: 1, work_id: workId, slices: twoSlicesWithProbes() }));
+  t.after(() => {
+    fs.rmSync(spec, { force: true });
+    fs.rmSync(manifest, { force: true });
+  });
+  return openWork(opened.root, { workId, specPath: spec, manifestPath: manifest });
+}
+
+// AC-6, the case a parked claim stopped being able to answer on its own. A run that refuses on ownership parks
+// its claim too, and there the park means the opposite of a handoff: that run could not prove the program on
+// these ports was the loop's, so it left it alone. Reading that as "the loop started it" and running the
+// owner's `down` is the blind teardown the refusal existed to avoid, arriving one Work later — and what it
+// stops can be the human's own stack.
+test('a claim parked by an ownership refusal is refused rather than torn down by the next Work', t => {
+  const first = openProbedWork(t, {
+    prefix: 'proberefusalpark',
+    workId: 'work-probe-refused',
+    declaration: IDENTIFIED_DECLARATION,
+  });
+  // Up before anything, serving code that is nobody's Work — the shape of the human's own stack — and this
+  // Work already holds a claim from an earlier slice that started a program. That claim is what the refusal
+  // parks; without one there would be nothing for the next Work to misread.
+  const humansStack = fakeRuntime({ alreadyUp: true, serves: 'the-humans-own-checkout' });
+  strangerClaim(first, first.workId, { pid: process.pid, worktree: first.worktree });
+
+  const refused = advanceWork(first.worktree, { runtime: 'claude', reviewPolicy: 'all' },
+    scriptedProvider({ runtime: humansStack.runtime }).dependencies);
+
+  assert.equal(refused.blocked_precondition, RUNTIME_OWNERSHIP_PRECONDITION, 'the first Work refused rather than guessing');
+  const parked = readJson(workPaths(first.worktree, first.workId).runtimeOwner);
+  assert.equal(parked.pid, null, 'and parked its claim, which is what the next Work will read');
+
+  const second = openSecondWork(t, first, 'work-probe-after-refusal');
+  const runtime = fakeRuntime({ alreadyUp: true, serves: 'the-humans-own-checkout' });
+
+  const state = advanceWork(second.worktree, { runtime: 'claude', reviewPolicy: 'all' },
+    scriptedProvider({ runtime: runtime.runtime }).dependencies);
+
+  assert.deepEqual(phases(runtime.calls).filter(phase => phase === 'down'), [],
+    'no down is spoken at a program the other Work already refused to claim as the loop\'s');
+  assert.equal(runtime.isUp(), true, 'so what was answering there is still answering, untouched');
+  assert.equal(state.lifecycle, 'blocked');
+  assert.equal(state.blocked_precondition, RUNTIME_OWNERSHIP_PRECONDITION);
+  const reason = state.blocked_reason || '';
+  assert.match(reason, /work-probe-refused/u, 'the refusal names the Work whose park it declined to read as a handoff');
+  assert.match(reason, /refusal, not a handoff/u, 'and says why that park carries no permission to stop anything');
+  assert.equal(fs.existsSync(workPaths(first.worktree, first.workId).runtimeOwner), true,
+    'the first Work\'s debt stays exactly where it was');
 });

@@ -33,6 +33,7 @@ const {
   steerWarmSession,
   submitHumanFindings,
   unblockWork,
+  unresolvedRuntimeClaims,
   recordKnownFailure,
   removeWorktree,
   sliceEvidence,
@@ -632,6 +633,27 @@ function failedRunLines(state) {
   ];
 }
 
+// A debt no run can pay. The Work that started the program recorded the worktree its `down` has to run in, and
+// that directory is gone — so the loop keeps the claim rather than clearing it against a `down` run somewhere
+// the program could never have heard. Reported here because the record on its own is invisible, and what it
+// records is the thing this Work exists to rule out: a program still answering for code nobody is building.
+// The two gestures are the human's, not the loop's, which is why they are spelled out rather than named as a
+// pair-loop command.
+function unresolvedRuntimeLines(claims) {
+  if (claims.length === 0) return [];
+  return [
+    '',
+    `Unresolved runtime claim${claims.length === 1 ? '' : 's'}: ${claims.length} program${claims.length === 1 ? '' : 's'} the loop started and cannot stop.`,
+    ...claims.flatMap(claim => [
+      `  ${claim.work_id} — started from ${claim.worktree}, which no longer exists${claim.at ? ` (claimed ${claim.at})` : ''}.`,
+      `    record: ${claim.claim}`,
+    ]),
+    '  A declared down has no directory to run in, so no run will clear this — and until it is cleared, any',
+    '  Work sharing those host ports refuses rather than trusting what answers there.',
+    '  Stop the program yourself and delete the record above, or restore the worktree and run that Work again.',
+  ];
+}
+
 // State is written once, at the end of a run, so everything below this block describes the world as it was
 // before the dispatch started. Live that read as an idle loop: a paused correction left status printing
 // "Pair ready" and "Next: run one human-valid correction" for forty minutes while its verification tree sat
@@ -765,10 +787,16 @@ function printHumanLoop(report, json = false) {
 function printStatus(state, json = false, root = null) {
   const drafts = root ? humanFindingDrafts(root, state.work_id) : [];
   const dispatch = root ? dispatchOwner(root, state.work_id) : null;
+  const unresolvedClaims = root ? unresolvedRuntimeClaims(root) : [];
   if (json) {
     // A projection, not persisted state: drafts live as files per Review Slice, and status is where every
     // reader — including the editor adapter — already looks for what is waiting on the human.
-    console.log(JSON.stringify({ ...state, human_finding_drafts: drafts, dispatch }, null, 2));
+    console.log(JSON.stringify({
+      ...state,
+      human_finding_drafts: drafts,
+      dispatch,
+      unresolved_runtime_claims: unresolvedClaims,
+    }, null, 2));
     return;
   }
   const active = state.slices.find(slice => !['queued', 'accepted'].includes(slice.status));
@@ -823,6 +851,7 @@ function printStatus(state, json = false, root = null) {
     ...(state.lifecycle === 'blocked' ? blockedLines(state, dirtyWorktreePaths(state)) : []),
     ...completionLines(state, root ? currentBranch(root) : null),
     ...failedRunLines(state),
+    ...unresolvedRuntimeLines(unresolvedClaims),
     ...draftLines(drafts),
     '',
     ...orientationLines(state, next),
@@ -1615,4 +1644,4 @@ function main(argv = process.argv.slice(2)) {
 
 if (require.main === module) main();
 
-module.exports = { SLICE_ARC, adjudicationLines, blockedLines, digestLines, dispatchLines, evaluationSummary, evidenceClosingLines, evidenceDiffLines, explainLines, failedRunLines, loopLines, main, nextCommand, orientationLines, parseArgs, printBaseline, printEvidence, printStatus, printVerification, progressLine, runDependencies, verificationLines, workIdFromSpec };
+module.exports = { SLICE_ARC, adjudicationLines, blockedLines, digestLines, dispatchLines, evaluationSummary, evidenceClosingLines, evidenceDiffLines, explainLines, failedRunLines, loopLines, main, nextCommand, orientationLines, parseArgs, printBaseline, printEvidence, printStatus, printVerification, progressLine, runDependencies, unresolvedRuntimeLines, verificationLines, workIdFromSpec };

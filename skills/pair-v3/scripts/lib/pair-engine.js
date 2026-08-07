@@ -867,6 +867,40 @@ function parkRuntime(root, state) {
   if (runtimeOwner(root, state.work_id)) writeRuntimeOwner(root, state, null);
 }
 
+// The place a program was started from, gone. `down` is a declared command run in a directory — a compose
+// project, a script that reads the checkout it stands in — so the only directory left to offer it is one that
+// never hosted this program. Running it there and taking exit 0 as proof is the whole defect: the program is
+// still up, still serving the removed worktree's code, and the one record that says so has just been deleted.
+//
+// So an unreachable claim is not settled anywhere. It is kept, and every reading of it says unresolved. That
+// costs the loop a refusal it used to walk past — see the callers — and buys the only thing worth having here,
+// which is that a program nobody stopped is never recorded as stopped.
+function unreachableClaim(owner) {
+  return Boolean(owner?.worktree) && !fs.existsSync(owner.worktree);
+}
+
+// Every claim no run can settle, for the human status reports to. Read across all Works for the same reason
+// reclamation is: the Work that stranded a claim is not the Work being driven, so a per-Work read is exactly
+// the read that never sees it.
+function unresolvedRuntimeClaims(root) {
+  const claims = [];
+  for (const workId of listWorkIds(root)) {
+    const owner = runtimeOwner(root, workId);
+    // The claim's own path travels with it: deleting the record by hand is one of the two ways out, and it is
+    // not a path a human can guess from the Work id.
+    if (unreachableClaim(owner)) {
+      claims.push({
+        work_id: workId,
+        worktree: owner.worktree,
+        pid: owner.pid ?? null,
+        at: owner.at || null,
+        claim: workPaths(root, workId).runtimeOwner,
+      });
+    }
+  }
+  return claims;
+}
+
 // The one place `down` is spoken. The claim is cleared only after `down` reports success: it is the sole
 // durable evidence that this Work owes an instance a teardown, so erasing it before the step that can fail
 // is erasing the only thing a retry could read. A `down` that fails therefore leaves the claim naming this
@@ -924,13 +958,19 @@ function reclaimAbandonedRuntime(root, dependencies = {}) {
   for (const workId of listWorkIds(root)) {
     const owner = runtimeOwner(root, workId);
     if (!owner || owner.pid === null || owner.pid === undefined || processAlive(owner.pid)) continue;
+    // A finished Work's worktree is removed while its claim can still be outstanding, and `down` cannot run in
+    // a directory that is gone. Substituting the repository root was the fallback, and it was wrong: that
+    // `down` cannot reach the program, so its exit 0 deleted the debt without paying it. The claim is left
+    // alone and reported instead — see unreachableClaim.
+    if (unreachableClaim(owner)) {
+      appendEvent(root, workId, { event: 'runtime-unresolved', abandoned_pid: owner.pid, worktree: owner.worktree });
+      reportProgress(dependencies, { phase: 'runtime-unresolved', work_id: workId, worktree: owner.worktree });
+      continue;
+    }
     appendEvent(root, workId, { event: 'runtime-reclaimed', abandoned_pid: owner.pid, since: owner.at || null });
     reportProgress(dependencies, { phase: 'runtime-reclaimed', abandoned_pid: owner.pid });
-    // A finished Work's worktree is removed while its claim can still be outstanding, and `down` cannot run
-    // in a directory that is gone. The repository root is the honest fallback: losing the worktree is not a
-    // reason to leave the instance up, which is the one outcome this function exists to rule out.
-    const worktree = owner.worktree && fs.existsSync(owner.worktree) ? owner.worktree : root;
-    if (stopRuntime(root, { work_id: workId, worktree }, dependencies)) reclaimed = true;
+    // A claim that records no worktree at all predates the field; the root is all there ever was for it.
+    if (stopRuntime(root, { work_id: workId, worktree: owner.worktree || root }, dependencies)) reclaimed = true;
   }
   return reclaimed;
 }
@@ -1079,18 +1119,24 @@ function evictForeignRuntime(root, state, dependencies, found) {
   if (claim.owner.pid && processAlive(claim.owner.pid)) {
     return refusal(`${claim.workId} is driving it from a live run (pid ${claim.owner.pid})`);
   }
+  // Nowhere to run that Work's `down` from, so this run cannot be the one that settles it. Refusing keeps the
+  // debt visible; the alternative was a `down` in the root that could not reach the program and cleared the
+  // claim anyway.
+  if (unreachableClaim(claim.owner)) {
+    return refusal(`${claim.workId} claims it from a worktree that no longer exists, so its down cannot be run`);
+  }
   appendEvent(root, state.work_id, { event: 'runtime-foreign', held_by: claim.workId });
   reportProgress(dependencies, { phase: 'runtime-foreign', held_by: claim.workId });
-  const worktree = claim.owner.worktree && fs.existsSync(claim.owner.worktree) ? claim.owner.worktree : root;
-  if (!stopRuntime(root, { work_id: claim.workId, worktree }, dependencies)) {
+  if (!stopRuntime(root, { work_id: claim.workId, worktree: claim.owner.worktree || root }, dependencies)) {
     return refusal(`${claim.workId} claims it and its declared down did not stop it`);
   }
   return { ready: true };
 }
 
-// A program another Work parked belongs to that Work and to no other. The claim says so exactly: the loop
-// started it, no run holds it now, and the run that let go chose to leave it up — a message to the next run
-// of that Work, which will adopt it, and an invitation to nobody else. On the fixed host ports it is
+// A program another Work parked and started belongs to that Work and to no other. The claim plus that Work's
+// lifecycle say so exactly: the loop started it, no run holds it now, and the run that let go chose to leave it
+// up — a message to the next run of that Work, which will adopt it, and an invitation to nobody else. On the
+// fixed host ports it is
 // nevertheless the thing this Work is about to find green, so it is stopped here, before the first `ready`
 // rather than after an identity answer this repository may have no way to ask for. Stopping it is the very
 // teardown its owner is owed, so the debt is settled rather than moved.
@@ -1107,12 +1153,37 @@ function releaseParkedForeignRuntimes(root, state, dependencies) {
     // Parked is a claim that names no process at all — the same reading reclamation gives it, so the two
     // never disagree about which claims are dead pids and which were handed back on purpose.
     if (!owner || (owner.pid !== null && owner.pid !== undefined)) continue;
+    // Parked no longer says only one thing. A run that refused on ownership parks too — see
+    // blockOnRuntimeOwnership — and there it means the opposite of a handoff: that run could not prove the
+    // program on these ports was the loop's, so it deliberately left it alone rather than speak a blind `down`
+    // at it. Reading that park as "the loop started it" and tearing it down is that same blind `down`, one Work
+    // over and one run later, and what it stops may be the human's own stack. The owning Work's block is the
+    // only place the two parks differ, so it is read rather than inferred from the claim.
+    const owning = readState(root, workId);
+    if (owning && blockedOnRuntimeOwnership(owning)) {
+      return runtimeRefusal(
+        state,
+        `${workId} already refused to say whose program is on these ports and parked its claim to leave it alone`,
+        'that park is a refusal, not a handoff, so the program behind it is not known to be the loop\'s to stop',
+        'stop the instance answering there yourself, or declare an identity command so a run can prove whose it is',
+      );
+    }
+    // A parked claim outlives its Work's worktree — the Work can have finished and been cleaned up — and
+    // `down` cannot run in a directory that is gone. This run therefore cannot settle it, and cannot trust the
+    // ports either: something parked is very likely still answering there and nothing here can stop it. Named
+    // as its own refusal, because the human's move is not "repair the down command" but "deal with the program
+    // whose worktree you removed".
+    if (unreachableClaim(owner)) {
+      return runtimeRefusal(
+        state,
+        `${workId} parked a program on these ports from ${owner.worktree}, which no longer exists`,
+        'that Work still holds the claim, and no run can settle it because its declared down has nowhere to run',
+        'stop that program yourself and delete its claim, or restore the worktree so the loop can run its down',
+      );
+    }
     appendEvent(root, state.work_id, { event: 'runtime-foreign', held_by: workId });
     reportProgress(dependencies, { phase: 'runtime-foreign', held_by: workId });
-    // A parked claim outlives its Work's worktree — the Work can have finished and been cleaned up — and
-    // `down` cannot run in a directory that is gone, so the repository root stands in for it.
-    const worktree = owner.worktree && fs.existsSync(owner.worktree) ? owner.worktree : root;
-    if (!stopRuntime(root, { work_id: workId, worktree }, dependencies)) {
+    if (!stopRuntime(root, { work_id: workId, worktree: owner.worktree || root }, dependencies)) {
       return runtimeRefusal(
         state,
         `${workId} parked a program on these ports and the declared down did not stop it`,
@@ -3404,6 +3475,7 @@ module.exports = {
   removeWorktree,
   setHumanFindingPassCondition,
   unblockWork,
+  unresolvedRuntimeClaims,
   sliceEvidence,
   submitHumanFindings,
   validateFailureProof,
