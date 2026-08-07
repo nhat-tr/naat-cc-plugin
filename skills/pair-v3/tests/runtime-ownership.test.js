@@ -503,3 +503,41 @@ test('a claim parked by an ownership refusal is refused rather than torn down by
   assert.equal(fs.existsSync(workPaths(first.worktree, first.workId).runtimeOwner), true,
     'the first Work\'s debt stays exactly where it was');
 });
+
+// The other half of that park: the refusal asked the human to stop the instance themselves, and they did. What
+// the park protected is gone, so the question it recorded has no subject left. Refusing on it anyway would
+// block every other Work on free ports with no verb to clear it — the refusal outliving the thing it refused
+// about. So the ports are asked first, and a park nothing answers behind is moot.
+test('a refusal park stops blocking once nothing answers on the ports', t => {
+  const first = openProbedWork(t, {
+    prefix: 'proberefusalmoot',
+    workId: 'work-probe-refused-moot',
+    declaration: IDENTIFIED_DECLARATION,
+  });
+  const humansStack = fakeRuntime({ alreadyUp: true, serves: 'the-humans-own-checkout' });
+  strangerClaim(first, first.workId, { pid: process.pid, worktree: first.worktree });
+
+  const refused = advanceWork(first.worktree, { runtime: 'claude', reviewPolicy: 'all' },
+    scriptedProvider({ runtime: humansStack.runtime }).dependencies);
+
+  assert.equal(refused.blocked_precondition, RUNTIME_OWNERSHIP_PRECONDITION, 'the first Work refused rather than guessing');
+  assert.equal(readJson(workPaths(first.worktree, first.workId).runtimeOwner).pid, null, 'and parked its claim');
+
+  // The human did what the refusal asked and stopped the instance, so the ports are free when the next Work
+  // dispatches — a fresh runtime that answers nothing until its own `up`.
+  const second = openSecondWork(t, first, 'work-probe-after-moot-refusal');
+  const runtime = fakeRuntime({ serves: path.basename(second.worktree) });
+
+  const state = advanceWork(second.worktree, { runtime: 'claude', reviewPolicy: 'all' },
+    scriptedProvider({ runtime: runtime.runtime }).dependencies);
+
+  assert.notEqual(state.blocked_precondition, RUNTIME_OWNERSHIP_PRECONDITION,
+    'a park with nothing behind it does not refuse a Work whose ports are free');
+  const asked = phases(runtime.calls);
+  assert.equal(asked[0], 'ready', 'the ports are asked before the park is read as a refusal');
+  assert.ok(asked.includes('up'), 'and finding them empty, this Work starts its own program');
+  assert.deepEqual(asked.slice(0, asked.indexOf('up')).filter(phase => phase === 'down'), [],
+    'nothing is torn down on the way in — the ports were empty, so no blind down is spoken at the park');
+  assert.equal(readJson(workPaths(first.worktree, first.workId).runtimeOwner).pid, null,
+    'and the first Work\'s park is still its own to settle — moot here is not cleared from under it');
+});

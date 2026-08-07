@@ -1146,7 +1146,10 @@ function evictForeignRuntime(root, state, dependencies, found) {
 //
 // A claim held by a live pid is left exactly where it is: another run is driving that program right now, and
 // stopping it would break a run that did nothing wrong. That case is a refusal, downstream.
-function releaseParkedForeignRuntimes(root, state, dependencies) {
+//
+// `isAnswering` asks the ports whether anything is up. It is a thunk rather than an answer because the only
+// branch that needs it is the refusal-park one below, and asking costs a command.
+function releaseParkedForeignRuntimes(root, state, dependencies, isAnswering) {
   for (const workId of listWorkIds(root)) {
     if (workId === state.work_id) continue;
     const owner = runtimeOwner(root, workId);
@@ -1159,8 +1162,17 @@ function releaseParkedForeignRuntimes(root, state, dependencies) {
     // at it. Reading that park as "the loop started it" and tearing it down is that same blind `down`, one Work
     // over and one run later, and what it stops may be the human's own stack. The owning Work's block is the
     // only place the two parks differ, so it is read rather than inferred from the claim.
+    //
+    // What that refusal protects is a program: something answering on these ports that nobody can prove is
+    // the loop's. When nothing answers, there is no program to protect and no ambiguity to respect — the park
+    // is a record of a question that no longer has a subject, and letting it refuse would block every other
+    // Work forever with no verb to clear it, including after the human did exactly what the refusal asked and
+    // stopped the instance themselves. So the branch is reached only when something is up that is not already
+    // this Work's own: an outstanding claim here says this run started what is answering, and there is at most
+    // one program on the fixed host ports, so the foreign park cannot be about it.
     const owning = readState(root, workId);
     if (owning && blockedOnRuntimeOwnership(owning)) {
+      if (runtimeOwner(root, state.work_id) || !isAnswering()) continue;
       return runtimeRefusal(
         state,
         `${workId} already refused to say whose program is on these ports and parked its claim to leave it alone`,
@@ -1207,7 +1219,8 @@ function ensureRuntimeReady(root, state, declaration, execute, dependencies) {
   });
   // First, before `ready` is even asked: nothing another Work parked may still be answering when this Work
   // starts trusting what answers.
-  const released = releaseParkedForeignRuntimes(root, state, dependencies);
+  const released = releaseParkedForeignRuntimes(root, state, dependencies,
+    () => call('ready', declaration.ready).status === 0);
   if (!released.ready) return released;
   // Answering green before `up` means the instance was already there — the human's own stack, or one an
   // earlier run left. The loop did not start it, so it records no ownership and will never stop it. That
