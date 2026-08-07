@@ -158,6 +158,11 @@ function workPaths(root, workId) {
     // A whole dispatch, not a state write and not a suite: it spans a provider session, so it outlives the
     // mutation lock's staleness window and starts before the verification lease exists.
     dispatchLease: path.join(directory, '.dispatching'),
+    // Not a lease: a lease says "someone is working", this says "a program is running and this Work owes it
+    // a `down`". It is written only when the loop's own `up` ran, so the record's presence is the whole
+    // answer to whether the loop may stop the instance — and it outlives the process that wrote it on
+    // purpose, because a killed loop is exactly the case that leaves an instance behind.
+    runtimeOwner: path.join(directory, 'runtime-owner.json'),
   };
 }
 
@@ -536,6 +541,7 @@ module.exports = {
   storeJsonBlob,
   updatePairRef,
   dispatchOwner,
+  processAlive,
   processStopped,
   processTree,
   signalDispatch,

@@ -11,8 +11,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
+const childProcess = require('node:child_process');
+
 const { advanceWork } = require('../scripts/lib/pair-engine');
-const { readEvents, readState } = require('../scripts/lib/pair-store');
+const { readEvents, readState, workPaths } = require('../scripts/lib/pair-store');
 const { completedSlice, greenVerification, openTestWork, providerResult } = require('./helpers/warm-work');
 
 const PROBE = 'curl -fsS http://localhost:5080/health';
@@ -46,9 +48,13 @@ function fakeRuntime({ probeStatus = 0 } = {}) {
       return { status: 0, duration_ms: 1, log_digest: 'u'.repeat(64) };
     }
     if (input.phase === 'ready') return { status: up ? 0 : 1, duration_ms: 1, log_digest: 'r'.repeat(64) };
+    if (input.phase === 'down') {
+      up = false;
+      return { status: 0, duration_ms: 1, log_digest: 'd'.repeat(64) };
+    }
     return { status: probeStatus, duration_ms: 1, log_digest: 'p'.repeat(64) };
   }
-  return { calls, runtime };
+  return { calls, runtime, isUp: () => up };
 }
 
 function scriptedProvider(extra) {
@@ -86,6 +92,16 @@ function phases(calls) {
   return calls.map(call => call.phase);
 }
 
+function ownerRecord(opened) {
+  return workPaths(opened.worktree, opened.workId).runtimeOwner;
+}
+
+// A pid that certainly existed and certainly does not now, rather than a large number guessed to be free:
+// a guess that happens to hit a live process turns this test into a flake that blames the wrong code.
+function deadPid() {
+  return childProcess.spawnSync('true').pid;
+}
+
 test('the program is started once for the Work and asked once per slice', t => {
   const opened = openProbedWork(t, { prefix: 'probeonce', workId: 'work-probe-once' });
   const runtime = fakeRuntime();
@@ -96,7 +112,7 @@ test('the program is started once for the Work and asked once per slice', t => {
   assert.equal(state.lifecycle, 'complete');
   assert.equal(phases(runtime.calls).filter(phase => phase === 'up').length, 1,
     'a second `up` would restart the human development stack in the middle of a Work');
-  assert.deepEqual(phases(runtime.calls), ['ready', 'up', 'ready', 'probe', 'ready', 'probe'],
+  assert.deepEqual(phases(runtime.calls), ['ready', 'up', 'ready', 'probe', 'ready', 'probe', 'down'],
     'ready is asked before up, polled until it answers, and asked again for the next slice instead of starting a second instance');
   assert.deepEqual(
     runtime.calls.filter(call => call.phase === 'probe').map(call => call.command),
@@ -147,6 +163,74 @@ test('no probe output is persisted', t => {
   assert.deepEqual(Object.keys(events[0]).filter(key => key.includes('output') || key === 'stdout' || key === 'stderr'), []);
   const failure = readState(opened.worktree, opened.workId).slices[0].verification_failure || '';
   assert.equal(failure.includes('PAIR_TEST_RUNTIME'), false);
+});
+
+// AC-8: the three ways a Work stops driving its program, and the one instance that must not survive any of
+// them. A stale instance is worse than no instance: it answers, and it answers for the previous code.
+test('the program is stopped when the Work completes', t => {
+  const opened = openProbedWork(t, { prefix: 'downdone', workId: 'work-down-done' });
+  const runtime = fakeRuntime();
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
+
+  const state = advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(state.lifecycle, 'complete');
+  assert.equal(phases(runtime.calls).at(-1), 'down', 'the last thing a finished Work does is stop its program');
+  assert.equal(runtime.isUp(), false);
+  const stopped = readEvents(opened.worktree, opened.workId).filter(event => event.event === 'runtime-stopped');
+  assert.equal(stopped.length, 1);
+  assert.equal(stopped[0].status, 0);
+  assert.equal(fs.existsSync(ownerRecord(opened)), false, 'a released instance leaves no claim behind');
+});
+
+test('the program is stopped when the Work blocks', t => {
+  const opened = openProbedWork(t, { prefix: 'downblock', workId: 'work-down-block' });
+  const runtime = fakeRuntime({ probeStatus: 1 });
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
+
+  const state = advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(state.lifecycle, 'blocked');
+  assert.equal(phases(runtime.calls).at(-1), 'down');
+  assert.equal(runtime.isUp(), false);
+  assert.equal(fs.existsSync(ownerRecord(opened)), false);
+});
+
+// The case no exit handler can cover: the loop was killed outright, so nothing ran on the way out and the
+// instance is still up. The claim it left names a pid that is gone — which is what the next run reads.
+test('a program left behind by a killed loop is stopped by the next run', t => {
+  const opened = openProbedWork(t, { prefix: 'downkilled', workId: 'work-down-killed' });
+  const runtime = fakeRuntime();
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
+  fs.mkdirSync(path.dirname(ownerRecord(opened)), { recursive: true });
+  fs.writeFileSync(ownerRecord(opened), JSON.stringify({
+    pid: deadPid(),
+    work_id: opened.workId,
+    worktree: opened.worktree,
+    at: new Date().toISOString(),
+  }));
+
+  advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(phases(runtime.calls)[0], 'down', 'the abandoned instance is stopped before this run asks anything');
+  const reclaimed = readEvents(opened.worktree, opened.workId).filter(event => event.event === 'runtime-reclaimed');
+  assert.equal(reclaimed.length, 1);
+});
+
+// The safety half of the same record. `ready` answering before `up` means the instance was already there —
+// the human's own development stack — and stopping it would destroy something the loop never started.
+test('a program the loop did not start is never stopped', t => {
+  const opened = openProbedWork(t, { prefix: 'downtheirs', workId: 'work-down-theirs' });
+  const runtime = fakeRuntime();
+  runtime.runtime({ phase: 'up', command: 'started-by-the-human', env: {} });
+  runtime.calls.length = 0;
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
+
+  advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.deepEqual(phases(runtime.calls).filter(phase => phase === 'up' || phase === 'down'), [],
+    'neither started nor stopped: the instance belongs to whoever brought it up');
+  assert.equal(runtime.isUp(), true);
 });
 
 // A Work whose repository never said how to start a program runs exactly as it did before this existed.
