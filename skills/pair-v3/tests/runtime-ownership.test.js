@@ -12,12 +12,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const { RUNTIME_OWNERSHIP_PRECONDITION, advanceWork, verifyActiveSlice } = require('../scripts/lib/pair-engine');
+const { RUNTIME_OWNERSHIP_PRECONDITION, advanceWork, unblockWork, verifyActiveSlice } = require('../scripts/lib/pair-engine');
 const { readEvents, readState, workPaths } = require('../scripts/lib/pair-store');
 const {
   IDENTIFIED_DECLARATION,
   fakeRuntime,
   openProbedWork,
+  ownerRecord,
   phases,
   scriptedProvider,
 } = require('./helpers/runtime-work');
@@ -133,6 +134,63 @@ test('a refusal reports what it found and names both ways forward', t => {
   assert.match(reason, /stop/i, 'the first way forward: the instance answering there goes away');
   assert.match(reason, /report/i, 'the second: the repository states how the program reports what it serves');
   assert.match(reason, /is a correction/, 'and that taking either costs no correction, which no status says');
+});
+
+// AC-5: the refusal must not itself do the thing it refused to make a decision about. `down` is a declared
+// command against whatever holds the fixed ports, not a signal at a pid, so tearing down on the way into the
+// block would stop the program the run had just declined to even ask a question of. Reachable because this
+// Work can hold an outstanding claim from a slice that did start a program, which is what makes the block's
+// lifecycle terminal and the teardown automatic.
+test('a refusal stops nothing while it cannot say what it would be stopping', t => {
+  const opened = openProbedWork(t, {
+    prefix: 'probenodown',
+    workId: 'work-probe-no-down',
+    declaration: IDENTIFIED_DECLARATION,
+  });
+  const runtime = fakeRuntime({ alreadyUp: true, serves: 'the-humans-own-checkout', identityStatus: 3 });
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
+  // An earlier slice of this Work started a program and handed it on, so a claim of its own is outstanding —
+  // and a claim is all `down` needs to run.
+  fs.mkdirSync(path.dirname(ownerRecord(opened)), { recursive: true });
+  fs.writeFileSync(ownerRecord(opened), JSON.stringify({
+    pid: null,
+    work_id: opened.workId,
+    worktree: opened.worktree,
+    at: new Date().toISOString(),
+  }));
+
+  const state = advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.equal(state.blocked_precondition, RUNTIME_OWNERSHIP_PRECONDITION);
+  assert.equal(phases(runtime.calls).includes('down'), false, 'nothing was stopped that nothing could identify');
+  assert.equal(runtime.isUp(), true);
+  assert.equal(fs.existsSync(ownerRecord(opened)), true, 'the debt stays recorded for a run that can say what it is paying');
+  assert.equal(JSON.parse(fs.readFileSync(ownerRecord(opened), 'utf8')).pid, null,
+    'and parked, so reclamation does not speak down at it blindly on the next run');
+});
+
+// AC-5: both ways forward, and only ways that work. Unblocking clears a block by recording a human decision
+// about this Work, and this block is a fact about the host — there is no ownership to waive, so unblocking
+// would resume the slice as a fresh attempt over its own uncommitted worktree and land a second block naming
+// a wrong cause, with the identity question still unasked.
+test('unblocking is refused for a refusal and names the gesture that re-asks the question', t => {
+  const opened = openProbedWork(t, {
+    prefix: 'probeunblock',
+    workId: 'work-probe-unblock',
+    declaration: IDENTIFIED_DECLARATION,
+  });
+  const runtime = fakeRuntime({ alreadyUp: true, serves: 'the-humans-own-checkout' });
+  const { dependencies } = scriptedProvider({ runtime: runtime.runtime });
+  advanceWork(opened.worktree, { runtime: 'claude', reviewPolicy: 'all' }, dependencies);
+
+  assert.throws(
+    () => unblockWork(opened.worktree, { workId: opened.workId, reason: 'I am sure that program is mine' }),
+    /pair-loop verify --slice S1/,
+    'the refusal names the free gesture instead of clearing a precondition it cannot clear',
+  );
+  const after = readState(opened.worktree, opened.workId);
+  assert.equal(after.blocked_precondition, RUNTIME_OWNERSHIP_PRECONDITION, 'the block stands rather than becoming a dirty-worktree block');
+  assert.equal(after.slices[0].status, 'blocked');
 });
 
 // AC-5, the way back: the human stopped the instance, and the gesture that resumes the slice is the free one.

@@ -282,6 +282,10 @@ test('a refused runtime names both ways forward and says the correction is untou
   assert.match(text, /\.pair\/runtime\.json/u, 'and where that declaration lives, which is not guessable');
   assert.match(text, /no correction|spends no correction/u, 'the budget is untouched, which a status cannot imply');
   assert.doesNotMatch(text, /came back red/u, 'this is not the exhausted-correction block');
+  // There is no ownership waiver to record, so unblocking clears the reason and lands the slice in a
+  // dirty-worktree block instead — the engine refuses it, and offering it here would send a human at it.
+  assert.doesNotMatch(text, /pair-loop unblock/u, 'only ways out that work are named');
+  assert.match(text, /Unblocking is not a way out/u, 'and the one that does not is ruled out rather than left to be tried');
   assert.doesNotMatch(text, /git stash/u, 'worktree advice would be noise here');
 });
 

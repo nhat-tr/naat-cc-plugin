@@ -983,8 +983,14 @@ function blockedLines(state, dirtyPaths = []) {
       `  pair-loop verify --slice ${blocked?.id || '<slice>'}`,
       'Or teach the repository to prove it: `identity` in .pair/runtime.json is a command whose output names the',
       'checkout being served. Declare or repair it, then re-verify as above.',
-      'Or decide the program answering there is sound to probe, and say why on the record:',
-      `  pair-loop unblock --reason "<whose program it is and why probing it answers for this Work>"`,
+      '',
+      // The two above are the two that exist, and this is the one block that must not name unblock as a third.
+      // There is no ownership waiver to record, so unblocking would resume the slice as a fresh attempt over an
+      // uncommitted worktree and land a dirty-worktree block instead — a second block, naming a wrong cause,
+      // with the identity question still unanswered. The engine refuses it here and says so, rather than
+      // leaving a human to discover it. Naming a way out that does not work is worse than naming two that do.
+      'Unblocking is not a way out of this one: there is no way to record "probe it anyway", so re-verification',
+      'above is the gesture, and it stays free however many times the refusal stands.',
     );
     return lines;
   }

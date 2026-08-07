@@ -225,7 +225,15 @@ function saveState(root, state, dependencies = {}) {
   writeState(root, state.work_id, state);
   // Idempotent by way of the claim: a successful `down` deletes it, so the next save of the same terminal
   // state costs one read and stops nothing. A failed one keeps it, which is what makes the stop retryable.
-  if (TERMINAL_LIFECYCLES.has(state.lifecycle)) stopRuntime(root, state, dependencies);
+  //
+  // The single exception is the block that exists because ownership could not be proven. `down` is a declared
+  // command, not a signal at a pid — it stops whatever holds those ports — so running it here would tear down
+  // the very program the run had just refused to ask a question of, and the human's own checkout is exactly
+  // what that program may be. A claim of this Work's own can be outstanding at the same time, from a slice that
+  // did start a program earlier, which is what makes this reachable rather than theoretical. The claim is left
+  // outstanding instead: the debt survives in the one place a later run reads, and it is paid by a run that can
+  // say what it is paying.
+  if (TERMINAL_LIFECYCLES.has(state.lifecycle) && !blockedOnRuntimeOwnership(state)) stopRuntime(root, state, dependencies);
   return state;
 }
 
@@ -1901,6 +1909,11 @@ function blockOnRuntimeOwnership(root, state, projected, reason, dependencies = 
     blocked_from: projected.blocked_from,
     blocked_reason: reason,
   });
+  // Parked rather than left naming this process: a claim whose pid dies with this run is reclaimed by the next
+  // one, and reclamation speaks `down` without asking identity — the same blind teardown the save below is
+  // careful not to do, arriving one run later. A parked claim is deliberately left alone, so the debt stays
+  // recorded and unpaid until a run can prove what it would be paying.
+  parkRuntime(root, state);
   return saveState(root, state, dependencies);
 }
 
@@ -3094,6 +3107,15 @@ function unblockWork(root, options = {}) {
   const context = workContext(root, state);
   if (state.lifecycle !== 'blocked') throw new Error(`Pair Work ${state.work_id} is ${state.lifecycle}, not blocked`);
   const blocked = state.slices.find(item => item.status === 'blocked');
+  // The one block unblocking cannot clear, refused before an override is recorded for it. Every other block
+  // clears by a human deciding something about this Work; this one is a fact about the host, and there is no
+  // ownership waiver for a human to record — so unblocking would clear the reason, resume the slice as a fresh
+  // attempt over its own uncommitted worktree, and land a dirty-worktree block whose recorded cause is wrong
+  // while the identity question stays unanswered. Re-verification costs nothing and is the gesture that
+  // actually re-asks it, so it is named here instead of being left for the human to find.
+  if (blockedOnRuntimeOwnership(state)) {
+    throw new Error(`Pair Work ${state.work_id} is blocked because nothing can prove which code the running program serves; unblocking records no ownership. Stop that instance or fix the declared identity command, then: pair-loop verify --slice ${blocked?.id || '<slice>'}`);
+  }
   recordHumanOverride(root, state, blocked || null, 'unblock', options.reason);
   if (blockedOnDirtyWorktree(state)) {
     const status = worktreeStatus(state.worktree);
