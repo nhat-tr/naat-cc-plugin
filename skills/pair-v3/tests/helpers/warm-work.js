@@ -48,14 +48,31 @@ const DEFAULT_SPEC_MARKDOWN = '# Spec\n\n## Acceptance Criteria\n\n- [ ] AC-1: v
 // so the Work pins the policy under test — the policy is pinned at open and never re-read afterwards.
 // `specMarkdown` is a minimal escape hatch for callers that need the specification body itself under
 // test (extra Acceptance Criteria, prose that must not leak into a projection) rather than just the slices.
-function openTestWork(t, { prefix = 'warm', workId = 'work-warm', slices = DEFAULT_SLICES, specMarkdown = DEFAULT_SPEC_MARKDOWN, config = {} } = {}) {
-  withPairConfig(t, { default_model: 'test-model', ...config });
+// `files` adds tracked files to the base commit, for a test that needs code the Review Slice never edits.
+//
+// human_in_the_loop_default is pinned true here and overridable per fixture: almost every test in this
+// suite is about a gate a human stands in, and the shipped default drives past those gates. The default
+// itself is asserted where it is decided, on humanLoopSettings.
+function openTestWork(t, {
+  prefix = 'warm',
+  workId = 'work-warm',
+  slices = DEFAULT_SLICES,
+  specMarkdown = DEFAULT_SPEC_MARKDOWN,
+  files = {},
+  config = {},
+} = {}) {
+  withPairConfig(t, { default_model: 'test-model', human_in_the_loop_default: true, ...config });
   const parent = scratchParent();
   const root = fs.mkdtempSync(path.join(parent, `${prefix}-`));
   childProcess.execFileSync('git', ['init', '-q'], { cwd: root });
   childProcess.execFileSync('git', ['config', 'user.email', 'pair@test'], { cwd: root });
   childProcess.execFileSync('git', ['config', 'user.name', 'Pair Test'], { cwd: root });
   fs.writeFileSync(path.join(root, 'value.js'), 'module.exports = 1;\n');
+  for (const [relative, contents] of Object.entries(files)) {
+    const file = path.join(root, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, contents);
+  }
   childProcess.execFileSync('git', ['add', '.'], { cwd: root });
   childProcess.execFileSync('git', ['commit', '-qm', 'base'], { cwd: root });
   const spec = path.join(parent, `${path.basename(root)}-spec.md`);

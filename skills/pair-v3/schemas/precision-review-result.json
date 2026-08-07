@@ -15,9 +15,9 @@
           "evidence": {
             "type": "object",
             "properties": {
-              "commit": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" },
+              "commit": { "type": "string", "pattern": "^[a-f0-9]{40,64}$", "maxLength": 64 },
               "path": { "type": "string", "minLength": 1, "maxLength": 240 },
-              "blob": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" },
+              "blob": { "type": "string", "pattern": "^[a-f0-9]{40,64}$", "maxLength": 64 },
               "line_start": { "type": "integer", "minimum": 1 },
               "line_end": { "type": "integer", "minimum": 1 }
             },

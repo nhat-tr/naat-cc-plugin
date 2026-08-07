@@ -12,13 +12,19 @@ const {
   advanceWork,
   amendHumanFinding,
   correctionBrief,
+  checkpointIndex,
   currentState,
   dispatchCorrectionOnSubmit,
+  dispatchNextSlice,
+  finishWork,
+  sessionIndex,
   dropHumanFindingDraft,
   forgetKnownFailure,
   humanFindingDrafts,
+  humanLoopReport,
   knownFailures,
   openWork,
+  setHumanLoop,
   reconcileAdjudication,
   recordCorrectionDirection,
   recordHumanFinding,
@@ -32,6 +38,7 @@ const {
   verifyActiveSlice,
   workContext,
 } = require('./lib/pair-engine');
+const { humanLoopDefault, inHumanLoop } = require('./lib/human-loop');
 const { EVALUATION_RESULT_LIMIT_BYTES, evaluateBank } = require('./lib/review-evaluation');
 const { feedbackForFinding, listReviewOutcomes } = require('./lib/review-evidence');
 const { resolveRuntime } = require('./lib/runtime-selection');
@@ -61,6 +68,158 @@ function evaluationSummary(result, output) {
     candidate_escapes: result.candidate.escapes,
     failed_case_count: result.failed_case_ids.length,
   };
+}
+
+function currentBranch(root) {
+  const result = childProcess.spawnSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, encoding: 'utf8' });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function clockTime(iso) {
+  return new Date(iso).toTimeString().slice(0, 8);
+}
+
+function duration(ms) {
+  const seconds = Math.round((ms || 0) / 1000);
+  return seconds >= 60 ? `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, '0')}s` : `${seconds}s`;
+}
+
+function tokens(count) {
+  return count >= 1000 ? `${(count / 1000).toFixed(1)}k` : String(count || 0);
+}
+
+// A chained run waits minutes per action and can be an hour end to end, and until it returned it printed
+// nothing at all — so a loop doing exactly what it was told looked identical to a wedged one, which is how
+// a working run came to be read as a hang. Written to stderr on purpose: stdout stays the result (status,
+// or --json for an adapter), and the commentary never has to be parsed out of it.
+function progressLine(event) {
+  const at = clockTime(event.at);
+  const slice = event.review_slice_id ? ` ${event.review_slice_id}` : '';
+  switch (event.phase) {
+    case 'provider-started':
+      return `[${at}]${slice} ${event.kind} started — ${event.runtime}/${event.model}${event.warm ? ', warm session' : ''}`;
+    case 'provider-finished':
+      return `[${at}]${slice} ${event.kind} finished — ${duration(event.duration_ms)}, ${tokens(event.output_tokens)} out,`
+        + ` ${tokens(event.context_tokens)} ctx, $${(event.cost_usd || 0).toFixed(2)}`;
+    case 'provider-failed':
+      return `[${at}]${slice} ${event.kind} FAILED — ${event.detail}`;
+    case 'provider-interrupted':
+      return `[${at}]${slice} ${event.kind} interrupted`;
+    case 'verification-started':
+      return `[${at}]${slice} verifying — ${event.command}`;
+    case 'verification-finished':
+      return `[${at}]${slice} verification ${event.status === 0 ? 'clean' : `FAILED (exit ${event.observed_status})`}`
+        + ` — ${duration(event.duration_ms)}`;
+    case 'transition':
+      return `[${at}] action ${event.actions}/${event.action_cap} → ${event.lifecycle}`
+        + (event.review_slice_id ? `, ${event.review_slice_id} ${event.status}${event.human_in_the_loop ? ' (hitl — the loop stops here)' : ''}` : '')
+        + (event.blocked_reason ? `: ${event.blocked_reason}` : '');
+    case 'run-capped':
+      return `[${at}] per-run action cap reached after ${event.actions}; run again to continue: ${event.next_action}`;
+    default:
+      return null;
+  }
+}
+
+// Trimmed rather than rotated: this is the narration of the run in flight, so what matters is that the tail
+// is complete and the file cannot grow without bound. Kept whole across runs on purpose — `tail -f` survives
+// an append and dies on a truncate, and watching across runs is exactly what a human driving a Work does.
+const PROGRESS_LOG_MAX_BYTES = 512 * 1024;
+const PROGRESS_LOG_KEEP_BYTES = 256 * 1024;
+
+function appendProgressLog(file, line) {
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    if ((fs.statSync(file, { throwIfNoEntry: false })?.size || 0) > PROGRESS_LOG_MAX_BYTES) {
+      const kept = fs.readFileSync(file, 'utf8').slice(-PROGRESS_LOG_KEEP_BYTES);
+      fs.writeFileSync(file, kept.slice(kept.indexOf('\n') + 1), { mode: 0o600 });
+    }
+    fs.appendFileSync(file, `${line}\n`, { mode: 0o600 });
+  } catch {
+    // A run must never fail for its own commentary.
+  }
+}
+
+// Every surface that can dispatch a run shares this, so progress appears wherever the loop actually moves —
+// `run`, and the human gestures that hand it the next action.
+//
+// Two sinks, because there are two kinds of watcher and stderr only serves one of them. A terminal reads it
+// as it happens; a caller that collects the process output — nvim's vim.system(argv, opts, callback) among
+// them — sees nothing until the run exits, which for a chained run is an hour of silence. The log file is
+// what makes it watchable regardless: `pair-loop progress --follow`, or any editor tailing the file.
+function runDependencies(root, options = {}) {
+  const file = progressLogFile(root, options);
+  return {
+    onProgress(event) {
+      const line = progressLine(event);
+      if (!line) return;
+      if (!options.quiet) console.error(line);
+      if (file) appendProgressLog(file, line);
+    },
+  };
+}
+
+// The same narration, derived from the append-only journal instead of the run's own commentary. This is what
+// makes `progress` answer for a run that is ALREADY in flight — one dispatched before the progress log
+// existed, or by a surface that installed no reporter. The journal is written by whatever process owns the
+// run, so it works from any terminal, at any time, with no cooperation from the run itself. What it cannot
+// have is the "started" half: an event is recorded when something finishes, so a call still in flight shows
+// as the silence after the last line rather than as a line of its own.
+const JOURNAL_NARRATION = {
+  'provider-finished': event => `${event.review_slice_id} ${event.kind} finished — ${duration(event.duration_ms)},`
+    + ` ${tokens(event.output_tokens)} out, ${tokens(event.context_tokens)} ctx, $${(event.cost_usd || 0).toFixed(2)}`,
+  'provider-failed': event => `${event.review_slice_id} ${event.kind} FAILED — ${event.error || 'no reason recorded'}`,
+  'attempt-interrupted': event => `${event.review_slice_id} interrupted by a human; nothing spent`,
+  'verification-finished': event => `${event.review_slice_id} verification`
+    + ` ${event.status === 0 ? 'clean' : `FAILED (exit ${event.observed_status ?? event.status})`} — ${duration(event.duration_ms)}`,
+  'completion-verification-finished': event => `completion verification ${event.status === 0 ? 'clean' : `FAILED (exit ${event.status})`}`
+    + ` — ${duration(event.duration_ms)}`,
+  'design-check-recorded': event => `${event.review_slice_id} Design Check recorded`,
+  'checkpoint-created': event => `${event.review_slice_id} checkpoint ${String(event.checkpoint_commit).slice(0, 12)}`
+    + ` — ${event.route}, ${event.changed_path_count} path(s)`,
+  'review-recorded': event => `${event.review_slice_id} review recorded — ${event.verdict}, ${event.finding_count} finding(s)`,
+  'autonomous-adjudication': event => `${event.review_slice_id} ${event.finding_count} finding(s) adjudicated by the loop`
+    + ' — the one bounded correction is earned',
+  'warm-session-rotated': event => `${event.review_slice_id} session rotated — ${event.reason}`,
+  'slice-accepted': event => `${event.review_slice_id} ACCEPTED — ${event.route}, ${event.correction_count} correction(s)`,
+  'dirty-worktree-block': event => `${event.review_slice_id} BLOCKED — ${event.blocked_reason}`,
+  'autonomous-run-capped': event => `per-run action cap reached after ${event.actions} action(s)`,
+  'work-completed': () => 'Work COMPLETE',
+};
+
+function journalProgressLine(event) {
+  const render = JOURNAL_NARRATION[event.event];
+  return render ? `[${clockTime(event.at)}] ${render(event)}` : null;
+}
+
+function journalProgressLines(file, limit = 60) {
+  const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/u).filter(Boolean)
+    .map(line => { try { return journalProgressLine(JSON.parse(line)); } catch { return null; } })
+    .filter(Boolean);
+  return lines.slice(-limit);
+}
+
+function followFile(file, transform) {
+  const child = childProcess.spawn('tail', ['-n', '+1', '-F', file], { stdio: ['ignore', 'pipe', 'inherit'] });
+  let buffered = '';
+  child.stdout.on('data', chunk => {
+    buffered += chunk;
+    const lines = buffered.split('\n');
+    buffered = lines.pop();
+    for (const line of lines) {
+      const rendered = transform(line);
+      if (rendered) console.log(rendered);
+    }
+  });
+}
+
+function progressLogFile(root, options) {
+  try {
+    const workId = options.workId || readCurrentWork(root)?.work_id;
+    return workId ? workPaths(root, workId).progressLog : null;
+  } catch {
+    return null;
+  }
 }
 
 function valueAfter(argv, index, flag) {
@@ -113,11 +272,20 @@ function parseArgs(argv) {
     else if (arg === '--impact') options.impact = valueAfter(argv, index++, arg);
     else if (arg === '--pass-condition') options.passCondition = valueAfter(argv, index++, arg);
     else if (arg === '--index') options.index = Number(valueAfter(argv, index++, arg));
+    // Two spellings of one decision, because the verb is `hitl`: naming a slice is the request, and --off is
+    // how you take it back.
+    else if (arg === '--hitl') options.humanLoop = true;
+    else if (arg === '--off' || arg === '--auto') options.humanLoop = false;
+    else if (arg === '--all') options.allSlices = true;
     else if (arg === '--override') options.override = true;
     else if (arg === '--submit') options.submit = true;
     else if (arg === '--drop') options.drop = true;
     else if (arg === '--allow-same-anchor') options.allowSameAnchor = true;
     else if (arg === '--allow-incomplete') options.allowIncomplete = true;
+    // Progress goes to stderr and is on by default, because a silent hour is the failure it exists to fix.
+    // --quiet is for a caller that treats any stderr output as a failed command.
+    else if (arg === '--quiet') options.quiet = true;
+    else if (arg === '--follow' || arg === '-f') options.follow = true;
     else if (arg === '--json') options.json = true;
     else if (arg === '--status') options.command = 'status';
     else if (arg === '--digest') options.command = 'digest';
@@ -149,9 +317,14 @@ function nextCommand(state, next) {
     // Two roads reach correction-ready and they need opposite commands. A deterministic failure left
     // no checkpoint, so re-verifying can clear it for free. A human-valid finding already has a green
     // checkpoint, so re-verifying proves nothing and the correction is the only way forward.
+    // A red gate has a third road, and it is the only one that reaches review when the failures are not this
+    // Work's: declare them. Naming just the two made the state read as a dead end — "nothing to correct, and
+    // cant transition to next state as well" — because there is no backward transition to review at all.
     case 'correction-ready':
       return next.verification_failure
-        ? `pair-loop verify --slice ${next.id}   (re-verify first: it spends no correction. pair-loop run spends the one correction.)`
+        ? `pair-loop verify --slice ${next.id}   (re-verify first: it spends no correction, and a clean run checkpoints the slice straight into review.`
+          + ' Still red and this Work did not cause it? pair-loop baseline add --test <id> for every failure, then verify again.'
+          + ' pair-loop run spends the one correction.)'
         : `pair-loop run   (spends the one correction on the valid finding(s); pair-loop direct --text "<intent>" first to steer it)`;
     // Only reached when the findings cannot be resolved from disk; adjudicationLines below replaces this
     // with one paste-ready line per finding, because `<id>` is a 24-hex content address.
@@ -162,6 +335,25 @@ function nextCommand(state, next) {
     default:
       return 'pair-loop run';
   }
+}
+
+// A complete Work had no command at all: nextCommand returns null for it, so the surface that has named the
+// exact next command at every other state went silent at the one state where a human has the most left to do
+// — land the branch, remove the worktree that still holds it checked out, and leave the repository able to
+// open the next Work. Asked live, verbatim: "what should i do, how to correctly complete it".
+function completionLines(state, landedInto) {
+  if (state.lifecycle !== 'complete') return [];
+  return [
+    '',
+    'This Work is complete. Pair never merges, so two things are left and both are yours:',
+    `  1. Land it:   git merge --no-ff ${state.branch}      (from this checkout — or cherry-pick ${String(state.base_commit).slice(0, 12)}..${String(state.head_commit).slice(0, 12)})`,
+    '  2. Tidy up:   pair-loop finish',
+    `finish removes the linked worktree — which is what otherwise keeps ${state.branch} checked out and blocks`,
+    'deleting or checking out that branch later — and clears the current-Work selection so the next open starts',
+    `clean. It refuses until the branch has reached ${landedInto || 'this branch'}, and --force overrides that.`,
+    'The branch and refs/pair/<work-id>/* survive it: pair-loop checkpoints and show still read every diff',
+    'afterwards, from this checkout.',
+  ];
 }
 
 // nextCommand answers "what do I type"; this answers "where am I and what comes after". Naming only
@@ -442,6 +634,10 @@ function dispatchLines(owner) {
     return [
       `A run of this Work has been in flight since ${owner.at} (pid ${owner.pid}).`,
       '  Everything below is the state from before it started. pair-loop dispatch status shows its processes.',
+      // The question this answers was asked live — "where do i suppose to see these progress" — by a human
+      // whose driver collects the run's output and renders it only on exit. A run in flight is exactly when
+      // that question occurs, so the answer belongs here rather than in a document.
+      '  pair-loop progress --follow shows what it is doing right now, action by action.',
       '  pair-loop interrupt stops the attempt without spending a correction; then steer it and run again.',
       '',
     ];
@@ -455,11 +651,107 @@ function dispatchLines(owner) {
   ];
 }
 
+// Who is driving, on the line above the state a human is reading. Without it, "why did that just accept
+// itself" and "why is it waiting for me again" are both unanswerable from status — and they are the two
+// questions this flag creates.
+function loopLines(state) {
+  const marked = (state.slices || []).filter(slice => slice.status !== 'accepted' && inHumanLoop(state, slice)).map(slice => slice.id);
+  if (humanLoopDefault(state)) {
+    const autonomous = (state.slices || []).filter(slice => slice.status !== 'accepted' && !inHumanLoop(state, slice)).map(slice => slice.id);
+    return [`Loop: you are in it — every Review Slice stops for you${autonomous.length > 0 ? `, except ${autonomous.join(', ')}` : ''}`];
+  }
+  return [`Loop: autonomous — one run carries a slice to acceptance${marked.length > 0 ? `; you are in ${marked.join(', ')}` : ''}`];
+}
+
+// A run that took several actions did several things, and status prints one state. Saying how many keeps a
+// chained run from reading as a single step that mysteriously finished the whole slice.
+function autonomousRunLines(state) {
+  if (!state.pair_autonomous_actions) return [];
+  const capped = state.pair_autonomous_stopped === 'action-cap';
+  return [
+    `This run took ${state.pair_autonomous_actions} actions without stopping${capped ? ' and hit its per-run cap' : ''}.`,
+    ...(capped ? ['The next action is named below and nothing is waiting on you: pair-loop run continues from there.'] : []),
+    '',
+  ];
+}
+
 function warmSessionLines(next) {
   const warm = next?.warm_session;
   if (!warm?.session_id) return [];
   const steering = next.steering_bytes ? `; ${next.steering_bytes} bytes of human steering waiting` : '';
   return [`Session: warm, ${warm.calls} call(s), ~${warm.context_tokens} tokens of context${steering}`];
+}
+
+function printCheckpointIndex(index) {
+  const width = Math.max(...index.slices.map(slice => slice.id.length), 12) + 2;
+  return [
+    `Work ${index.work_id} (${index.lifecycle}) on ${index.branch}`,
+    index.worktree_exists
+      ? `Reading from the Pair worktree: ${index.read_root}`
+      : `The Pair worktree is gone; every commit below reads from ${index.read_root}`,
+    '',
+    ...index.slices.flatMap(slice => {
+      const head = `  ${slice.id.padEnd(width)}${slice.status}`
+        + (slice.route ? `  ${slice.route}` : '')
+        + (slice.correction_count ? `  ${slice.correction_count} correction(s)` : '')
+        + (slice.human_in_the_loop ? '  hitl' : '');
+      if (!slice.checkpoint_commit) {
+        return [head, `  ${' '.repeat(width)}no checkpoint${slice.attempt_commits.length > 0 ? `; ${slice.attempt_commits.length} unverified attempt(s)` : ''}`];
+      }
+      return [
+        head,
+        `  ${' '.repeat(width)}git -C ${index.read_root} diff ${slice.base_commit?.slice(0, 12)} ${slice.checkpoint_commit.slice(0, 12)}`,
+        ...(slice.prior_checkpoint_commit
+          ? [`  ${' '.repeat(width)}git -C ${index.read_root} diff ${slice.prior_checkpoint_commit.slice(0, 12)} ${slice.checkpoint_commit.slice(0, 12)}   (the correction alone)`]
+          : []),
+      ];
+    }),
+    '',
+    'pair-loop show --slice <id> assembles one slice with its Design Check, findings and verification.',
+    'pair-loop checkpoints --json feeds an editor picker; every commit is reachable from the primary checkout.',
+  ];
+}
+
+function finishLines(finished) {
+  return [
+    `Pair Work ${finished.work_id} finished.`,
+    finished.landed
+      ? `  ${finished.branch} is already in ${finished.landed_into}.`
+      : `  ${finished.branch} was NOT landed anywhere — finished with --force, so the branch still holds it.`,
+    finished.worktree_removed
+      ? `  Linked worktree removed: ${finished.worktree}`
+      : `  Linked worktree was already gone: ${finished.worktree}`,
+    '',
+    'What survives, on purpose:',
+    `  the branch ${finished.branch}, and refs/pair/${finished.work_id}/* — base, every checkpoint, reviewed`,
+    '  evidence, and completion. The review history stays readable after the worktree is gone:',
+    `  pair-loop checkpoints --work ${finished.work_id}   and   pair-loop show --work ${finished.work_id} --slice <id>`,
+    '',
+    'Nothing blocks the next Work: no worktree holds that branch checked out, and this repository has no',
+    'current Work selected, so the next pair-loop open starts clean.',
+    ...(finished.landed ? [`  ${finished.branch} is merged, so git branch -d ${finished.branch} is safe whenever you want it gone.`] : []),
+  ];
+}
+
+function printHumanLoop(report, json = false) {
+  if (json) {
+    console.log(JSON.stringify(report, null, 2));
+    return;
+  }
+  // Measured, not guessed: real Review Slice ids are sentences ("S-10-verification-gate"), and a fixed
+  // column ran the id straight into the status.
+  const idWidth = Math.max(...report.slices.map(slice => slice.id.length), 12) + 2;
+  console.log([
+    report.default_human_in_the_loop
+      ? `Work ${report.work_id}: you are in every loop by default`
+      : `Work ${report.work_id}: autonomous by default, up to ${report.actions_per_run} action(s) per run`,
+    ...report.slices.map(slice => `  ${(slice.human_in_the_loop ? 'hitl' : 'auto').padEnd(6)}${slice.id.padEnd(idWidth)}${slice.status}${slice.marked ? '  (marked)' : ''}`),
+    '',
+    'pair-loop hitl --slice <id>          stand in that slice: adjudicate its findings, accept its checkpoint,',
+    '                                     one model action per run',
+    'pair-loop hitl --slice <id> --off    hand that slice back to the loop',
+    'pair-loop hitl --all [--off]         the whole Work, clearing every per-slice mark',
+  ].join('\n'));
 }
 
 function printStatus(state, json = false, root = null) {
@@ -491,11 +783,22 @@ function printStatus(state, json = false, root = null) {
         '',
       ]
       : []),
+    // Set by a run a human stopped. Without it the run reads as one that simply did nothing, and the edits
+    // the attempt already made are sitting in the worktree waiting to be picked up.
+    ...(state.pair_transition === 'interrupted'
+      ? [
+        'You interrupted this run. No correction was spent and nothing is blocked; the edits the attempt made',
+        'are still in the worktree. pair-loop steer --text "<direction>" then run again, or just run again.',
+        '',
+      ]
+      : []),
+    ...autonomousRunLines(state),
     `Pair ${state.lifecycle}`,
     `Work: ${state.work_id}`,
     `Branch: ${state.branch}`,
     `Worktree: ${state.worktree}`,
-    `Review Slice: ${next?.id || 'none'} (${next?.status || 'none'})`,
+    ...loopLines(state),
+    `Review Slice: ${next?.id || 'none'} (${next?.status || 'none'})${next && inHumanLoop(state, next) ? ' — hitl' : ''}`,
     `Head: ${state.head_commit}`,
     // Which provider a run would actually use, before it uses one. This was only discoverable after the
     // fact from a Review Outcome's reviewer.runtime, so a preference that failed to apply — an env var that
@@ -510,6 +813,7 @@ function printStatus(state, json = false, root = null) {
     ...(baseline.length > 0 ? [`Known Failure Baseline: ${baseline.length} test(s) declared pre-existing`] : []),
     ...(adjudication ? ['', ...adjudicationLines(next.id, adjudication)] : []),
     ...(state.lifecycle === 'blocked' ? blockedLines(state, dirtyWorktreePaths(state)) : []),
+    ...completionLines(state, root ? currentBranch(root) : null),
     ...failedRunLines(state),
     ...draftLines(drafts),
     '',
@@ -519,7 +823,24 @@ function printStatus(state, json = false, root = null) {
 
 // Failing test identities are printed verbatim: they are what `baseline add --test` consumes, and a
 // summarised or truncated identity cannot be copied into the declaration that exempts it.
-function printVerification(report) {
+// A red gate has three roads out and only two were ever named: re-verify, correct, or declare that the
+// failures are not this Work's. Asked live, twice: "how to move back one step/state, so that the pair-loop can
+// do review again … currently in correction state but nothing to correct, and cant transition to next state as
+// well". There is no backward transition — review needs a checkpoint and a checkpoint needs a green gate — so
+// the third road IS the way to review, and a surface that never mentions it turns the state into a dead end.
+function baselineInvitationLines(report) {
+  const owned = report.introduced_failing_tests.length > 0 ? report.introduced_failing_tests : report.failing_tests;
+  if (report.status === 0 || owned.length === 0) return [];
+  return [
+    `Or declare them pre-existing, if this Work did not cause them. The gate turns only when ALL ${owned.length}`,
+    'are declared — applyKnownFailureBaseline exempts nothing while one undeclared failure remains, so a',
+    'partial declaration leaves the gate exactly as red. Then re-verify, which checkpoints the slice and',
+    'sends it to review without spending the correction.',
+    ...owned.map(test => `  pair-loop baseline add --test ${test} --reason "<evidence it fails without this Work>"`),
+  ];
+}
+
+function verificationLines(report) {
   const exempted = report.status === 0 && report.baselined_failing_tests.length > 0;
   const lines = [
     `Verification: ${report.status === 0 ? 'clean' : 'FAILED'}`
@@ -545,7 +866,12 @@ function printVerification(report) {
   if (report.status === 0 && !report.checkpoint_created && report.clears_deterministic_failure === false) {
     lines.push('This Review Slice already has a green checkpoint; it is waiting on a correction, not on verification. Run pair-loop run.');
   }
-  console.log(lines.join('\n'));
+  lines.push(...baselineInvitationLines(report));
+  return lines;
+}
+
+function printVerification(report) {
+  console.log(verificationLines(report).join('\n'));
 }
 
 function printBaseline(entries, json = false) {
@@ -577,10 +903,16 @@ function newRanges(hunks) {
 }
 
 function correctionLines(finding) {
+  // Raised after the last correction ran, so no correction has attempted it — which is a fact about the
+  // order of events, not a verdict on the finding. Saying "cannot have been addressed" here was read, live,
+  // as the loop rejecting a finding that its very next correction went on to act on.
+  if (finding.awaiting_correction) {
+    return ['    correction:     none yet — you raised this after the last correction ran, so the next one carries it'];
+  }
   const correction = finding.correction;
   if (!correction) return [];
   if (!correction.file_changed) {
-    return ['    correction:     DID NOT open this file — this finding cannot have been addressed'];
+    return ['    correction:     did not open this file — nothing here addresses your anchor'];
   }
   const attributed = [...correction.overlapping_hunks, ...correction.near_hunks];
   if (attributed.length === 0) {
@@ -633,6 +965,36 @@ function blockedLines(state, dirtyPaths = []) {
     // is the one state that names none. The exhausted correction is the likeliest block in the whole loop —
     // the budget is one deep, so any second valid finding lands here — and it has two real ways out, neither
     // of which is guessable from "human correction required".
+    // A red gate after a correction is the other block the loop reaches on its own, and it had no branch at
+    // all: it fell through to "clearing a block is a recorded human decision", which names unblock and
+    // nothing else. Its way out is not the valid-finding way out — re-verification is free and decides
+    // whether there is a defect here at all — and correction_count is the wrong test for "the correction is
+    // spent", because a correction whose verification failed never increments it. Observed live on S-07.
+    if (blocked && blocked.verification && blocked.verification.status !== 0) {
+      const failing = blocked.verification.introduced_failing_tests || blocked.verification.failing_tests || [];
+      const total = blocked.verification.failing_test_count ?? failing.length;
+      lines.push(
+        'The correction ran and its verification came back red, so the loop stopped rather than spend another.',
+        ...(failing.length > 0
+          ? [
+            `${total} failing test(s)${total > failing.length ? `, first ${failing.length}` : ''}:`,
+            ...failing.map(test => `  ${test}`),
+          ]
+          : ['Which tests failed was not recorded with this checkpoint; the re-verification below names them.']),
+        '',
+        'An exit status cannot say whether this slice caused the failure. Re-verification is deterministic and',
+        'spends no correction, so it is the first move and it costs nothing:',
+        `  pair-loop verify --slice ${blocked.id}`,
+        'Clean, or red for reasons this Work did not cause? Declare those, then verify again:',
+        `  pair-loop baseline add --test <test-id> --reason "<evidence it fails without this Work>"`,
+        'A real defect the retry should fix? Grant one more bounded correction, and steer it in the same breath:',
+        `  pair-loop unblock --reason "<what re-verification showed>"   (resumes ${blocked.id} at correction-ready)`,
+        `  pair-loop direct --text "<what to do differently>"`,
+        'The session\'s own work is readable meanwhile — the correction produced an attempt, not a checkpoint:',
+        `  pair-loop show --slice ${blocked.id}`,
+      );
+      return lines;
+    }
     if (blocked && blocked.correction_count >= 1 && blocked.review_outcome_id) {
       lines.push(
         'The one bounded correction is spent and a finding is still dispositioned valid. Nothing here is lost:',
@@ -679,11 +1041,27 @@ function blockedLines(state, dirtyPaths = []) {
 // that has both: it printed `git diff <base> null` and closed by naming `pair-loop accept`, which refuses
 // with "not awaiting human acceptance". Two commands that cannot run, offered to someone who came here to
 // read a document. What exists is what gets named.
-function evidenceDiffLine(evidence, short) {
-  if (!evidence.checkpoint_commit) {
-    return 'Whole slice:     no checkpoint yet — this Review Slice has not committed one, so there is no diff to read.';
+// A red Review Slice has no checkpoint and still has work to read. Naming the attempt is the difference
+// between "there is no diff" — which sent a human to hunt a clean worktree — and the two commands that
+// actually show what the last session wrote. The wording says unverified every time it is offered, because
+// an attempt is exactly a checkpoint that has not earned the name.
+function evidenceDiffLines(evidence, short) {
+  if (evidence.checkpoint_commit) {
+    return [`Whole slice:     git -C ${evidence.read_root} diff ${short(evidence.base_commit)} ${short(evidence.checkpoint_commit)}`];
   }
-  return `Whole slice:     git -C ${evidence.worktree} diff ${short(evidence.base_commit)} ${short(evidence.checkpoint_commit)}`;
+  if (!evidence.attempt_commit) {
+    return ['Whole slice:     nothing committed and nothing attempted yet, so there is no diff to read.'];
+  }
+  const lines = [
+    `Whole slice:     git -C ${evidence.read_root} diff ${short(evidence.base_commit)} ${short(evidence.attempt_commit)}`,
+    '  Unverified attempt, not a checkpoint: its verification is red, so nothing is committed to the branch',
+    '  and it cannot be accepted. Read it, and raise findings against it, exactly as you would a checkpoint.',
+  ];
+  if (evidence.prior_attempt_commit) {
+    lines.push(`Attempt only:    git -C ${evidence.read_root} diff ${short(evidence.prior_attempt_commit)} ${short(evidence.attempt_commit)}`);
+    lines.push('  What the last session changed on its own, which the whole-slice diff above cannot isolate.');
+  }
+  return lines;
 }
 
 function evidenceClosingLines(evidence) {
@@ -693,7 +1071,12 @@ function evidenceClosingLines(evidence) {
   if (!evidence.checkpoint_commit) {
     // acceptSlice records checkpoint_commit, so accepting here would record an acceptance no diff backs —
     // structurally refused, not policy. Naming it would be naming the one command guaranteed to fail.
-    return ['', `Nothing to accept yet: ${evidence.review_slice_id} has no checkpoint. pair-loop run is what produces one.`];
+    // An attempt does not change that, so what it CAN do is named instead: re-verification is the only
+    // route from a red attempt to a checkpoint, and it spends no correction.
+    return evidence.attempt_commit
+      ? ['', `Nothing to accept yet: ${evidence.review_slice_id} has an unverified attempt, not a checkpoint.`,
+        `  pair-loop verify --slice ${evidence.review_slice_id}   (green promotes the attempt to a checkpoint and spends no correction)`]
+      : ['', `Nothing to accept yet: ${evidence.review_slice_id} has no checkpoint. pair-loop run is what produces one.`];
   }
   return [
     '',
@@ -711,10 +1094,10 @@ function printEvidence(evidence) {
     'Acceptance Criteria:',
     ...evidence.acceptance_criteria.map(item => `  ${item.id}: ${item.text}`),
     '',
-    evidenceDiffLine(evidence, short),
+    ...evidenceDiffLines(evidence, short),
   ];
   if (evidence.prior_checkpoint_commit) {
-    lines.push(`Correction only: git -C ${evidence.worktree} diff ${short(evidence.prior_checkpoint_commit)} ${short(evidence.checkpoint_commit)}`);
+    lines.push(`Correction only: git -C ${evidence.read_root} diff ${short(evidence.prior_checkpoint_commit)} ${short(evidence.checkpoint_commit)}`);
     const shape = evidence.correction_shape;
     if (shape) {
       lines.push(`  That correction changed ${shape.file_count} file(s), ${shape.hunk_count} hunk(s), +${shape.lines_added}/-${shape.lines_removed}.`);
@@ -768,9 +1151,15 @@ function printDraft(sliceId, findings) {
 function help() {
   console.log(`Pair Evidence-at-Commit Loop
 
-  pair-loop open --work <id> [--spec .pair/spec.md] [--manifest .pair/review-slices.json]
-  pair-loop run [--runtime auto] [--review-policy architecture|sample|all|off]
+  pair-loop open --work <id> [--spec .pair/spec.md] [--manifest .pair/review-slices.json] [--hitl]
+                                                  (--hitl opens a Work you drive yourself, gate by gate)
+  pair-loop run [--runtime auto] [--review-policy architecture|sample|all|off] [--quiet]
+                                                  (progress goes to stderr as each action starts and ends;
+                                                   --quiet silences it and leaves stdout unchanged)
   pair-loop status [--json]
+  pair-loop progress [--follow]                     (the running commentary of the dispatch in flight:
+                                                     every provider call and verification as it starts and
+                                                     ends. --follow watches a run that is already going)
   pair-loop digest                                 (compact Work orientation — slices, ACs, next command — without reading spec.md)
   pair-loop explain [<state>]                       (what each Review Slice state is for, and why the arc skips most of them)
   pair-loop show [--slice <id>] [--json]
@@ -778,6 +1167,8 @@ function help() {
   pair-loop baseline list [--json]
   pair-loop baseline add --test <test-id> --reason <evidence>
   pair-loop baseline remove --test <test-id>
+  pair-loop hitl [--slice <id>] [--off] [--all] [--json]
+                                                  (which Review Slices stop for you; bare hitl reports)
   pair-loop accept --slice <id> [--override --reason <evidence>]
   pair-loop finding --slice <id> --file <path> --line <n> --text <what is wrong>
                                  [--pass-condition <observable state>] [--severity BLOCKER|MAJOR]
@@ -797,13 +1188,23 @@ function help() {
   pair-loop reconcile [--slice <id>]               (re-derives status from recorded Review Feedback)
   pair-loop dispatch status|pause|continue|stop     (control the run that is in flight)
   pair-loop brief [--slice <id>] [--json]          (what the correcting session will be told, before it is)
+  pair-loop checkpoints [--work <id>] [--json]      (every slice's commit pair, readable from this checkout
+                                                     and after the worktree is removed)
+  pair-loop sessions [--work <id>] [--json]         (every provider session of every Work, newest first,
+                                                     with its stream log where one exists)
+  pair-loop finish [--force] [--json]               (after landing the branch: removes the linked worktree
+                                                     and clears the current-Work selection; branch and refs
+                                                     survive)
   pair-loop hydrate [--submodule <path> ...]
   pair-loop remove-worktree [--allow-incomplete]
   pair-loop evaluate --bank <review-evaluation-bank.json>
   pair-loop guidance propose --feedback <id,...> --scope <tag,...> --rule <text> --evaluation <result.json>
   pair-loop guidance approve|reject --proposal <id> --reason <text>
 
-Bare pair-loop means run. Runtime Work/spec/review evidence stays in Git common directory; product branch receives code only.
+Bare pair-loop means run. A run carries an unmarked Review Slice from implementation through review to
+acceptance without stopping; hitl marks the slices you want to stand in, and those keep every gate — one
+model action per run, findings you adjudicate, a checkpoint you accept.
+Runtime Work/spec/review evidence stays in Git common directory; product branch receives code only.
 show assembles the checkpoint diffs, Design Check, Correction Direction, and adjudicated findings a human acceptance rests on.
 verify re-runs the declared verification and spends no correction; at correction-ready a clean run checkpoints the slice.
 baseline declares a test as already failing before this Work, so its failure never counts as this Work's failure.
@@ -834,8 +1235,41 @@ function main(argv = process.argv.slice(2)) {
       printStatus(opened.state, options.json, root);
       return;
     }
+    // Where to watch a run that is already going, for a human whose driver collects the process output and
+    // shows it only when it exits. --follow is the whole point: the file is appended to as the loop moves.
+    if (options.command === 'progress') {
+      const state = selectedState(root, options);
+      const log = progressLogFile(root, options);
+      // The run's own commentary when it left one, and the journal when it did not — a run already in flight
+      // when this existed, or one dispatched by a surface that installs no reporter, still has to be
+      // watchable. Neither source is a substitute for the other: the log has the "started" half.
+      const source = log && fs.existsSync(log)
+        ? { file: log, transform: line => line, kind: 'run commentary' }
+        : { file: workPaths(root, state.work_id).events, transform: line => { try { return journalProgressLine(JSON.parse(line)); } catch { return null; } }, kind: 'journal' };
+      if (!fs.existsSync(source.file)) {
+        console.log('Nothing has run for this Work yet. Progress is written as a run moves; start one with pair-loop run.');
+        return;
+      }
+      const owner = dispatchOwner(root, state.work_id);
+      console.log(owner
+        ? `A run has been in flight since ${owner.at} (pid ${owner.pid}). Reading its ${source.kind}:\n`
+        : `No run is in flight. Reading the last of this Work's ${source.kind}:\n`);
+      if (options.follow) {
+        followFile(source.file, source.transform);
+        return;
+      }
+      console.log((source.kind === 'journal'
+        ? journalProgressLines(source.file)
+        : fs.readFileSync(source.file, 'utf8').split(/\r?\n/u).filter(Boolean).slice(-60)).join('\n'));
+      console.log(`\n${source.file}`);
+      console.log('pair-loop progress --follow watches it as the loop moves.');
+      return;
+    }
     if (options.command === 'run') {
-      printStatus(advanceWork(root, options), options.json, root);
+      // A header, so a log read later can tell one run's narration from the next.
+      const file = progressLogFile(root, options);
+      if (file && !options.quiet) appendProgressLog(file, `── run dispatched ${new Date().toISOString()}`);
+      printStatus(advanceWork(root, options, runDependencies(root, options)), options.json, root);
       return;
     }
     if (options.command === 'status') {
@@ -856,7 +1290,7 @@ function main(argv = process.argv.slice(2)) {
       return;
     }
     if (options.command === 'verify') {
-      const { report, state } = verifyActiveSlice(root, options);
+      const { report, state } = verifyActiveSlice(root, options, runDependencies(root, options));
       if (options.json) {
         console.log(JSON.stringify(report, null, 2));
         return;
@@ -882,9 +1316,32 @@ function main(argv = process.argv.slice(2)) {
       }
       throw new Error('baseline requires list, add, or remove');
     }
+    // Which loops a human stands in. Bare `hitl` reports; naming a target changes it. The report is printed
+    // after the change so the answer to "what did that do" is the whole picture, not an acknowledgement.
+    if (options.command === 'hitl') {
+      const changing = options.humanLoop !== undefined || options.sliceId || options.allSlices;
+      const state = changing ? setHumanLoop(root, options) : selectedState(root, options);
+      printHumanLoop(humanLoopReport(root, options), options.json);
+      if (changing && options.humanLoop === false && state.lifecycle === 'awaiting-human') {
+        console.log([
+          '',
+          'This Review Slice is already parked at a human gate, and the mark decides the gates it meets from',
+          'here on rather than the one it is standing in — handing it to the loop must not accept a checkpoint',
+          'nobody has read. pair-loop status names the gesture that clears it.',
+        ].join('\n'));
+      }
+      return;
+    }
     if (options.command === 'accept') {
       if (!options.sliceId) throw new Error('accept requires --slice');
-      printStatus(acceptHumanReview(root, options), options.json, root);
+      acceptHumanReview(root, options);
+      // The acceptance IS the input. A Work that drives itself must not park on the next slice waiting to
+      // be told to start it — that was the whole gesture this change exists to remove.
+      const dispatched = dispatchNextSlice(root, options, runDependencies(root, options));
+      if (dispatched.dispatched && !options.json) {
+        console.log(`The loop took ${dispatched.review_slice_id} on this acceptance. Mark a slice hitl to be asked first.`);
+      }
+      printStatus(dispatched.state, options.json, root);
       return;
     }
     // The human half of review: raise your own finding against the checkpoint you read yourself, and it
@@ -898,7 +1355,7 @@ function main(argv = process.argv.slice(2)) {
         for (const finding of recorded.outcome.findings) console.log(`  ${finding.finding_id}  ${finding.severity}  ${finding.claim}`);
         // The submit IS the input, so the correction runs on it. Said out loud because a gesture that
         // silently spends the one correction is worse than one that asks.
-        const dispatched = dispatchCorrectionOnSubmit(root, { ...options, sliceId: recorded.outcome.review_slice_id });
+        const dispatched = dispatchCorrectionOnSubmit(root, { ...options, sliceId: recorded.outcome.review_slice_id }, runDependencies(root, options));
         if (dispatched.dispatched) console.log('The correction ran on this submission. Set dispatch_correction_on_submit: false in ~/.config/pair/config.json to keep the explicit run.');
         printStatus(dispatched.state, options.json, root);
         return;
@@ -1011,7 +1468,7 @@ function main(argv = process.argv.slice(2)) {
     // bounded to one correction and not reflowed, and it dispatches immediately when the Work is ready.
     if (options.command === 'steer') {
       if (!options.text) throw new Error('steer requires --text');
-      const steered = steerWarmSession(root, options);
+      const steered = steerWarmSession(root, options, runDependencies(root, options));
       console.log(`Steering recorded for ${steered.review_slice_id}.`);
       // Said plainly, because this gesture spends a session. Reading "recorded" and discovering
       // afterwards that a full coding session ran on it is the worst version of this command.
@@ -1030,9 +1487,40 @@ function main(argv = process.argv.slice(2)) {
       adjudicateFinding(root, options);
       // Closing the last finding on a valid verdict IS the instruction to fix it. Dispatched here, at the
       // gesture, rather than inside the reducer: recording a row must never spend a model session.
-      const dispatched = dispatchCorrectionOnSubmit(root, options);
+      const dispatched = dispatchCorrectionOnSubmit(root, options, runDependencies(root, options));
       if (dispatched.dispatched) console.log('That closed adjudication with a valid finding, so the correction ran on it.\n');
       printStatus(dispatched.state, options.json, root);
+      return;
+    }
+    // Every slice's commit pair, readable from the primary checkout and after the worktree is gone. This is
+    // the browse-the-finished-work view: no diffing here, just the commits to diff, so an editor can render
+    // its own picker over them.
+    if (options.command === 'checkpoints') {
+      const index = checkpointIndex(root, options);
+      if (options.json) { console.log(JSON.stringify(index, null, 2)); return; }
+      console.log(printCheckpointIndex(index).join('\n'));
+      return;
+    }
+    // Every provider session across every Work, running or long finished.
+    if (options.command === 'sessions') {
+      // Every Work unless one is named: the question is "show me the sessions", and narrowing is the
+      // exception rather than something to ask for with a flag.
+      const sessions = sessionIndex(root, { ...options, allWorks: !options.workId });
+      if (options.json) { console.log(JSON.stringify(sessions, null, 2)); return; }
+      if (sessions.length === 0) { console.log('No provider session has been recorded in this repository yet.'); return; }
+      for (const session of sessions) {
+        console.log(`${session.at}  ${session.work_id}  ${session.review_slice_id}  ${session.kind}`
+          + `  ${session.runtime}/${session.model}  ${duration(session.duration_ms)}  $${session.cost_usd.toFixed(2)}`
+          + `  ${session.session_id}${session.stream_log ? '  [stream log]' : ''}`);
+      }
+      return;
+    }
+    // The tidy-up. Refuses rather than surprises: unfinished Work, or a branch that has reached nothing, are
+    // both named with the command that resolves them.
+    if (options.command === 'finish') {
+      const finished = finishWork(root, options);
+      if (options.json) { console.log(JSON.stringify(finished, null, 2)); return; }
+      console.log(finishLines(finished).join('\n'));
       return;
     }
     if (options.command === 'hydrate') {
@@ -1093,4 +1581,4 @@ function main(argv = process.argv.slice(2)) {
 
 if (require.main === module) main();
 
-module.exports = { SLICE_ARC, adjudicationLines, blockedLines, digestLines, dispatchLines, evaluationSummary, evidenceClosingLines, evidenceDiffLine, explainLines, failedRunLines, main, nextCommand, orientationLines, parseArgs, printBaseline, printEvidence, printStatus, printVerification, workIdFromSpec };
+module.exports = { SLICE_ARC, adjudicationLines, blockedLines, digestLines, dispatchLines, evaluationSummary, evidenceClosingLines, evidenceDiffLines, explainLines, failedRunLines, loopLines, main, nextCommand, orientationLines, parseArgs, printBaseline, printEvidence, printStatus, printVerification, progressLine, runDependencies, verificationLines, workIdFromSpec };

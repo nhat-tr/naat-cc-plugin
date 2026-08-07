@@ -5,7 +5,7 @@ const MANIFEST_SCHEMA = 1;
 const MAX_MANIFEST_BYTES = 16 * 1024;
 const MAX_SLICE_BYTES = 1400;
 const MANIFEST_KEYS = new Set(['schema', 'work_id', 'slices']);
-const SLICE_KEYS = new Set(['id', 'acceptance_criteria', 'outcome', 'depends_on', 'verify']);
+const SLICE_KEYS = new Set(['id', 'acceptance_criteria', 'outcome', 'depends_on', 'verify', 'hitl']);
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
@@ -94,12 +94,19 @@ function validateManifest(manifest, spec, expectedWorkId = null) {
     if (!verify || verify.length > 1000 || /[\r\n\0]/u.test(verify)) {
       throw new Error(`Review Slice ${id} verify must be one command using 1-1000 characters`);
     }
+    // Which slices a human means to stand in is knowable while the Work is being specified — it is the one
+    // with the migration in it — so the manifest may say so. Omitted unless true, which keeps the digest of
+    // every manifest written before this field existed byte-identical.
+    if (slice.hitl !== undefined && typeof slice.hitl !== 'boolean') {
+      throw new Error(`Review Slice ${id} hitl must be true or false`);
+    }
     const normalized = {
       id,
       acceptance_criteria: mappedCriteria,
       outcome,
       depends_on: dependencies,
       verify,
+      ...(slice.hitl === true ? { hitl: true } : {}),
     };
     if (Buffer.byteLength(JSON.stringify(normalized), 'utf8') > MAX_SLICE_BYTES) {
       throw new Error(`Review Slice ${id} exceeds ${MAX_SLICE_BYTES} UTF-8 bytes`);

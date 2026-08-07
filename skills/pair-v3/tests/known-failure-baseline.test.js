@@ -9,6 +9,10 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+// Every Work here opens with `humanLoop: true`: these tests ARE the human gates — a fresh review before
+// acceptance, a finding waiting for a verdict, a checkpoint a person accepts — and the shipped default
+// (an autonomous loop) drives straight past them. The default itself is asserted in autonomous-loop.test.js.
+
 const {
   adjudicateFinding,
   advanceWork,
@@ -78,7 +82,7 @@ function openScratchWork(t, workId) {
     fs.rmSync(spec, { force: true });
     fs.rmSync(manifest, { force: true });
   });
-  return openWork(root, { workId, specPath: spec, manifestPath: manifest });
+  return openWork(root, { workId, specPath: spec, manifestPath: manifest, humanLoop: true });
 }
 
 function implementationDependencies(verifyResults) {

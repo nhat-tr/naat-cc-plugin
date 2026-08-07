@@ -39,7 +39,36 @@ pair-loop status
 
 `pair-loop status` prints the exact next command for the current state. Adopting a handover, resuming, or arriving with no memory of the loop: run it first and follow the command it names rather than improvising one.
 
-Each `run` performs at most one fresh model action except deterministic verification. Run again for next saved action. Pair owns dedicated linked worktree and checkpoint commits. Product branch receives no Pair artifacts.
+Pair owns dedicated linked worktree and checkpoint commits. Product branch receives no Pair artifacts.
+
+## Who drives
+
+The loop drives itself. One `run` carries a Review Slice from implementation through verification, review, correction and acceptance, and on into the next slice, stopping only where a person is genuinely required: a block, a completed Work, an interrupt, the per-run action cap, or a slice you marked `hitl`.
+
+```bash
+pair-loop hitl                       # who drives what
+pair-loop hitl --slice <id>          # stand in this one
+pair-loop hitl --slice <id> --off    # hand it back to the loop
+pair-loop hitl --all [--off]         # the whole Work, clearing every per-slice mark
+```
+
+A marked slice meets every gate below, one fresh model action per `run`: its findings wait for your disposition, its Architecture-Sensitive checkpoint waits for your acceptance, its corrected checkpoint comes back to you. Marking is not retroactive — a slice already parked at a gate stays parked, because handing it to the loop must not accept a checkpoint nobody read — and a slice can also arrive marked, with `"hitl": true` on its manifest entry.
+
+An unmarked slice adjudicates its own model findings: the claim is believed, spent on the one bounded correction it earns, and the corrected checkpoint reviewed again. That is bounded rather than trusting — the correction is counted, so a second round of valid findings blocks for a human exactly as it always did. Every such verdict is stamped `adjudicator: autonomous` in the immutable record and is refused as a source of Review Guidance, which learns from human judgement only.
+
+Accepting a checkpoint hands the Work straight to the next slice when the loop drives that slice — the acceptance is the input, exactly as a submitted correction is. A slice marked `hitl` is not started this way: the mark is the request to be asked.
+
+A run narrates itself on **stderr** as it goes — each provider call and verification when it starts and when it returns, with duration, tokens and cost, then where the transition landed and how many of the per-run actions it has spent. stdout still carries only the final status (or `--json`), so nothing has to be parsed out of it; `--quiet` silences progress for a caller that treats stderr as failure.
+
+```
+[15:41:24] S-05 implementation started — claude/claude-opus-5[1m], warm session
+[15:41:24] S-05 implementation finished — 11m05s, 40.4k out, 160.9k ctx, $5.84
+[15:41:25] S-05 verifying — dotnet test …
+[15:44:42] S-05 verification clean — 3m17s
+[15:44:42] action 1/40 → ready, S-05 review-ready
+```
+
+Configuration lives in `~/.config/pair/config.json`: `human_in_the_loop_default: true` puts you back in every loop, `autonomous_actions_per_run` (default 40) bounds one run. Both are pinned at open, so Work in flight keeps the gates it was opened with.
 
 ## Routing
 
@@ -114,6 +143,8 @@ Approval contains no prose. Transient reviewer JSON is capped at 6 KiB. A model 
 
 A finding whose claim names a defect class ("every X", "all instances of Y") must carry a pass condition that enumerates the class mechanically — a fitness/architecture test or a grep-able invariant — never a single-instance fix; a class-scoped finding closed by one instance is not closed.
 
+A finding anchors any file tracked at the checkpoint, not only the paths this slice changed — a checkpoint is read against the code around it, and the caller the diff never touched is often the thing worth raising. Type the path as your editor shows it, absolute or repository-relative; a path the checkpoint tree does not contain is refused by name, because there is no immutable blob there for the claim to be about.
+
 A human can raise a finding too, reading the checkpoint the same way a reviewer would. It reaches the same one bounded correction a model finding does, but not by the same route: a model finding is a claim awaiting a verdict, and a human finding arrives with one. Submission *is* the verdict, so every submitted human finding is recorded valid and the slice lands directly on `correction-ready` — no second pass adjudicating your own claims. In nvim that is `<leader>pf` per finding while you read, then either `<leader>pn` or `s` in the draft inbox (`<leader>pF`); both submit the draft *and* spend the correction it earns, so the correcting session starts without a further gesture. To steer that correction, `<leader>pD` first: a Correction Direction is admitted at any status, so it does not have to wait for the reducer.
 
 ```bash
@@ -147,7 +178,7 @@ Only valid finding or deterministic failure permits one bounded fresh correction
 
 That budget bounds a *model* loop. A fresh reviewer can always find something, so find → correct → find → correct would never terminate on its own, and the block is what puts a human back in it. A **human** review is already that human: the correction produces a new checkpoint, the slice returns to `awaiting-human-review`, and reading that checkpoint, writing a finding against it and submitting it *is* the deliberation `unblock --reason "<why a second correction is warranted>"` asks for. So a human round does not block — round two, three and four each earn their correction directly, and review → correct → review until you accept is the normal shape rather than an escape hatch. The bound holds where it means something: a model finding dispositioned valid after the correction is spent still blocks, and so does a correction that fails its own verification, whoever raised it.
 
-A deterministic failure produces no checkpoint, so no Review Outcome and no Review Feedback can exist for it. Review findings raised at that point have no finding ID to carry them; the way to reach a reviewable checkpoint is a clean verification, not hand-edits. To steer that correction, record one bounded Correction Direction while the slice is correction-ready:
+A deterministic failure produces no checkpoint, so no Review Outcome and no Review Feedback can exist for it. Review findings raised at that point have no finding ID to carry them; the way to reach a reviewable checkpoint is a clean verification, not hand-edits. It does produce an **attempt snapshot** — the session's work written as a commit in `refs/pair/<work-id>/attempts/<slice>/<n>` through a throwaway index, so the branch, HEAD and the worktree's index are all untouched and no attempt can pass for an accepted change. That is what makes a red slice readable: `show`, `<leader>pd` and `<leader>pc` diff against it and say `unverified attempt` every time they offer it. Reading it is the point; accepting it is structurally refused, and re-verification is the only route from an attempt to a checkpoint. To steer that correction, record one bounded Correction Direction while the slice is correction-ready:
 
 ```bash
 pair-loop direct --text "<intent>" [--slice <id>]
@@ -155,14 +186,14 @@ pair-loop direct --text "<intent>" [--slice <id>]
 
 It is human intent, not falsifiable evidence, so it travels beside the deterministic failure rather than inside it. Capped at 1000 characters, stored as addressable evidence, and spent with the one correction it steers. Recording it outside the correction-ready window is admitted rather than refused — the out-of-window use is recorded as a human override, because a human who can already see the wrong turn should not wait for the reducer's permission to say so.
 
-Architecture-Sensitive checkpoint requires human acceptance. There is no remote and no pull request; the immutable refs are the review surface, and `show` assembles them:
+An Architecture-Sensitive checkpoint on a `hitl` slice requires human acceptance; unmarked, it is accepted on a fresh review that found nothing. There is no remote and no pull request; the immutable refs are the review surface, and `show` assembles them:
 
 ```bash
 pair-loop show [--slice <id>]
 pair-loop accept --slice <id>
 ```
 
-`show` prints two diffs, never one — base→checkpoint answers "does this slice deserve to exist", prior-checkpoint→checkpoint answers "did the correction do what was asked and nothing else" — plus the Design Check, the Correction Direction, each finding with its anchor and recorded disposition, and the verification result. Reviewing only the cumulative diff is how a correction widens its own scope unnoticed.
+`show` prints two diffs, never one — base→checkpoint answers "does this slice deserve to exist", prior-checkpoint→checkpoint answers "did the correction do what was asked and nothing else" — plus the Design Check, the Correction Direction, each finding with its anchor and recorded disposition, and the verification result. Reviewing only the cumulative diff is how a correction widens its own scope unnoticed. A red slice gets the same pair against its attempt snapshots (base→attempt and prior-attempt→attempt), labelled unverified.
 
 ## Review learning
 
@@ -188,8 +219,19 @@ pair-loop hydrate [--submodule <path> ...]
 pair-loop remove-worktree
 ```
 
-Pair never merges automatically. After completion, review and merge or cherry-pick `pair/<work-id>` from the primary worktree, then remove the linked worktree. Worktree removal does not delete the branch or Pair refs.
+Pair never merges automatically. Completion is two acts and both are the human's: land the branch, then tidy up.
+
+```bash
+git merge --no-ff pair/<work-id>     # from the primary worktree; or cherry-pick base..head
+pair-loop finish                     # removes the linked worktree, clears the current-Work selection
+pair-loop checkpoints [--json]       # every slice's commit pair — readable after cleanup
+pair-loop sessions [--json]          # every provider session of every Work, newest first
+```
+
+`finish` refuses until the branch has reached the branch you are standing on, and refuses a Work that is not complete; `--force` overrides both. It keeps a worktree holding uncommitted changes and says so — those changes exist nowhere else. Removing the worktree is what stops it holding `pair/<work-id>` checked out, which is what otherwise blocks deleting or checking out that branch later; clearing the selection is what stops every later command answering for a Work that is over.
+
+The branch and `refs/pair/<work-id>/*` survive, so the review history stays readable: `checkpoints` and `show` resolve against the linked worktree while it exists and against the primary checkout afterwards, and both report which one answered (`read_root`, `worktree_exists`).
 
 ## Stop conditions
 
-Stop for human input when architecture checkpoint awaits acceptance, findings await disposition, one correction failed, provider/verification evidence is untrustworthy, cumulative verification fails, or Work is blocked. Preserve worktree and refs.
+Stop for human input when a `hitl` slice's architecture checkpoint awaits acceptance or its findings await disposition, one correction failed, provider/verification evidence is untrustworthy, cumulative verification fails, combined-diff review found something, or Work is blocked. Preserve worktree and refs.

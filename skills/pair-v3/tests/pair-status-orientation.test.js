@@ -9,10 +9,12 @@ const {
   blockedLines,
   dispatchLines,
   evidenceClosingLines,
-  evidenceDiffLine,
+  evidenceDiffLines,
   explainLines,
   failedRunLines,
+  nextCommand,
   orientationLines,
+  verificationLines,
 } = require('../scripts/pair-cli');
 
 // pair-cli already refuses to make a human translate a state name into a command (see its nextCommand
@@ -345,20 +347,109 @@ test('orientation explains the state the Review Slice is actually in', () => {
 // checkpoint. The view assumed it did: observed live on S-08, it printed `git ... diff fac593e7ec null`
 // and closed with `pair-loop accept --slice S-08`, which answers "Review Slice is not awaiting human
 // acceptance". A human who came to read a document was handed two commands that cannot run.
-test('evidence names no diff for a Review Slice that has not committed a checkpoint', () => {
-  const short = commit => (commit ? commit.slice(0, 10) : null);
-  const line = evidenceDiffLine({ worktree: '/w', base_commit: 'fac593e7ec874e', checkpoint_commit: null }, short);
+const SHORT = commit => (commit ? commit.slice(0, 10) : null);
 
-  assert.doesNotMatch(line, /null/u, 'a missing commit is absence, not the string "null" inside a git command');
-  assert.doesNotMatch(line, /git .*diff/u, 'and no diff is offered where none can be produced');
-  assert.match(line, /no checkpoint/iu, 'it says why instead of going quiet');
+test('evidence names no diff for a Review Slice that has neither committed nor attempted anything', () => {
+  const text = evidenceDiffLines(
+    { read_root: '/w', base_commit: 'fac593e7ec874e', checkpoint_commit: null, attempt_commit: null }, SHORT).join('\n');
+
+  assert.doesNotMatch(text, /null/u, 'a missing commit is absence, not the string "null" inside a git command');
+  assert.doesNotMatch(text, /git .*diff/u, 'and no diff is offered where none can be produced');
+  assert.match(text, /nothing attempted/iu, 'it says why instead of going quiet');
 });
 
 test('evidence offers a diff as soon as there is a checkpoint to diff', () => {
-  const short = commit => (commit ? commit.slice(0, 10) : null);
-  const line = evidenceDiffLine({ worktree: '/w', base_commit: 'aaaaaaaaaaaa', checkpoint_commit: 'bbbbbbbbbbbb' }, short);
+  const text = evidenceDiffLines(
+    { read_root: '/w', base_commit: 'aaaaaaaaaaaa', checkpoint_commit: 'bbbbbbbbbbbb' }, SHORT).join('\n');
 
-  assert.match(line, /git -C \/w diff aaaaaaaaaa bbbbbbbbbb/u);
+  assert.match(text, /git -C \/w diff aaaaaaaaaa bbbbbbbbbb/u);
+});
+
+// A red Review Slice used to report "no diff to read" while the session's work sat uncommitted in the
+// worktree, which is how a human ended up hunting a clean tree for a diff that was never going to be there.
+test('evidence offers the unverified attempt when verification left no checkpoint', () => {
+  const text = evidenceDiffLines(
+    { read_root: '/w', base_commit: 'aaaaaaaaaaaa', checkpoint_commit: null, attempt_commit: 'cccccccccccc' }, SHORT).join('\n');
+
+  assert.match(text, /git -C \/w diff aaaaaaaaaa cccccccccc/u, 'the attempt is a real commit and diffs like one');
+  assert.match(text, /unverified attempt/iu, 'and it never passes for a checkpoint');
+  assert.match(text, /cannot be accepted/iu);
+});
+
+test('evidence isolates what the last session changed once a second attempt exists', () => {
+  const text = evidenceDiffLines({
+    read_root: '/w',
+    base_commit: 'aaaaaaaaaaaa',
+    checkpoint_commit: null,
+    attempt_commit: 'cccccccccccc',
+    prior_attempt_commit: 'bbbbbbbbbbbb',
+  }, SHORT).join('\n');
+
+  assert.match(text, /Attempt only:\s+git -C \/w diff bbbbbbbbbb cccccccccc/u);
+});
+
+// Three roads leave a red correction-ready, and the surface named two. Asked live, twice, in these words:
+// "how to move back one step/state, so that the pair-loop can do review again … currently in correction state
+// but nothing to correct, and cant transition to next state as well". There is no backward transition — review
+// needs a checkpoint and a checkpoint needs a green gate — so the road that fits is declaring the failures as
+// not this Work's. Never naming it is what made the state read as a dead end.
+test('a red correction-ready names the baseline as well as re-verify and correct', () => {
+  const command = nextCommand(
+    { lifecycle: 'ready' },
+    { id: 'S-01', status: 'correction-ready', verification_failure: 'Failed EntityBoundAnswer' });
+
+  assert.match(command, /pair-loop verify --slice S-01/u, 're-verification is still first: it spends no correction');
+  assert.match(command, /pair-loop baseline/u, 'and the road for a failure this Work did not cause is named too');
+});
+
+test('a correction-ready held by a valid finding does not offer the baseline', () => {
+  const command = nextCommand({ lifecycle: 'ready' }, { id: 'S-02', status: 'correction-ready' });
+
+  assert.doesNotMatch(command, /baseline/u, 'no verification failed here, so there is nothing to declare pre-existing');
+  assert.match(command, /pair-loop run/u);
+});
+
+function redReport(overrides = {}) {
+  return {
+    review_slice_id: 'S-01',
+    command: 'dotnet test',
+    status: 1,
+    observed_status: 1,
+    failing_tests: ['EntityBoundAnswer', 'Bundle_returns_a_zip_when_permitted'],
+    baselined_failing_tests: [],
+    introduced_failing_tests: ['EntityBoundAnswer', 'Bundle_returns_a_zip_when_permitted'],
+    introduced_warnings: [],
+    checkpoint_created: false,
+    ...overrides,
+  };
+}
+
+// A test identity is what `baseline add` consumes, and pair-cli already holds the principle that an operand
+// the next command needs is printed verbatim rather than summarised. The identities were printed; the command
+// that eats them was not, so the list read as a verdict instead of as the input to the way out.
+test('a failed verification prints a paste-ready baseline command for each failure it owns', () => {
+  const text = verificationLines(redReport()).join('\n');
+
+  assert.match(text, /pair-loop baseline add --test EntityBoundAnswer --reason/u);
+  assert.match(text, /pair-loop baseline add --test Bundle_returns_a_zip_when_permitted --reason/u);
+});
+
+// pair-engine only flips the gate when EVERY observed failure is baselined (applyKnownFailureBaseline). So
+// baselining 20 of 23 changes nothing at all, and a human who did that would see an unchanged red gate with
+// no explanation anywhere for why their declaration did not count.
+test('a failed verification states that every failure must be declared before the gate turns', () => {
+  const text = verificationLines(redReport()).join('\n');
+
+  assert.match(text, /all|every/iu, 'the all-or-nothing rule is stated where the declaration is invited');
+  assert.match(text, /2/u, 'and the count that has to be reached is visible');
+});
+
+test('a clean verification invites no baselining', () => {
+  const text = verificationLines(redReport({
+    status: 0, failing_tests: [], introduced_failing_tests: [],
+  })).join('\n');
+
+  assert.doesNotMatch(text, /baseline add/u, 'nothing failed, so there is nothing to declare');
 });
 
 test('evidence offers plain accept only where the engine actually admits it', () => {

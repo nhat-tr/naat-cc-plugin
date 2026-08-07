@@ -88,8 +88,17 @@ function proposeReviewGuidance(root, input) {
   const evaluation = normalizeEvaluation(input.evaluation);
   const sourceIds = [...new Set(input.sourceFeedbackIds || [])];
   if (sourceIds.length === 0 || sourceIds.length > 12) throw new Error('Review Guidance requires 1-12 source Review Feedback IDs');
-  const existingFeedback = new Set(feedbackRows(root, workId).map(item => item.review_feedback_id));
-  for (const id of sourceIds) if (!existingFeedback.has(id)) throw new Error(`Review Feedback ${id} does not exist`);
+  const existingFeedback = new Map(feedbackRows(root, workId).map(item => [item.review_feedback_id, item]));
+  for (const id of sourceIds) {
+    const row = existingFeedback.get(id);
+    if (!row) throw new Error(`Review Feedback ${id} does not exist`);
+    // A rule the whole repository will be reviewed against has to come from human judgement. An autonomous
+    // slice's own verdict on its own reviewer is not that, however well it read: it would let the bank learn
+    // a model's opinion of a model and call it measured feedback.
+    if (row.adjudicator === 'autonomous') {
+      throw new Error(`Review Feedback ${id} was adjudicated autonomously, so it cannot source Review Guidance`);
+    }
+  }
   const rule = cleanRule(input.rule);
   const scopes = cleanScopes(input.scopes);
   const proposalId = stableId('review-guidance-proposal', [workId, rule, scopes.join(','), evaluation.bank_digest]);

@@ -9,6 +9,10 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+// Every Work here opens with `humanLoop: true`: these tests ARE the human gates — a fresh review before
+// acceptance, a finding waiting for a verdict, a checkpoint a person accepts — and the shipped default
+// (an autonomous loop) drives straight past them. The default itself is asserted in autonomous-loop.test.js.
+
 const {
   REVIEW_OUTPUT_LIMIT_BYTES,
   SLICE_OUTPUT_LIMIT_BYTES,
@@ -61,7 +65,7 @@ test('routine Review Slice uses one fresh implementation invocation and determin
     fs.rmSync(spec, { force: true });
     fs.rmSync(manifest, { force: true });
   });
-  const opened = openWork(root, { workId: 'work-engine', specPath: spec, manifestPath: manifest });
+  const opened = openWork(root, { workId: 'work-engine', specPath: spec, manifestPath: manifest, humanLoop: true });
   let providerCalls = 0;
   let verificationCalls = 0;
   const result = advanceWork(opened.worktree, { runtime: 'codex' }, {
@@ -102,7 +106,7 @@ test('Architecture-Sensitive Path requires Design Check, fresh review, and human
   fs.writeFileSync(spec, '# Spec\n\n## Acceptance Criteria\n\n- [ ] AC-1: independent registries do not share state\n');
   fs.writeFileSync(manifest, JSON.stringify({ schema: 1, work_id: 'work-architecture', slices: [{ id: 'S1', acceptance_criteria: ['AC-1'], outcome: 'Independent registry owners isolate state.', depends_on: [], verify: 'node verify.js' }] }));
   t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(spec, { force: true }); fs.rmSync(manifest, { force: true }); });
-  const opened = openWork(root, { workId: 'work-architecture', specPath: spec, manifestPath: manifest });
+  const opened = openWork(root, { workId: 'work-architecture', specPath: spec, manifestPath: manifest, humanLoop: true });
   let call = 0;
   const outputLimits = [];
   const dependencies = {
@@ -154,7 +158,7 @@ test('review finding cannot trigger correction until human marks it valid', t =>
   fs.writeFileSync(spec, '# Spec\n\n## Acceptance Criteria\n\n- [ ] AC-1: value becomes three\n');
   fs.writeFileSync(manifest, JSON.stringify({ schema: 1, work_id: 'work-feedback', slices: [{ id: 'S1', acceptance_criteria: ['AC-1'], outcome: 'Value returns three.', depends_on: [], verify: 'node verify.js' }] }));
   t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(spec, { force: true }); fs.rmSync(manifest, { force: true }); });
-  const opened = openWork(root, { workId: 'work-feedback', specPath: spec, manifestPath: manifest });
+  const opened = openWork(root, { workId: 'work-feedback', specPath: spec, manifestPath: manifest, humanLoop: true });
   let call = 0;
   const dependencies = {
     runProvider(input) {
@@ -207,7 +211,7 @@ test('overlapping accepted slices trigger one fresh combined-diff review', t => 
     { id: 'S2', acceptance_criteria: ['AC-2'], outcome: 'Second line exists.', depends_on: ['S1'], verify: 'true' },
   ] }));
   t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(spec, { force: true }); fs.rmSync(manifest, { force: true }); });
-  const opened = openWork(root, { workId: 'work-composition', specPath: spec, manifestPath: manifest });
+  const opened = openWork(root, { workId: 'work-composition', specPath: spec, manifestPath: manifest, humanLoop: true });
   let calls = 0;
   const dependencies = {
     runProvider(input) {
@@ -248,7 +252,7 @@ test('dirty-worktree block lifts once the tree is clean, including states writte
   fs.writeFileSync(spec, '# Spec\n\n## Acceptance Criteria\n\n- [ ] AC-1: independent registries do not share state\n');
   fs.writeFileSync(manifest, JSON.stringify({ schema: 1, work_id: 'work-dirty-block', slices: [{ id: 'S1', acceptance_criteria: ['AC-1'], outcome: 'Independent registry owners isolate state.', depends_on: [], verify: 'node verify.js' }] }));
   t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(spec, { force: true }); fs.rmSync(manifest, { force: true }); });
-  const opened = openWork(root, { workId: 'work-dirty-block', specPath: spec, manifestPath: manifest });
+  const opened = openWork(root, { workId: 'work-dirty-block', specPath: spec, manifestPath: manifest, humanLoop: true });
   let calls = 0;
   const dependencies = {
     runProvider(input) {
@@ -307,7 +311,7 @@ test('a block that is not a self-healing precondition stays latched on a clean w
   fs.writeFileSync(spec, '# Spec\n\n## Acceptance Criteria\n\n- [ ] AC-1: value becomes two\n');
   fs.writeFileSync(manifest, JSON.stringify({ schema: 1, work_id: 'work-latched', slices: [{ id: 'S1', acceptance_criteria: ['AC-1'], outcome: 'Existing value returns two.', depends_on: [], verify: 'node verify.js' }] }));
   t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(spec, { force: true }); fs.rmSync(manifest, { force: true }); });
-  const opened = openWork(root, { workId: 'work-latched', specPath: spec, manifestPath: manifest });
+  const opened = openWork(root, { workId: 'work-latched', specPath: spec, manifestPath: manifest, humanLoop: true });
   let calls = 0;
   const dependencies = {
     runProvider() {
@@ -385,7 +389,7 @@ test('a Correction Direction steers the one bounded correction and is spent with
   fs.writeFileSync(spec, '# Spec\n\n## Acceptance Criteria\n\n- [ ] AC-1: value becomes two\n');
   fs.writeFileSync(manifest, JSON.stringify({ schema: 1, work_id: 'work-direction', slices: [{ id: 'S1', acceptance_criteria: ['AC-1'], outcome: 'Existing value returns two.', depends_on: [], verify: 'node verify.js' }] }));
   t.after(() => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(spec, { force: true }); fs.rmSync(manifest, { force: true }); });
-  const opened = openWork(root, { workId: 'work-direction', specPath: spec, manifestPath: manifest });
+  const opened = openWork(root, { workId: 'work-direction', specPath: spec, manifestPath: manifest, humanLoop: true });
 
   const prompts = [];
   let verifications = 0;

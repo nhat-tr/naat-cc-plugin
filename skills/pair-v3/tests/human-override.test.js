@@ -9,6 +9,10 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+// Every Work here opens with `humanLoop: true`: these tests ARE the human gates — a fresh review before
+// acceptance, a finding waiting for a verdict, a checkpoint a person accepts — and the shipped default
+// (an autonomous loop) drives straight past them. The default itself is asserted in autonomous-loop.test.js.
+
 const {
   acceptHumanReview,
   adjudicateFinding,
@@ -115,7 +119,7 @@ function reviewReadyFixture(t) {
     fs.rmSync(spec, { force: true });
     fs.rmSync(manifest, { force: true });
   });
-  const opened = openWork(root, { workId: 'work-override', specPath: spec, manifestPath: manifest });
+  const opened = openWork(root, { workId: 'work-override', specPath: spec, manifestPath: manifest, humanLoop: true });
   // architecture-sensitive so the fresh review is mandatory — the case no flag can skip today.
   advanceWork(opened.worktree, { runtime: 'codex' }, {
     runProvider() {
@@ -676,6 +680,32 @@ test('slice evidence reports whether the correction touched each valid finding',
   assert.ok(readState(root).slices[0].status, 'the slice moved on as usual');
 });
 
+// A finding raised AFTER the last correction ran has not been attempted by anything, and comparing it to
+// that correction's diff answers a question nobody asked. Observed live: a human finding submitted while the
+// correction carrying it was still in flight was reported "cannot have been addressed" against the PREVIOUS
+// correction — and that next correction did change the exact file the finding anchors. Attribution is a fact
+// about hunks; whether a correction has even been attempted is a fact about order, and it comes first.
+test('a finding raised after the last correction is reported as awaiting one, not as unaddressed', t => {
+  const { worktree, findings } = awaitingFeedbackFixture(t);
+  const { sliceEvidence } = require('../scripts/lib/pair-engine');
+  adjudicateFinding(worktree, { findingId: findings[0].finding_id, disposition: 'valid', reason: 'The seam is missing.' });
+  advanceWork(worktree, { runtime: 'codex' }, {
+    runProvider(input) {
+      fs.writeFileSync(path.join(input.root, 'other.js'), 'module.exports = 4;\n');
+      return providerResult({ status: 'completed', architecture_risk: null, design_check: null, failure_proof: { boundary: 'module export', method: 'unit', negative_control: 'Returning 3 fails.' }, blocker: null });
+    },
+    verify() { return { status: 0, stdout: '', stderr: '', durationMs: 1 }; },
+  });
+
+  // The human reads the corrected checkpoint and raises something new against it.
+  recordHumanFinding(worktree, { sliceId: 'S1', file: 'value.js', lineStart: 1, lineEnd: 1, claim: 'A tool can reference the same service many times.' });
+  submitHumanFindings(worktree, { sliceId: 'S1' });
+  const evidence = sliceEvidence(worktree, { sliceId: 'S1' });
+
+  assert.equal(evidence.findings[0].awaiting_correction, true);
+  assert.equal(evidence.findings[0].correction, null, 'no correction is attributed to a finding no correction has seen');
+});
+
 // "changed this file" is too coarse to review a correction with: a file can change 24 lines and none of
 // them near the anchored line, and the diff mixes what the findings asked for with what the corrector
 // decided on its own. Findings carry exact line anchors and the diff carries exact hunk ranges, so the
@@ -971,7 +1001,7 @@ test('unblocking a dirty-worktree block restores the interrupted slice and the r
     fs.rmSync(spec, { force: true });
     fs.rmSync(manifest, { force: true });
   });
-  const opened = openWork(root, { workId: 'work-unblock', specPath: spec, manifestPath: manifest });
+  const opened = openWork(root, { workId: 'work-unblock', specPath: spec, manifestPath: manifest, humanLoop: true });
   fs.writeFileSync(path.join(opened.worktree, 'stray.js'), 'module.exports = 9;\n');
   const calls = [];
   const dependencies = {

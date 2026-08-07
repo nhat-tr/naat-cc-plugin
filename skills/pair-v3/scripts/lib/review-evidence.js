@@ -194,6 +194,10 @@ function recordReviewFeedback(root, input) {
     finding_id: findingId,
     disposition,
     reason,
+    // Provenance, not permission. A slice nobody marked hitl adjudicates its own model findings so the loop
+    // can keep moving, and that verdict must never be mistaken for a person's — the Review Guidance bank
+    // learns from human judgement, and a row it cannot tell apart would teach it a machine's.
+    ...(input.adjudicator === 'autonomous' ? { adjudicator: 'autonomous' } : {}),
     recorded_at: input.recordedAt || new Date().toISOString(),
   };
   const prior = feedbackRows(root, workId).find(item => item.finding_id === findingId);

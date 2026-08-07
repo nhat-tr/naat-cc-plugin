@@ -114,6 +114,18 @@ function currentLocatorPath(root) {
   return path.join(gitDirectory(root), 'pair-current.json');
 }
 
+// Every Work this repository has ever opened, whether running, complete, or cleaned up: the per-Work
+// directory holds the journal and the review evidence and is never removed, so it outlives the worktree and
+// is what any cross-Work view has to read.
+function listWorkIds(root) {
+  const directory = path.join(pairCommonDirectory(root), 'works');
+  if (!fs.existsSync(directory)) return [];
+  return fs.readdirSync(directory, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => entry.name)
+    .sort();
+}
+
 function workPaths(root, workId) {
   const selected = safeSegment(workId, 'Work ID');
   const pairDirectory = pairCommonDirectory(root);
@@ -126,6 +138,11 @@ function workPaths(root, workId) {
     spec: path.join(directory, 'spec.md'),
     state: path.join(directory, 'state.json'),
     events: path.join(directory, 'events.jsonl'),
+    // Narration, not evidence: the running commentary of the dispatch in flight, kept as a plain file so a
+    // human can watch a chained run from anywhere — `tail -f`, an editor buffer, a terminal split — without
+    // depending on how whoever spawned the run treats its stderr. Deliberately separate from events.jsonl,
+    // which is the append-only record every audit reads and must stay free of presentation.
+    progressLog: path.join(directory, 'progress.log'),
     designChecks: path.join(directory, 'design-checks'),
     outcomes: path.join(directory, 'review-outcomes'),
     // A human review is built up one finding at a time while reading; a Review Outcome is an immutable,
@@ -502,6 +519,8 @@ module.exports = {
   git,
   gitCommonDirectory,
   gitDirectory,
+  currentLocatorPath,
+  listWorkIds,
   pairCommonDirectory,
   pairRef,
   readCurrentWork,

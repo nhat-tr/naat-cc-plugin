@@ -5,6 +5,10 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+// Every Work here opens with `humanLoop: true`: these tests ARE the human gates — a fresh review before
+// acceptance, a finding waiting for a verdict, a checkpoint a person accepts — and the shipped default
+// (an autonomous loop) drives straight past them. The default itself is asserted in autonomous-loop.test.js.
+
 const { openWork } = require('../scripts/lib/pair-engine');
 const { readState, workPaths, writeState } = require('../scripts/lib/pair-store');
 const {
@@ -48,7 +52,7 @@ function engineWorkFixture(t, { workId = 'work-authority' } = {}) {
     fs.rmSync(spec, { force: true });
     fs.rmSync(manifest, { force: true });
   });
-  openWork(root, { workId, specPath: spec, manifestPath: manifest });
+  openWork(root, { workId, specPath: spec, manifestPath: manifest, humanLoop: true });
   // Mirrors a real Pair repository: the Stop hook auto-registers conversations, which is how the
   // ParagonAgent conversations reached the registry as `general` in the first place.
   setGeneralHandoverPolicy(root, true);
