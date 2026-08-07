@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const {
   DIRTY_WORKTREE_PRECONDITION,
+  RUNTIME_OWNERSHIP_PRECONDITION,
   acceptHumanReview,
   activeSlice,
   adjudicateFinding,
@@ -967,6 +968,26 @@ function dirtyWorktreePaths(state) {
 function blockedLines(state, dirtyPaths = []) {
   const lines = ['', `Blocked: ${state.blocked_reason || 'no reason recorded'}`];
   const blocked = (state.slices || []).find(item => item.status === 'blocked');
+  // Read before the red-gate branch below, which this block would otherwise fall into and be narrated by as
+  // "the correction ran and its verification came back red" — three wrong facts at once: no correction ran,
+  // the tests were green, and a granted retry is not the way out. The cause is outside the repository, so the
+  // two commands that resolve it are not the two that resolve a defect.
+  if (state.blocked_precondition === RUNTIME_OWNERSHIP_PRECONDITION) {
+    lines.push(
+      'The Review Slice\'s own tests passed. The run stopped one step later: something is answering the declared',
+      'runtime that cannot be shown to be serving this worktree, so nothing was asked of it. Refusing to guess is',
+      'not a failed implementation — no correction was spent, and neither way out below spends one.',
+      '',
+      'Stop the instance answering there, then re-verify. It is free, and it checkpoints the slice if the program',
+      'this Work starts in its place answers:',
+      `  pair-loop verify --slice ${blocked?.id || '<slice>'}`,
+      'Or teach the repository to prove it: `identity` in .pair/runtime.json is a command whose output names the',
+      'checkout being served. Declare or repair it, then re-verify as above.',
+      'Or decide the program answering there is sound to probe, and say why on the record:',
+      `  pair-loop unblock --reason "<whose program it is and why probing it answers for this Work>"`,
+    );
+    return lines;
+  }
   if (state.blocked_precondition !== DIRTY_WORKTREE_PRECONDITION) {
     // nextCommand returns null for a blocked lifecycle, so without this the state that most needs a command
     // is the one state that names none. The exhausted correction is the likeliest block in the whole loop —

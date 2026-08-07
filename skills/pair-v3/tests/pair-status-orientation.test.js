@@ -254,6 +254,37 @@ test('status stays quiet about invocations when the most recent one succeeded', 
   assert.deepEqual(failedRunLines(fine), [], 'a failure the next run already recovered from is history, not a warning');
 });
 
+// A refusal is the one block whose cause is outside the repository entirely — some program on the host ports
+// that nothing can prove belongs to this Work — and the exhausted-correction branch would have narrated it as
+// "the correction ran and its verification came back red", which is three wrong facts: no correction ran, the
+// tests were green, and the way out is not a granted retry.
+function refusedState() {
+  return {
+    ...blockedState(),
+    blocked_precondition: require('../scripts/lib/pair-engine').RUNTIME_OWNERSHIP_PRECONDITION,
+    blocked_reason: 'the program answering the declared runtime cannot be shown to serve work-runtime-S-04',
+    next_action: 'resolve who owns the declared runtime',
+    slices: [{
+      id: 'S-04-facet-names',
+      status: 'blocked',
+      blocked_from: 'queued',
+      verification: { status: null, failing_tests: [] },
+    }],
+  };
+}
+
+test('a refused runtime names both ways forward and says the correction is untouched', () => {
+  const text = blockedLines(refusedState(), []).join('\n');
+
+  assert.match(text, /cannot be shown to serve/u, 'what it found comes first');
+  assert.match(text, /pair-loop verify --slice S-04-facet-names/u, 'stopping the instance and re-verifying is the first way out');
+  assert.match(text, /identity/u, 'declaring how the program reports what it serves is the other');
+  assert.match(text, /\.pair\/runtime\.json/u, 'and where that declaration lives, which is not guessable');
+  assert.match(text, /no correction|spends no correction/u, 'the budget is untouched, which a status cannot imply');
+  assert.doesNotMatch(text, /came back red/u, 'this is not the exhausted-correction block');
+  assert.doesNotMatch(text, /git stash/u, 'worktree advice would be noise here');
+});
+
 test('a block with no recognised shape still names the recorded way to clear it', () => {
   const other = { ...blockedState(), blocked_precondition: null, blocked_reason: 'Something no reducer anticipated', slices: [] };
 

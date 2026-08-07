@@ -989,11 +989,19 @@ function withRuntimeTeardown(root, state, dependencies, callback) {
 // where matching the absolute path would only survive the first. Nothing the program says is kept: the
 // answer is compared here and discarded, because a program asked what it is serving can name a path, a
 // branch, or a build that a persisted event has no business carrying.
+//
+// Two ways the proof can fail, and the difference is the whole content of a refusal: a command that answered
+// and named somebody else is a repository that can say and a program that is not ours, while a command that
+// could not answer says nothing about the program at all — it is the declaration that needs repairing. A
+// human handed only "not ours" cannot tell which one they are looking at.
 function servesThisWorktree(state, declaration, call) {
-  if (!declaration.identity) return true;
+  if (!declaration.identity) return { proven: true };
   const answer = call('identity', declaration.identity);
-  if (answer.status !== 0) return false;
-  return String(answer.output || '').includes(path.basename(state.worktree));
+  if (answer.status !== 0) {
+    return { proven: false, found: `the declared identity command exited ${answer.status === null ? 'abnormally' : answer.status}` };
+  }
+  if (String(answer.output || '').includes(path.basename(state.worktree))) return { proven: true };
+  return { proven: false, found: 'the declared identity command answered with other code than this Work\'s' };
 }
 
 // The first claim on disk that belongs to some other Work. There is at most one program on the fixed host
@@ -1018,10 +1026,21 @@ function foreignRuntimeClaim(root, state) {
 // the loop's to stop — the human's own stack, or an instance another live run is driving right now — so the
 // run refuses and says whose it is. Refusing costs a run; guessing costs a wrong answer nobody can see is
 // wrong, and this Work exists to rule the second one out.
-function evictForeignRuntime(root, state, dependencies) {
+//
+// What the refusal says is what a human needs to act on, so it carries the finding — which way the proof
+// failed, and whose the program turned out to be — and then both ways forward, because neither is guessable
+// from a status and each resolves a different one of the two findings: the instance goes away, or the
+// repository learns to prove that a green answer is this Work's. Saying that neither costs a correction is
+// part of the report: the correction budget is one deep, and a human who assumes a block has spent it reads
+// the whole state wrongly.
+function evictForeignRuntime(root, state, dependencies, found) {
   const claim = foreignRuntimeClaim(root, state);
-  const refusal = reason => ({ ready: false, diagnostic: `the program answering the declared runtime is not serving ${path.basename(state.worktree)}: ${reason}` });
-  if (!claim) return refusal('no Pair Work claims it, so it is not this loop\'s to stop — stop it yourself and run again');
+  const refusal = whose => ({
+    ready: false,
+    runtime_refusal: true,
+    diagnostic: `the program answering the declared runtime cannot be shown to serve ${path.basename(state.worktree)}: ${found}, and ${whose}. Neither way forward is a correction: stop the instance answering there and re-verify this Review Slice, or make the declared identity command report which code the program is serving.`,
+  });
+  if (!claim) return refusal('no Pair Work claims it, so it is not this loop\'s to stop');
   if (claim.owner.pid && processAlive(claim.owner.pid)) {
     return refusal(`${claim.workId} is driving it from a live run (pid ${claim.owner.pid})`);
   }
@@ -1053,10 +1072,11 @@ function ensureRuntimeReady(root, state, declaration, execute, dependencies) {
   // adopting it means every probe from here on asks the wrong code. When the repository can ask which code
   // is being served, that answer decides, and only a match adopts.
   if (call('ready', declaration.ready).status === 0) {
-    if (servesThisWorktree(state, declaration, call)) return { ready: true };
+    const identity = servesThisWorktree(state, declaration, call);
+    if (identity.proven) return { ready: true };
     // A stranger was evicted, not adopted: the ports are free now, so this run goes on to start its own
     // instance below. A refusal ends the run here rather than booting a second program onto held ports.
-    const evicted = evictForeignRuntime(root, state, dependencies);
+    const evicted = evictForeignRuntime(root, state, dependencies, identity.found);
     if (!evicted.ready) return evicted;
   }
   // Written before the command runs, not after. `up` is the window where the program comes into existence,
@@ -1103,7 +1123,10 @@ function observeRuntime(root, state, slice, dependencies) {
   const execute = dependencies.runtime || ((input) => runtimeCommand(input.command, input.cwd, input.env));
   reportProgress(dependencies, { phase: 'runtime-starting', review_slice_id: slice.id, command: declaration.ready });
   const runtimeReady = ensureRuntimeReady(root, state, declaration, execute, dependencies);
-  if (!runtimeReady.ready) return { status: null, diagnostic: runtimeReady.diagnostic };
+  // A refusal travels as a refusal, not as a red gate. A runtime that never came up is an environment that
+  // may yet come up on a retry; a runtime nobody can prove is a question only a human can answer, and the
+  // two owe the loop different next moves.
+  if (!runtimeReady.ready) return { status: null, diagnostic: runtimeReady.diagnostic, runtime_refusal: runtimeReady.runtime_refusal };
   reportProgress(dependencies, { phase: 'probe-started', review_slice_id: slice.id, command: slice.probe });
   const probe = execute({
     phase: 'probe',
@@ -1408,7 +1431,7 @@ function verify(root, state, slice, dependencies) {
   if (result.status !== 0) return result;
   const observed = observeRuntime(root, state, slice, dependencies);
   if (!observed || observed.status === 0) return result;
-  return { ...result, status: observed.status, diagnostic: observed.diagnostic };
+  return { ...result, status: observed.status, diagnostic: observed.diagnostic, runtime_refusal: observed.runtime_refusal };
 }
 
 // Enough to diagnose from, not enough to blow the state budget: the identities are what `baseline add`
@@ -1714,6 +1737,9 @@ function handleCompletedImplementation(root, state, context, slice, projected, o
   projected.failure_proof = output.failure_proof;
   projected.verification = verificationRecord(slice, verification);
   if (verification.status !== 0) {
+    // Refusing to guess is not a failure to implement, so it takes neither road a red gate takes: not the
+    // correction, and not the exhausted-budget block after it.
+    if (verification.runtime_refusal) return blockOnRuntimeOwnership(root, state, projected, verification.diagnostic, dependencies);
     if (correction || projected.correction_count >= 1) {
       projected.status = 'blocked';
       state.lifecycle = 'blocked';
@@ -1848,6 +1874,38 @@ function clearedDirtyWorktreeBlock(root, state) {
   appendEvent(root, state.work_id, { event: 'dirty-worktree-block-cleared', review_slice_id: projected.id, resumed_status: projected.status });
   saveState(root, state);
   return true;
+}
+
+// The second precondition, and the same shape as the first: something outside this Work is in the way, and a
+// human gesture — not a model run — removes it. What is in the way here is a program on the fixed host ports
+// that nothing can prove belongs to this Work.
+//
+// It is a precondition rather than a verdict because the slice's own verification came back green: the code is
+// right, and the run stopped one step later, at a question about the host. Spending the one bounded correction
+// there would instruct a model to fix nothing, and the refusal it then hit again would block the slice with an
+// exhausted budget — the state a human reads as "this slice failed twice". So no correction_count moves, no
+// verification_failure is recorded, and re-verification, which is free, is the gesture that clears it.
+const RUNTIME_OWNERSHIP_PRECONDITION = 'runtime-ownership';
+
+function blockOnRuntimeOwnership(root, state, projected, reason, dependencies = {}) {
+  // Re-entry while already blocked must not overwrite the status the slice will resume into.
+  if (projected.status !== 'blocked') projected.blocked_from = projected.status;
+  projected.status = 'blocked';
+  state.lifecycle = 'blocked';
+  state.blocked_precondition = RUNTIME_OWNERSHIP_PRECONDITION;
+  state.blocked_reason = reason;
+  state.next_action = `resolve who owns the declared runtime, then re-verify ${projected.id}`;
+  appendEvent(root, state.work_id, {
+    event: 'runtime-ownership-block',
+    review_slice_id: projected.id,
+    blocked_from: projected.blocked_from,
+    blocked_reason: reason,
+  });
+  return saveState(root, state, dependencies);
+}
+
+function blockedOnRuntimeOwnership(state) {
+  return state.lifecycle === 'blocked' && state.blocked_precondition === RUNTIME_OWNERSHIP_PRECONDITION;
 }
 
 function runSliceImplementation(root, state, context, slice, projected, options, dependencies) {
@@ -2290,10 +2348,18 @@ function verifyActiveSlice(root, options = {}, dependencies = {}) {
   // correction-ready because a human called a review finding valid already has a green checkpoint:
   // its verification was never the problem, and promoting again would try to commit an unchanged
   // worktree. That one owes a correction, not another suite run.
-  const clearsDeterministicFailure = projected.status === 'correction-ready' && Boolean(projected.verification_failure);
+  // A Review Slice parked by a runtime refusal is on this road for the same reason: its verification was
+  // green and what stopped it was the host, so re-running the whole gate — tests and then the question the
+  // program is asked — is exactly the evidence that decides whether the refusal still stands.
+  const clearsRefusal = projected.status === 'blocked' && blockedOnRuntimeOwnership(state);
+  const clearsDeterministicFailure = clearsRefusal
+    || (projected.status === 'correction-ready' && Boolean(projected.verification_failure));
   report.clears_deterministic_failure = clearsDeterministicFailure;
   if (verification.status !== 0) {
-    if (clearsDeterministicFailure) projected.verification_failure = verification.diagnostic || 'verification command failed';
+    // A refusal that stands is re-recorded as the refusal it is, and still spends nothing. Marking it as a
+    // deterministic failure instead would arm a correction the next unblock would then dispatch.
+    if (verification.runtime_refusal) blockOnRuntimeOwnership(root, state, projected, verification.diagnostic);
+    else if (clearsDeterministicFailure) projected.verification_failure = verification.diagnostic || 'verification command failed';
     // Snapshotted on the red road too, so a slice that only ever fails re-verification still ends up with
     // something to read. This is also what gives a slice stranded before attempts existed its first anchor:
     // the work is in the worktree either way, and re-verification is the command a red slice already runs.
@@ -2303,6 +2369,10 @@ function verifyActiveSlice(root, options = {}, dependencies = {}) {
   }
   if (!clearsDeterministicFailure) return { report, state: saveState(root, state) };
   if (!projected.failure_proof) throw new Error(`Review Slice ${projected.id} has no recorded Failure Proof; a checkpoint cannot be created from re-verification alone`);
+  // The block is over, so the status it was going to resume into is spent with it — saveState clears the
+  // reason and the precondition once the lifecycle is no longer blocked, and a stale blocked_from would
+  // outlive both.
+  delete projected.blocked_from;
   const promoted = checkpointVerifiedSlice(root, state, context, slice, projected, options, dependencies, {
     correction: false,
     declaredRisk: projected.architecture_risk,
@@ -3205,6 +3275,7 @@ function removeWorktree(root, options = {}) {
 
 module.exports = {
   DIRTY_WORKTREE_PRECONDITION,
+  RUNTIME_OWNERSHIP_PRECONDITION,
   REVIEW_OUTPUT_LIMIT_BYTES,
   SLICE_OUTPUT_LIMIT_BYTES,
   STEER_TEXT_LIMIT_BYTES,

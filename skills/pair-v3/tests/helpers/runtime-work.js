@@ -40,14 +40,20 @@ function twoSlicesWithProbes() {
 // `up` once" observable: a second slice that asked `ready` first would find it already answering.
 // `startsServing` is what this repository's own `up` brings up, which is only distinct from `serves` when the
 // program answering first belongs to somebody else and is replaced.
-function fakeRuntime({ probeStatus = 0, downStatus = 0, serves = null, startsServing = serves, alreadyUp = false } = {}) {
+// `identityStatus` is the declared question failing rather than answering — a repository that says how to ask
+// which code is being served, and whose command cannot say it today.
+function fakeRuntime({ probeStatus = 0, downStatus = 0, identityStatus = 0, serves = null, startsServing = serves, alreadyUp = false } = {}) {
   const calls = [];
   let up = alreadyUp;
   let serving = serves;
   function runtime(input) {
     calls.push({ phase: input.phase, command: input.command, env: input.env });
     // What the program says it is serving. Only a repository that declared an `identity` command ever asks.
-    if (input.phase === 'identity') return { status: 0, duration_ms: 1, log_digest: 'i'.repeat(64), output: `serving ${serving}\n` };
+    if (input.phase === 'identity') {
+      return identityStatus === 0
+        ? { status: 0, duration_ms: 1, log_digest: 'i'.repeat(64), output: `serving ${serving}\n` }
+        : { status: identityStatus, duration_ms: 1, log_digest: 'i'.repeat(64), output: '' };
+    }
     if (input.phase === 'up') {
       up = true;
       serving = startsServing;
