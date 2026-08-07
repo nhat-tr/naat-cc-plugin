@@ -965,6 +965,11 @@ function stopRuntime(root, state, dependencies = {}) {
 // not cover. The claim already records the work id and worktree `down` needs, so reconciling all of them
 // costs one directory listing and loads no state.
 function reclaimAbandonedRuntime(root, dependencies = {}) {
+  // A repository that declares no runtime has no `down` to speak, so there is nothing here it could settle —
+  // and reading a claim it cannot pay would only delete the record, which is the same silent lie as running a
+  // `down` that cannot reach the program. It asked for none of this, so it gets none of it: a claim in a
+  // repository whose declaration is gone is left for the human, whole, exactly as an unreachable one is.
+  if (!loadRuntimeDeclaration(root)) return false;
   let reclaimed = false;
   for (const workId of listWorkIds(root)) {
     const owner = runtimeOwner(root, workId);
@@ -1031,6 +1036,11 @@ function armRuntimeSignals(root, state, dependencies) {
 }
 
 function withRuntimeTeardown(root, state, dependencies, callback) {
+  // Nothing to hold, park, or stop, and so nothing to arm a signal for. Installing the handlers anyway would
+  // be the one thing this whole Work is still visible as in a repository that declared no runtime: the loop
+  // would stop dying from the first Ctrl-C by default disposition and start dying from a re-raise, changing
+  // how a person stops a run whose repository never had a program in it.
+  if (!loadRuntimeDeclaration(root)) return callback();
   armRuntimeSignals(root, state, dependencies);
   holdRuntime(root, state);
   try {

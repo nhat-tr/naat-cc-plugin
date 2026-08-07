@@ -68,7 +68,10 @@ test('Claude hook install creates missing settings and atomically replaces stale
   settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
   assert.equal(settings.model, 'user-choice');
   assert.equal(installedCommands(settings, 'Stop').filter(command => command.includes('stop-gate.sh')).length, 1);
-  assert.equal(installedCommands(settings, 'Stop').filter(command => command.includes('my-claude-code/hooks/stop-gate.sh')).length, 1);
+  // The plugin directory the install ran from, not the name the checkout happens to sit under: the survivor
+  // has to be the hook this install wrote, and spelling that as a repository name makes the assertion fail
+  // in every worktree — including the Pair worktrees this suite is verified from.
+  assert.equal(installedCommands(settings, 'Stop').filter(command => command.includes(path.join(pluginDir, 'hooks', 'stop-gate.sh'))).length, 1);
   assert.equal(installedCommands(settings, 'Stop').filter(command => command.includes('/opt/external/stop-observer.sh')).length, 1);
 });
 
