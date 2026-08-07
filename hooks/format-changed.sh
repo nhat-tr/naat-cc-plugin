@@ -2,11 +2,19 @@
 # format-changed — PostToolUse[Edit|Write|MultiEdit] hook.
 #
 # Runs the project's formatter on the ONE file that was just written:
-#   .cs                        -> csharpier format <file>
+#   .cs                        -> format-range.mjs (csharpier, changed lines only)
 #   .ts/.tsx/.js/.json/.css/…  -> prettier --write <file>
 # The formatter argument is always the single edited path, never a directory or
 # the repo root, so touching one file cannot drag a whole-project reformat into
 # the diff.
+#
+# One edited path was still not narrow enough. CSharpier formats whole files and
+# has no range mode, so a one-line change to a repo that wraps by hand came back
+# as a whole-file rewrite: observed live in ParagonAgent, where a 12-line change
+# to a shared test fixture arrived as ~40 hunks and the Pair checkpoint built on
+# it could not be reviewed. format-range.mjs supplies the missing range mode —
+# it formats the file, then keeps only the hunks overlapping the lines this
+# session changed. Every other line keeps the bytes it was committed with.
 #
 # Both branches only fire inside a project that actually uses the formatter:
 #   - csharpier needs a *.csproj / *.sln above the file
@@ -16,10 +24,11 @@
 #     that home config would silently reformat repos that format another way.
 #
 # csharpier-default.json (printWidth 160) is a fallback, not an override: it is
-# passed only when nothing above the file states a preference. A home-level
-# ~/.csharpierrc cannot express that — csharpier ranks any .csharpierrc above
-# .editorconfig regardless of distance, so a home file would have silently
-# narrowed the repos that declare max_line_length = 280.
+# passed only when nothing in the repo states a preference, and range formatting
+# is what makes that safe — the widest it can reach is the session's own lines.
+# A home-level ~/.csharpierrc could express none of this: csharpier ranks any
+# .csharpierrc above .editorconfig regardless of distance, so a home file would
+# have silently narrowed the repos that declare max_line_length = 280.
 #
 # A missing formatter binary is a silent no-op — repos without it must not fail
 # on every edit. The harness announces the rewrite to the model on its own, so
@@ -73,14 +82,23 @@ case "${path##*.}" in
     # Supply the printWidth default only where the repo states nothing itself.
     # --config-path suppresses .editorconfig wholesale, so an .editorconfig
     # counts as "the repo decided" even when it sets only indentation.
+    command -v node > /dev/null 2>&1 || exit 0
+    range="$(dirname "${BASH_SOURCE[0]}")/format-range.mjs"
+    [[ -f "$range" ]] || exit 0
     default_cfg="$(dirname "${BASH_SOURCE[0]}")/csharpier-default.json"
     repo=$(git -C "$start_dir" rev-parse --show-toplevel 2> /dev/null)
-    if [[ -f "$default_cfg" && -n "$repo" ]] \
-      && ! find_up_glob_within "$start_dir" ".csharpierrc*" "$repo" \
-      && ! find_up_glob_within "$start_dir" ".editorconfig" "$repo"; then
-      csharpier format --config-path "$default_cfg" "$path" > /dev/null 2>&1
-    else
-      csharpier format "$path" > /dev/null 2>&1
+    # Which config, and then always through format-range.mjs, which keeps only the hunks overlapping the
+    # lines this session changed. Whole-file formatting is what buried a 12-line change in ~40 hunks.
+    if [[ -z "$repo" ]] \
+      || find_up_glob_within "$start_dir" ".csharpierrc*" "$repo" \
+      || find_up_glob_within "$start_dir" ".editorconfig" "$repo"; then
+      # The repo stated how it wants to look, so csharpier's own lookup is the authority.
+      node "$range" "$path" > /dev/null 2>&1
+    elif [[ -f "$default_cfg" ]]; then
+      # It stated nothing, so the default applies — and range formatting is what makes that safe. It can
+      # only ever reach the session's own lines now, so a repo that wraps by hand keeps every line it
+      # already had, and there is nothing left to withhold the default from.
+      node "$range" "$path" "$default_cfg" > /dev/null 2>&1
     fi
     ;;
   ts | tsx | mts | cts | js | jsx | mjs | cjs | json | jsonc | css | scss | less | html | vue | yaml | yml | md | mdx | graphql)
